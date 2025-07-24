@@ -72,10 +72,10 @@ class LuaPandaValue(
         
         val command = buildJsonObject {
             put("cmd", "getVariable")
-            putJsonObject("info") {
+            put("info", buildJsonObject {
                 put("variableReference", variableRef)
                 put("frameIndex", frameIndex)
-            }
+            })
         }
         
         val future = debugProcess.sendCommand(command, true)

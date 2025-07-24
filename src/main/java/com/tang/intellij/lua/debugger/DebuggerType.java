@@ -21,7 +21,7 @@ package com.tang.intellij.lua.debugger;
  * Created by tangzx on 2017/5/7.
  */
 public enum DebuggerType {
-    Attach(1, "Attach Debugger(Not available)"), Mob(2, "Remote Debugger(Mobdebug)");
+    Attach(1, "Attach Debugger(Not available)"), Mob(2, "Remote Debugger(Mobdebug)"), LUA_PANDA(3, "LuaPanda Debugger");
     private int v;
     private String desc;
     DebuggerType(int v, String desc) {
@@ -32,6 +32,7 @@ public enum DebuggerType {
         switch (v) {
             case 1: return Attach;
             case 2: return Mob;
+            case 3: return LUA_PANDA;
             default: return null;
         }
     }

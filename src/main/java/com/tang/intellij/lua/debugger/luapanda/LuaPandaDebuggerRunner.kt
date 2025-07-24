@@ -17,10 +17,10 @@
 package com.tang.intellij.lua.debugger.luapanda
 
 import com.intellij.execution.configurations.RunnerSettings
+import com.intellij.execution.executors.DefaultDebugExecutor
 import com.intellij.execution.runners.ExecutionEnvironment
 import com.intellij.execution.runners.GenericProgramRunner
 import com.intellij.execution.ui.RunContentDescriptor
-import com.tang.intellij.lua.debugger.DebuggerType
 
 /**
  * LuaPanda调试器运行器
@@ -34,7 +34,7 @@ class LuaPandaDebuggerRunner : GenericProgramRunner<RunnerSettings>() {
     override fun getRunnerId(): String = ID
     
     override fun canRun(executorId: String, profile: com.intellij.execution.configurations.RunProfile): Boolean {
-        return executorId == DebuggerType.LUA_PANDA.id && profile is LuaPandaRunConfiguration
+        return executorId == DefaultDebugExecutor.EXECUTOR_ID && profile is LuaPandaRunConfiguration
     }
     
     override fun doExecute(
@@ -44,6 +44,7 @@ class LuaPandaDebuggerRunner : GenericProgramRunner<RunnerSettings>() {
         val executionResult = state.execute(environment.executor, this)
             ?: return null
         
-        return showRunContent(executionResult, environment)
+        val builder = com.intellij.execution.runners.RunContentBuilder(executionResult, environment)
+        return builder.showRunContent(environment.contentToReuse)
     }
 }

@@ -60,10 +60,10 @@ class LuaPandaStackFrame(
         // 获取局部变量
         val command = buildJsonObject {
             put("cmd", "getVariable")
-            putJsonObject("info") {
+            put("info", buildJsonObject {
                 put("frameIndex", frameIndex)
                 put("varType", "local")
-            }
+            })
         }
         
         val future = debugProcess.sendCommand(command, true)

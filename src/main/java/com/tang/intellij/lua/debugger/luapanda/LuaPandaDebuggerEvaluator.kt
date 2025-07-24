@@ -1,6 +1,7 @@
 package com.tang.intellij.lua.debugger.luapanda
 
 import com.intellij.xdebugger.evaluation.XDebuggerEvaluator
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -21,10 +22,10 @@ class LuaPandaDebuggerEvaluator(
     ) {
         val command = buildJsonObject {
             put("cmd", "eval")
-            putJsonObject("info") {
+            put("info", buildJsonObject {
                 put("expr", expression)
                 put("frameIndex", frameIndex)
-            }
+            })
         }
         
         val future = debugProcess.sendCommand(command, true)
@@ -34,7 +35,7 @@ class LuaPandaDebuggerEvaluator(
                 if (success) {
                     val result = response["result"]
                     if (result != null) {
-                        val value = LuaPandaValue(debugProcess, result.jsonObject, frameIndex)
+                        val value = LuaPandaValue(debugProcess, result as JsonObject, frameIndex)
                         callback.evaluated(value)
                     } else {
                         callback.errorOccurred("No result returned")

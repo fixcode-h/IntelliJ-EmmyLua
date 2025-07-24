@@ -199,10 +199,10 @@ class LuaPandaDebugProcess(
             
             val command = buildJsonObject {
                 put("cmd", "setBreakpoint")
-                putJsonObject("info") {
+                put("info", buildJsonObject {
                     put("path", filePath)
                     put("line", line)
-                }
+                })
             }
             
             sendCommand(command, false)
@@ -215,10 +215,10 @@ class LuaPandaDebugProcess(
             
             val command = buildJsonObject {
                 put("cmd", "removeBreakpoint")
-                putJsonObject("info") {
+                put("info", buildJsonObject {
                     put("path", filePath)
                     put("line", line)
-                }
+                })
             }
             
             sendCommand(command, false)

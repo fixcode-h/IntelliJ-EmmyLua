@@ -36,17 +36,17 @@ class LuaPandaRunConfiguration(
 ) : RunConfigurationBase<LuaPandaRunConfigurationOptions>(project, factory, name) {
     
     var debugPort: Int = 8818
-    var workingDirectory: String = ""
-    var luaExecutable: String = ""
+    var workingDir: String = ""
+    var luaExe: String = ""
     var scriptPath: String = ""
-    var programArguments: String = ""
+    var programArgs: String = ""
     
     override fun getOptions(): LuaPandaRunConfigurationOptions {
         return super.getOptions() as LuaPandaRunConfigurationOptions
     }
     
     override fun getConfigurationEditor(): SettingsEditor<out RunConfiguration> {
-        return LuaPandaSettingsEditor()
+        return LuaPandaSettingsEditor(project)
     }
     
     override fun getState(executor: Executor, environment: ExecutionEnvironment): RunProfileState {
@@ -56,18 +56,18 @@ class LuaPandaRunConfiguration(
     override fun readExternal(element: Element) {
         super.readExternal(element)
         debugPort = element.getAttributeValue("debugPort")?.toIntOrNull() ?: 8818
-        workingDirectory = element.getAttributeValue("workingDirectory") ?: ""
-        luaExecutable = element.getAttributeValue("luaExecutable") ?: ""
+        workingDir = element.getAttributeValue("workingDir") ?: ""
+        luaExe = element.getAttributeValue("luaExe") ?: ""
         scriptPath = element.getAttributeValue("scriptPath") ?: ""
-        programArguments = element.getAttributeValue("programArguments") ?: ""
+        programArgs = element.getAttributeValue("programArgs") ?: ""
     }
     
     override fun writeExternal(element: Element) {
         super.writeExternal(element)
         element.setAttribute("debugPort", debugPort.toString())
-        element.setAttribute("workingDirectory", workingDirectory)
-        element.setAttribute("luaExecutable", luaExecutable)
+        element.setAttribute("workingDir", workingDir)
+        element.setAttribute("luaExe", luaExe)
         element.setAttribute("scriptPath", scriptPath)
-        element.setAttribute("programArguments", programArguments)
+        element.setAttribute("programArgs", programArgs)
     }
 }
