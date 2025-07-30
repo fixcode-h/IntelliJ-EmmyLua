@@ -41,6 +41,11 @@ data class LuaPandaVariable(
 )
 
 data class LuaPandaBreakpoint(
+    val path: String,
+    val bks: List<BreakpointInfo>
+)
+
+data class BreakpointInfo(
     val line: Int,
     val condition: String? = null,
     val logMessage: String? = null
@@ -49,19 +54,34 @@ data class LuaPandaBreakpoint(
 data class LuaPandaInitInfo(
     val stopOnEntry: String,
     val useCHook: String,
-    val logLevel: String
+    val logLevel: String,
+    val luaFileExtension: String = "lua",
+    val cwd: String,
+    val isNeedB64EncodeStr: String = "false",
+    val tempFilePath: String,
+    val pathCaseSensitivity: String = "true",
+    val osType: String,
+    val clibPath: String = "",
+    val adapterVersion: String = "1.0.0",
+    val autoPathMode: String = "false",
+    val distinguishSameNameFile: String = "false",
+    val truncatedOPath: String = "",
+    val developmentMode: String = "false"
 )
 
 object LuaPandaCommands {
     const val INIT_SUCCESS = "initSuccess"
-    const val SET_BREAKPOINT = "setBreakpoint"
+    const val SET_BREAKPOINT = "setBreakPoint"  // 注意大小写
     const val STOP_ON_BREAKPOINT = "stopOnBreakpoint"
     const val CONTINUE = "continue"
-    const val STEP_OVER = "stepOver"
-    const val STEP_IN = "stepIn"
-    const val STEP_OUT = "stepOut"
+    const val STEP_OVER = "stopOnStep"  // Lua中使用的是stopOnStep
+    const val STEP_IN = "stopOnStepIn"  // Lua中使用的是stopOnStepIn
+    const val STEP_OUT = "stopOnStepOut"  // Lua中使用的是stopOnStepOut
     const val STOP_RUN = "stopRun"
     const val OUTPUT = "output"
+    const val GET_VARIABLE = "getVariable"
+    const val SET_VARIABLE = "setVariable"
+    const val GET_WATCHED_VARIABLE = "getWatchedVariable"
 }
 
 enum class LuaPandaTransportType {

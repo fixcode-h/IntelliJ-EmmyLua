@@ -81,22 +81,46 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
     }
 
     private fun onConnect() {
-        // 发送初始化消息
+        // 发送初始化消息，包含完整的初始化参数
         val initInfo = LuaPandaInitInfo(
             stopOnEntry = configuration.stopOnEntry.toString(),
             useCHook = configuration.useCHook.toString(),
-            logLevel = configuration.logLevel.toString()
+            logLevel = configuration.logLevel.toString(),
+            luaFileExtension = "lua",
+            cwd = session.project.basePath ?: System.getProperty("user.dir"),
+            isNeedB64EncodeStr = "false",
+            tempFilePath = System.getProperty("java.io.tmpdir"),
+            pathCaseSensitivity = "true",
+            osType = System.getProperty("os.name"),
+            clibPath = "",
+            adapterVersion = "1.0.0",
+            autoPathMode = "false",
+            distinguishSameNameFile = "false",
+            truncatedOPath = "",
+            developmentMode = "false"
         )
-        val initMessage = LuaPandaMessage(LuaPandaCommands.INIT_SUCCESS, Gson().toJsonTree(initInfo).asJsonObject, "0")
-        transporter?.sendMessage(initMessage)
         
-        // 发送现有断点
-        val breakpoints = XDebuggerManager.getInstance(session.project)
-            .breakpointManager
-            .getBreakpoints(LuaLineBreakpointType::class.java)
-        breakpoints.forEach { breakpoint ->
-            breakpoint.sourcePosition?.let { position ->
-                registerBreakpoint(position, breakpoint)
+        val initMessage = LuaPandaMessage(LuaPandaCommands.INIT_SUCCESS, Gson().toJsonTree(initInfo).asJsonObject, "0")
+        
+        // 发送initSuccess消息并处理回调
+        transporter?.sendMessage(initMessage) { response ->
+            // 处理initSuccess的回调响应
+            response?.info?.let { info ->
+                val useHookLib = info.get("UseHookLib")?.asString ?: "0"
+                val useLoadstring = info.get("UseLoadstring")?.asString ?: "0"
+                val isNeedB64EncodeStr = info.get("isNeedB64EncodeStr")?.asString ?: "false"
+                
+                logger.info("LuaPanda initialized - UseHookLib: $useHookLib, UseLoadstring: $useLoadstring, B64Encode: $isNeedB64EncodeStr")
+            }
+            
+            // 发送现有断点
+            val breakpoints = XDebuggerManager.getInstance(session.project)
+                .breakpointManager
+                .getBreakpoints(LuaLineBreakpointType::class.java)
+            breakpoints.forEach { breakpoint ->
+                breakpoint.sourcePosition?.let { position ->
+                    registerBreakpoint(position, breakpoint)
+                }
             }
         }
     }
@@ -138,10 +162,15 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
         val newId = idCounter++
         breakpoint.putUserData(ID, newId)
         
-        val luaPandaBreakpoint = LuaPandaBreakpoint(
+        val breakpointInfo = BreakpointInfo(
             line = breakpoint.line + 1, // Convert to 1-based
             condition = breakpoint.conditionExpression?.expression,
             logMessage = if (breakpoint.isLogMessage) breakpoint.logExpressionObject?.expression else null
+        )
+        
+        val luaPandaBreakpoint = LuaPandaBreakpoint(
+            path = filePath,
+            bks = listOf(breakpointInfo)
         )
         
         breakpoints[newId] = luaPandaBreakpoint
@@ -155,7 +184,12 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
         val luaPandaBreakpoint = breakpoints[id]
         if (luaPandaBreakpoint != null) {
             breakpoints.remove(id)
-            val message = LuaPandaMessage(LuaPandaCommands.SET_BREAKPOINT, Gson().toJsonTree(luaPandaBreakpoint).asJsonObject, "0")
+            // 发送空的断点列表来移除断点
+            val emptyBreakpoint = LuaPandaBreakpoint(
+                path = luaPandaBreakpoint.path,
+                bks = emptyList()
+            )
+            val message = LuaPandaMessage(LuaPandaCommands.SET_BREAKPOINT, Gson().toJsonTree(emptyBreakpoint).asJsonObject, "0")
             transporter?.sendMessage(message)
         }
     }
@@ -166,10 +200,15 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
     }
 
     override fun runToPosition(position: XSourcePosition, context: XSuspendContext?) {
-        val tempBreakpoint = LuaPandaBreakpoint(
+        val filePath = position.file.canonicalPath ?: position.file.path
+        val tempBreakpointInfo = BreakpointInfo(
             line = position.line + 1,
             condition = null,
             logMessage = null
+        )
+        val tempBreakpoint = LuaPandaBreakpoint(
+            path = filePath,
+            bks = listOf(tempBreakpointInfo)
         )
         val message = LuaPandaMessage(LuaPandaCommands.SET_BREAKPOINT, Gson().toJsonTree(tempBreakpoint).asJsonObject, "0")
         transporter?.sendMessage(message)

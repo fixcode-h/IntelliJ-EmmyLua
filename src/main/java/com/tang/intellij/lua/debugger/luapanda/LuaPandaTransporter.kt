@@ -38,6 +38,13 @@ abstract class LuaPandaTransporter {
     abstract fun stop()
     abstract fun sendMessage(message: LuaPandaMessage)
 
+    fun sendMessage(message: LuaPandaMessage, callback: (LuaPandaMessage?) -> Unit) {
+        val callbackId = generateCallbackId()
+        val messageWithCallback = LuaPandaMessage(message.cmd, message.info, callbackId)
+        registerCallback(callbackId, callback)
+        sendMessage(messageWithCallback)
+    }
+
     fun setMessageHandler(handler: (LuaPandaMessage) -> Unit) {
         this.messageHandler = handler
     }

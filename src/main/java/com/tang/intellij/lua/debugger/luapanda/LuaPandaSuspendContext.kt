@@ -19,6 +19,9 @@ package com.tang.intellij.lua.debugger.luapanda
 import com.intellij.xdebugger.frame.XCompositeNode
 import com.intellij.xdebugger.frame.XStackFrame
 import com.intellij.xdebugger.frame.XValueChildrenList
+import com.intellij.xdebugger.frame.XValue
+import com.intellij.xdebugger.frame.XValueNode
+import com.intellij.xdebugger.frame.XValuePlace
 import com.intellij.xdebugger.XSourcePosition
 import com.intellij.openapi.vfs.VirtualFileManager
 import com.intellij.openapi.vfs.LocalFileSystem
@@ -28,6 +31,7 @@ import com.intellij.xdebugger.frame.XExecutionStack
 import com.intellij.ui.ColoredTextContainer
 import com.intellij.ui.SimpleTextAttributes
 import com.tang.intellij.lua.debugger.LuaDebuggerEditorsProvider
+import javax.swing.Icon
 
 class LuaPandaSuspendContext(
     private val debugProcess: LuaPandaDebugProcess,
@@ -95,5 +99,49 @@ class LuaPandaStackFrame(
     override fun customizePresentation(component: ColoredTextContainer) {
         component.append(stack.functionName ?: "unknown", SimpleTextAttributes.REGULAR_ATTRIBUTES)
         component.append(" (${stack.file}:${stack.line})", SimpleTextAttributes.GRAYED_ATTRIBUTES)
+    }
+}
+
+class LuaPandaValue(
+    private val debugProcess: LuaPandaDebugProcess,
+    private val variable: LuaPandaVariable
+) : XValue() {
+
+    override fun computePresentation(node: XValueNode, place: XValuePlace) {
+        val type = variable.type ?: "unknown"
+        val value = variable.value ?: "nil"
+        
+        val icon = getIcon(type)
+        
+        node.setPresentation(icon, type, value, variable.variablesReference > 0 || (variable.children != null && variable.children.isNotEmpty()))
+    }
+
+    override fun computeChildren(node: XCompositeNode) {
+        if (variable.children != null && variable.children.isNotEmpty()) {
+            val children = XValueChildrenList()
+            variable.children.forEach { child ->
+                children.add(child.name, LuaPandaValue(debugProcess, child))
+            }
+            node.addChildren(children, true)
+        } else if (variable.variablesReference > 0) {
+            // 如果有变量引用但没有子变量，需要向调试器请求
+            // 这里可以实现懒加载逻辑
+            node.addChildren(XValueChildrenList.EMPTY, true)
+        } else {
+            node.addChildren(XValueChildrenList.EMPTY, true)
+        }
+    }
+    
+    private fun getIcon(type: String?): Icon? {
+        return when (type) {
+            "string" -> com.intellij.icons.AllIcons.Debugger.Db_primitive
+            "number" -> com.intellij.icons.AllIcons.Debugger.Db_primitive
+            "boolean" -> com.intellij.icons.AllIcons.Debugger.Db_primitive
+            "table" -> com.intellij.icons.AllIcons.Debugger.Db_array
+            "function" -> com.intellij.icons.AllIcons.Nodes.Function
+            "userdata" -> com.intellij.icons.AllIcons.Debugger.Value
+            "thread" -> com.intellij.icons.AllIcons.Debugger.ThreadSuspended
+            else -> com.intellij.icons.AllIcons.Debugger.Value
+        }
     }
 }
