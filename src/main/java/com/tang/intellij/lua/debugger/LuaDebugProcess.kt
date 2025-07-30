@@ -43,7 +43,8 @@ abstract class LuaDebugProcess protected constructor(session: XDebugSession) : X
     override fun sessionInitialized() {
         super.sessionInitialized()
         session.setPauseActionSupported(true)
-        session.consoleView.addMessageFilter(LuaTracebackFilter(session.project))
+        // 安全地添加消息过滤器，只有在控制台视图可用时才添加
+        session.consoleView?.addMessageFilter(LuaTracebackFilter(session.project))
     }
 
     override fun registerAdditionalActions(leftToolbar: DefaultActionGroup, topToolbar: DefaultActionGroup, settings: DefaultActionGroup) {
@@ -53,7 +54,14 @@ abstract class LuaDebugProcess protected constructor(session: XDebugSession) : X
     }
 
     override fun print(text: String, consoleType: LogConsoleType, contentType: ConsoleViewContentType) {
-        session.consoleView.print(text, contentType)
+        // 安全地访问控制台视图，如果不可用则使用标准输出
+        val consoleView = session.consoleView
+        if (consoleView != null) {
+            consoleView.print(text, contentType)
+        } else {
+            // 控制台视图不可用时，使用标准输出作为回退
+            kotlin.io.print(text)
+        }
     }
 
     override fun println(text: String, consoleType: LogConsoleType, contentType: ConsoleViewContentType) {
@@ -65,7 +73,14 @@ abstract class LuaDebugProcess protected constructor(session: XDebugSession) : X
     }
 
     override fun printHyperlink(text: String, consoleType: LogConsoleType, handler: (project: Project) -> Unit) {
-        session.consoleView.printHyperlink(text, handler)
+        // 安全地访问控制台视图，如果不可用则使用标准输出
+        val consoleView = session.consoleView
+        if (consoleView != null) {
+            consoleView.printHyperlink(text, handler)
+        } else {
+            // 控制台视图不可用时，使用标准输出作为回退
+            kotlin.io.println(text)
+        }
     }
 
     override fun resume(context: XSuspendContext?) {

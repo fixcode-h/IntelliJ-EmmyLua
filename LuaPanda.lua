@@ -265,12 +265,14 @@ end
 
 -- 连接成功，开始初始化
 function this.connectSuccess()
+    this.printToConsole("[LuaPanda] 与调试器连接成功，开始初始化", 1);
     if server then
+        this.printToConsole("[LuaPanda] 关闭服务器监听", 1);
         server:close(); -- 停止listen 
     end
 
     this.changeRunState(runState.WAIT_CMD);
-    this.printToConsole("connectSuccess", 1);
+    this.printToConsole("[LuaPanda] 连接状态变更为等待命令模式", 1);
     --设置初始状态
     local ret = this.debugger_wait_msg();
 
@@ -341,13 +343,15 @@ end
 
 --断开连接
 function this.disconnect()
-    this.printToConsole("Debugger disconnect", 1);
+    this.printToConsole("[LuaPanda] 正在断开与调试器的连接", 2);
     this.clearData()
     this.changeHookState( hookState.DISCONNECT_HOOK );
     stopConnectTime = os.time();
     this.changeRunState(runState.DISCONNECT);
+    this.printToConsole("[LuaPanda] 连接状态变更为断开模式", 2);
 
     if sock ~= nil then
+        this.printToConsole("[LuaPanda] 关闭Socket连接", 2);
         sock:close();
         sock = nil;
         server = nil;
@@ -1022,33 +1026,45 @@ function this.sendMsg( sendTab )
     end
 
     local sendStr = json.encode(sendTab);
+    this.printToConsole("[LuaPanda] 准备发送消息: " .. sendStr, 1);
     if currentRunState == runState.DISCONNECT then
-        this.printToConsole("[debugger error] disconnect but want sendMsg:" .. sendStr, 2);
+        this.printToConsole("[LuaPanda] 连接已断开但仍尝试发送消息: " .. sendStr, 2);
         this.disconnect();
         return;
     end
 
     local succ,err;
-    if pcall(function() succ,err = sock:send(sendStr..TCPSplitChar.."\n"); end) then
+    local finalMsg = sendStr..TCPSplitChar.."\n";
+    this.printToConsole("[LuaPanda] 发送最终消息格式: " .. finalMsg:gsub("\n", "\\n"), 1);
+    if pcall(function() succ,err = sock:send(finalMsg); end) then
         if succ == nil then
+            this.printToConsole("[LuaPanda] 消息发送失败，原因: " .. (err or "未知"), 2);
             if err == "closed" then
                 this.disconnect();
             end
+        else
+            this.printToConsole("[LuaPanda] 消息发送成功，字节数: " .. succ, 1);
         end
+    else
+        this.printToConsole("[LuaPanda] 消息发送异常", 2);
     end
 end
 
 -- 处理 收到的消息
 -- @dataStr 接收的消息json
 function this.dataProcess( dataStr )
+    this.printToConsole("[LuaPanda] 开始处理消息: " .. dataStr, 1);
     this.printToVSCode("debugger get:"..dataStr);
     local dataTable = json.decode(dataStr);
     if dataTable == nil then
+        this.printToConsole("[LuaPanda] JSON解析失败，消息格式错误", 2);
         this.printToVSCode("[error] Json is error", 2);
         return;
     end
 
+    this.printToConsole("[LuaPanda] 消息解析成功，命令: " .. (dataTable.cmd or "未知"), 1);
     if dataTable.callbackId ~= "0" then
+        this.printToConsole("[LuaPanda] 设置回调ID: " .. dataTable.callbackId, 1);
         this.setCallbackId(dataTable.callbackId);
     end
 
@@ -1569,28 +1585,32 @@ function this.receiveMessage( timeoutSec )
     local response, err = sock:receive("*l");
     if response == nil then
         if err == "closed" then
-            this.printToConsole("[debugger error]接收信息失败  |  reason:"..err, 2);
+            this.printToConsole("[LuaPanda] 连接已断开，接收消息失败，原因: " .. err, 2);
             this.disconnect();
         end
         return false;
     else
-
+        this.printToConsole("[LuaPanda] 接收到原始消息: " .. response, 1);
         --判断是否是一条消息，分拆
         local proc_response = string.sub(response, 1, -1 * (TCPSplitChar:len() + 1 ));
         local match_res = string.find(proc_response, TCPSplitChar, 1, true);
         if match_res == nil then
             --单条
+            this.printToConsole("[LuaPanda] 处理单条消息: " .. proc_response, 1);
             this.dataProcess(proc_response);
         else
             --有粘包
+            this.printToConsole("[LuaPanda] 检测到粘包消息，开始分拆处理", 1);
             repeat
                 --待处理命令
                 local str1 = string.sub(proc_response, 1, match_res - 1);
+                this.printToConsole("[LuaPanda] 分拆出消息片段: " .. str1, 1);
                 table.insert(recvMsgQueue, str1);
                 --剩余匹配
                 local str2 = string.sub(proc_response, match_res + TCPSplitChar:len() , -1);
                 match_res = string.find(str2, TCPSplitChar, 1, true);
             until not match_res
+            this.printToConsole("[LuaPanda] 粘包分拆完成，消息队列长度: " .. #recvMsgQueue, 1);
             this.receiveMessage();
         end
         return true;

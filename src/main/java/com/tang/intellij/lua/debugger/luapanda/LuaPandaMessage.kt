@@ -58,7 +58,7 @@ data class LuaPandaInitInfo(
     val luaFileExtension: String = "lua",
     val cwd: String,
     val isNeedB64EncodeStr: String = "false",
-    val tempFilePath: String,
+    val TempFilePath: String,
     val pathCaseSensitivity: String = "true",
     val osType: String,
     val clibPath: String = "",
