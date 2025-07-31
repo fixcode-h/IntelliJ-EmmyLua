@@ -178,7 +178,7 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
 
     private fun handleMessage(message: LuaPandaMessage) {
         when (message.cmd) {
-            LuaPandaCommands.STOP_ON_BREAKPOINT, LuaPandaCommands.STOP_ON_ENTRY -> {
+            LuaPandaCommands.STOP_ON_BREAKPOINT, LuaPandaCommands.STOP_ON_ENTRY, LuaPandaCommands.STEP_OVER, LuaPandaCommands.STEP_IN, LuaPandaCommands.STEP_OUT -> {
                 // 优先从stack字段获取堆栈信息（新格式），如果没有则从info字段获取（旧格式）
                 val stacks = if (message.stack != null) {
                     message.stack
@@ -190,7 +190,13 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
                 }
                 
                 if (stacks.isNotEmpty()) {
-                    println("断点命中: ${stacks[0].file}:${stacks[0].line} (${stacks.size}个堆栈帧)", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+                    val actionType = when (message.cmd) {
+                        LuaPandaCommands.STEP_OVER -> "单步跳过到"
+                        LuaPandaCommands.STEP_IN -> "单步进入到"
+                        LuaPandaCommands.STEP_OUT -> "单步跳出到"
+                        else -> "断点命中"
+                    }
+                    println("$actionType: ${stacks[0].file}:${stacks[0].line} (${stacks.size}个堆栈帧)", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
                 }
                 onBreak(stacks)
             }
