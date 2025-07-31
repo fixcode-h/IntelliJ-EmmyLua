@@ -22,8 +22,10 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.extensions.PluginId
 import com.intellij.openapi.util.Key
+import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.xdebugger.XDebugSession
 import com.intellij.xdebugger.XDebuggerManager
+import com.intellij.xdebugger.XDebuggerUtil
 import com.intellij.xdebugger.XSourcePosition
 import com.intellij.xdebugger.breakpoints.XBreakpointHandler
 import com.intellij.xdebugger.breakpoints.XBreakpointProperties
@@ -213,8 +215,37 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
     private fun onBreak(stacks: List<LuaPandaStack>) {
         if (stacks.isNotEmpty()) {
             val suspendContext = LuaPandaSuspendContext(this, stacks)
+            val topStack = stacks[0]
+            
             ApplicationManager.getApplication().invokeLater {
-                session.positionReached(suspendContext)
+                // 检查是否是断点命中
+                val sourcePosition = topStack.oPath?.let { path ->
+                    val file = LocalFileSystem.getInstance().findFileByPath(path)
+                    if (file != null) {
+                        XDebuggerUtil.getInstance().createPosition(file, topStack.getLineNumber() - 1)
+                    } else null
+                } ?: topStack.file.let { path ->
+                    val file = LocalFileSystem.getInstance().findFileByPath(path)
+                    if (file != null) {
+                        XDebuggerUtil.getInstance().createPosition(file, topStack.getLineNumber() - 1)
+                    } else null
+                }
+                
+                val breakpoint = sourcePosition?.let { position ->
+                    val breakpointManager = XDebuggerManager.getInstance(session.project).breakpointManager
+                    val breakpoints = breakpointManager.getBreakpoints(LuaLineBreakpointType::class.java)
+                    breakpoints.find { bp ->
+                        bp.sourcePosition?.file == position.file && bp.sourcePosition?.line == position.line
+                    }
+                }
+                
+                if (breakpoint != null) {
+                    // 断点命中
+                    session.breakpointReached(breakpoint, null, suspendContext)
+                } else {
+                    // 单步调试或其他情况
+                    session.positionReached(suspendContext)
+                }
                 session.showExecutionPoint()
             }
         } else {

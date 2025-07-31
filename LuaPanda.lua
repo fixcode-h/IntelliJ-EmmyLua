@@ -1064,7 +1064,7 @@ function this.dataProcess( dataStr )
 
     this.printToConsole("[LuaPanda] 消息解析成功，命令: " .. (dataTable.cmd or "未知"), 1);
     if dataTable.callbackId ~= "0" then
-        this.printToConsole("[LuaPanda] 设置回调ID: " .. dataTable.callbackId, 1);
+        --this.printToConsole("[LuaPanda] 设置回调ID: " .. dataTable.callbackId, 1);
         this.setCallbackId(dataTable.callbackId);
     end
 
