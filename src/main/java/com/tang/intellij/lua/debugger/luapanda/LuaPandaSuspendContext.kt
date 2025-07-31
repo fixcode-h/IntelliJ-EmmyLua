@@ -23,6 +23,7 @@ import com.intellij.xdebugger.frame.XValue
 import com.intellij.xdebugger.frame.XValueNode
 import com.intellij.xdebugger.frame.XValuePlace
 import com.intellij.xdebugger.XSourcePosition
+import com.intellij.xdebugger.evaluation.XDebuggerEvaluator
 import com.intellij.openapi.vfs.VirtualFileManager
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.xdebugger.XDebuggerUtil
@@ -73,8 +74,12 @@ class LuaPandaExecutionStack(
 class LuaPandaStackFrame(
     private val debugProcess: LuaPandaDebugProcess,
     private val stack: LuaPandaStack,
-    private val stackId: Int = stack.getIndex()
+    internal val stackId: Int = stack.getIndex()
 ) : XStackFrame() {
+
+    override fun getEvaluator(): XDebuggerEvaluator? {
+        return LuaPandaDebuggerEvaluator(debugProcess, this)
+    }
 
     override fun getSourcePosition(): XSourcePosition? {
         // 优先使用oPath（完整路径），如果没有则使用file字段
