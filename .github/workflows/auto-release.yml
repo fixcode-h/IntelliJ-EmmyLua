@@ -38,9 +38,9 @@ jobs:
         uses: gradle/actions/setup-gradle@v3
 
       # 第四步：执行 Gradle 打包命令
-      # 'buildPlugin' 是 IntelliJ 插件项目默认的打包任务
+      # 使用 -x buildSearchableOptions 来跳过导致内存泄漏错误的 'buildSearchableOptions' 任务
       - name: Build with Gradle
-        run: ./gradlew buildPlugin
+        run: ./gradlew buildPlugin -x buildSearchableOptions
 
       # 第五步：生成 Release 的更新日志 (Release Body)
       # 提取本次推送中包含的所有 commit 信息
