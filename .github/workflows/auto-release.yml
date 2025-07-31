@@ -1,0 +1,58 @@
+# GitHub Actions 工作流名称
+name: Build and Release on Push to Main
+
+# 触发工作流的事件
+on:
+  push:
+    branches:
+      - main # 当 main 分支有新的推送时触发
+
+# 工作流运行的任务
+jobs:
+  build-and-release:
+    # 使用最新的 Ubuntu 虚拟机环境
+    runs-on: ubuntu-latest
+    # 赋予工作流写入 Releases 的权限
+    permissions:
+      contents: write
+
+    steps:
+      # 第一步：检出代码
+      # 使用 actions/checkout@v4 拉取仓库的最新代码
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 第二步：设置 Java 环境
+      # 根据用户要求，使用 Java 17
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      # 第三步：设置 Gradle 环境
+      # 使用 Gradle Wrapper 来确保构建环境的一致性
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      # 第四步：执行 Gradle 打包命令
+      # 'buildPlugin' 是 IntelliJ 插件项目默认的打包任务
+      - name: Build with Gradle
+        run: ./gradlew buildPlugin
+
+      # 第五步：创建 GitHub Release 并上传构建产物
+      - name: Create Release and Upload Asset
+        uses: softprops/action-gh-release@v2
+        with:
+          # 使用日期和 commit hash 生成一个唯一的标签名，例如: release-20250731-a1b2c3d
+          tag_name: release-${{ env.RELEASE_DATE }}-${{ github.sha }}
+          # Release 的标题
+          name: Auto Build - ${{ env.RELEASE_DATE }}
+          # 标记为预发布版本
+          prerelease: true
+          # 从构建输出目录中找到插件的 zip 包并上传
+          # build/distributions/ 目录下通常会存放最终的插件包
+          files: build/distributions/*.zip
+        env:
+          # 设置一个环境变量用于 Release 标签和标题
+          RELEASE_DATE: $(date +'%Y%m%d')
