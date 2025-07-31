@@ -145,14 +145,14 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
             developmentMode = "false"
         )
         
-        val initMessage = LuaPandaMessage(LuaPandaCommands.INIT_SUCCESS, Gson().toJsonTree(initInfo).asJsonObject, "0")
+        val initMessage = LuaPandaMessage(LuaPandaCommands.INIT_SUCCESS, Gson().toJsonTree(initInfo).asJsonObject, "")
         println("[LuaPanda] 发送初始化消息: ${Gson().toJson(initMessage)}", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
         
-        // 发送initSuccess消息并处理回调
-        transporter?.sendMessage(initMessage) { response ->
+        // 使用commandToDebugger发送initSuccess消息并处理回调
+        transporter?.commandToDebugger(LuaPandaCommands.INIT_SUCCESS, initInfo, { response ->
             println("[LuaPanda] 收到初始化响应", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
             // 处理initSuccess的回调响应
-            response?.getInfoAsObject()?.let { info ->
+            response.getInfoAsObject()?.let { info ->
                 val useHookLib = info.get("UseHookLib")?.asString ?: "0"
                 val useLoadstring = info.get("UseLoadstring")?.asString ?: "0"
                 val isNeedB64EncodeStr = info.get("isNeedB64EncodeStr")?.asString ?: "false"
@@ -171,7 +171,7 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
                     registerBreakpoint(position, breakpoint)
                 }
             }
-        }
+        })
     }
 
     private fun onDisconnect() {
@@ -254,9 +254,9 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
         
         breakpoints[newId] = luaPandaBreakpoint
         
-        val message = LuaPandaMessage(LuaPandaCommands.SET_BREAKPOINT, Gson().toJsonTree(luaPandaBreakpoint).asJsonObject, "0")
-        println("[LuaPanda] 发送设置断点消息: ${Gson().toJson(message)}", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
-        transporter?.sendMessage(message)
+        println("[LuaPanda] 发送设置断点消息: ${Gson().toJson(luaPandaBreakpoint)}", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+        // 断点设置是状态通知协议，不需要回调
+        transporter?.commandToDebugger(LuaPandaCommands.SET_BREAKPOINT, luaPandaBreakpoint)
     }
 
     override fun unregisterBreakpoint(sourcePosition: XSourcePosition, breakpoint: XLineBreakpoint<*>) {
@@ -270,15 +270,15 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
                 path = luaPandaBreakpoint.path,
                 bks = emptyList()
             )
-            val message = LuaPandaMessage(LuaPandaCommands.SET_BREAKPOINT, Gson().toJsonTree(emptyBreakpoint).asJsonObject, "0")
-            println("[LuaPanda] 发送移除断点消息: ${Gson().toJson(message)}", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
-            transporter?.sendMessage(message)
+            println("[LuaPanda] 发送移除断点消息: ${Gson().toJson(emptyBreakpoint)}", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+            // 断点移除是状态通知协议，不需要回调
+            transporter?.commandToDebugger(LuaPandaCommands.SET_BREAKPOINT, emptyBreakpoint)
         }
     }
 
     override fun startPausing() {
-        val message = LuaPandaMessage(LuaPandaCommands.STOP_ON_BREAKPOINT, null, "0")
-        transporter?.sendMessage(message)
+        // 暂停是状态通知协议，不需要回调
+        transporter?.commandToDebugger(LuaPandaCommands.STOP_ON_BREAKPOINT)
     }
 
     override fun runToPosition(position: XSourcePosition, context: XSuspendContext?) {
@@ -292,22 +292,22 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
             path = filePath,
             bks = listOf(tempBreakpointInfo)
         )
-        val message = LuaPandaMessage(LuaPandaCommands.SET_BREAKPOINT, Gson().toJsonTree(tempBreakpoint).asJsonObject, "0")
-        transporter?.sendMessage(message)
+        // 运行到指定位置是状态通知协议，不需要回调
+        transporter?.commandToDebugger(LuaPandaCommands.SET_BREAKPOINT, tempBreakpoint)
     }
 
     override fun run() {
         println("[LuaPanda] 执行继续运行命令", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
-        val message = LuaPandaMessage(LuaPandaCommands.CONTINUE, null, "0")
-        println("[LuaPanda] 发送继续运行消息: ${Gson().toJson(message)}", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
-        transporter?.sendMessage(message)
+        println("[LuaPanda] 发送继续运行消息", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+        // 继续运行是状态通知协议，不需要回调
+        transporter?.commandToDebugger(LuaPandaCommands.CONTINUE)
     }
 
     override fun stop() {
         println("[LuaPanda] 停止调试会话", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
-        val message = LuaPandaMessage(LuaPandaCommands.STOP_RUN, null, "0")
-        println("[LuaPanda] 发送停止运行消息: ${Gson().toJson(message)}", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
-        transporter?.sendMessage(message)
+        println("[LuaPanda] 发送停止运行消息", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+        // 停止运行是状态通知协议，不需要回调
+        transporter?.commandToDebugger(LuaPandaCommands.STOP_RUN)
         transporter?.stop()
         transporter = null
         println("[LuaPanda] 传输器已停止", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
@@ -315,23 +315,32 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
 
     override fun startStepOver(context: XSuspendContext?) {
         println("[LuaPanda] 执行单步跳过命令", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
-        val message = LuaPandaMessage(LuaPandaCommands.STEP_OVER, null, "0")
-        println("[LuaPanda] 发送单步跳过消息: ${Gson().toJson(message)}", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
-        transporter?.sendMessage(message)
+        println("[LuaPanda] 发送单步跳过消息", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+        // 单步跳过是响应协议，需要回调
+        transporter?.commandToDebugger(LuaPandaCommands.STEP_OVER, null, { response ->
+            println("[LuaPanda] 收到单步跳过响应", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+            // 处理单步跳过的回调响应
+        })
     }
 
     override fun startStepInto(context: XSuspendContext?) {
         println("[LuaPanda] 执行单步进入命令", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
-        val message = LuaPandaMessage(LuaPandaCommands.STEP_IN, null, "0")
-        println("[LuaPanda] 发送单步进入消息: ${Gson().toJson(message)}", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
-        transporter?.sendMessage(message)
+        println("[LuaPanda] 发送单步进入消息", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+        // 单步进入是响应协议，需要回调
+        transporter?.commandToDebugger(LuaPandaCommands.STEP_IN, null, { response ->
+            println("[LuaPanda] 收到单步进入响应", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+            // 处理单步进入的回调响应
+        })
     }
 
     override fun startStepOut(context: XSuspendContext?) {
         println("[LuaPanda] 执行单步跳出命令", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
-        val message = LuaPandaMessage(LuaPandaCommands.STEP_OUT, null, "0")
-        println("[LuaPanda] 发送单步跳出消息: ${Gson().toJson(message)}", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
-        transporter?.sendMessage(message)
+        println("[LuaPanda] 发送单步跳出消息", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+        // 单步跳出是响应协议，需要回调
+        transporter?.commandToDebugger(LuaPandaCommands.STEP_OUT, null, { response ->
+            println("[LuaPanda] 收到单步跳出响应", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+            // 处理单步跳出的回调响应
+        })
     }
 
     // 支持回调的sendMessage方法

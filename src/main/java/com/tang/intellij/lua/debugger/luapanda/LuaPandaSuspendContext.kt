@@ -135,39 +135,30 @@ class LuaPandaValue(
                 addProperty("stackId", stackId.toString())
             }
             
-            val message = LuaPandaMessage(
-                cmd = LuaPandaCommands.GET_VARIABLE,
-                info = info,
-                callbackId = System.currentTimeMillis().toString()
-            )
-            
-            debugProcess.sendMessage(message) { response ->
-                if (response != null) {
-                    try {
-                        val responseInfo = response.getInfoAsObject()
-                        val children = XValueChildrenList()
-                        
-                        // 解析返回的变量信息
-                        responseInfo?.getAsJsonArray("variables")?.forEach { element ->
-                            val varObj = element.asJsonObject
-                            val childVar = LuaPandaVariable(
-                                name = varObj.get("name")?.asString ?: "",
-                                value = varObj.get("value")?.asString,
-                                type = varObj.get("type")?.asString,
-                                variablesReference = varObj.get("variablesReference")?.asInt ?: 0
-                            )
-                            children.add(childVar.name, LuaPandaValue(debugProcess, childVar, stackId))
-                        }
-                        
-                        node.addChildren(children, true)
-                    } catch (e: Exception) {
-                        println("[LuaPanda] 解析getVariable响应失败: ${e.message}")
-                        node.addChildren(XValueChildrenList.EMPTY, true)
+            // GET_VARIABLE是响应协议，需要回调
+            debugProcess.transporter?.commandToDebugger(LuaPandaCommands.GET_VARIABLE, info, { response ->
+                try {
+                    val responseInfo = response.getInfoAsObject()
+                    val children = XValueChildrenList()
+                    
+                    // 解析返回的变量信息
+                    responseInfo?.getAsJsonArray("variables")?.forEach { element ->
+                        val varObj = element.asJsonObject
+                        val childVar = LuaPandaVariable(
+                            name = varObj.get("name")?.asString ?: "",
+                            value = varObj.get("value")?.asString,
+                            type = varObj.get("type")?.asString,
+                            variablesReference = varObj.get("variablesReference")?.asInt ?: 0
+                        )
+                        children.add(childVar.name, LuaPandaValue(debugProcess, childVar, stackId))
                     }
-                } else {
+                    
+                    node.addChildren(children, true)
+                } catch (e: Exception) {
+                    println("[LuaPanda] 解析getVariable响应失败: ${e.message}")
                     node.addChildren(XValueChildrenList.EMPTY, true)
                 }
-            }
+            })
         } else {
             node.addChildren(XValueChildrenList.EMPTY, true)
         }

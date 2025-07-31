@@ -48,6 +48,48 @@ abstract class LuaPandaTransporter(private val logger: DebugLogger? = null) {
         sendMessage(messageWithCallback)
     }
 
+    /**
+     * 向 Debugger 发消息 - 仿照VSCode插件的实现
+     * @param cmd 发给Debugger的命令 'continue'/'stepover'/'stepin'/'stepout'/'restart'/'stop'
+     * @param sendObject 消息参数，会被放置在协议的info中
+     * @param callbackFunc 回调函数
+     * @param timeOutSec 超时时间（秒）
+     */
+    fun commandToDebugger(cmd: String, sendObject: Any? = null, callbackFunc: ((LuaPandaMessage) -> Unit)? = null, timeOutSec: Int = 0) {
+        val sendObj = mutableMapOf<String, Any>()
+        
+        // 有回调时才生成随机数callbackId
+        if (callbackFunc != null) {
+            val callbackId = generateUniqueCallbackId()
+            
+            // 注册回调
+            registerCallback(callbackId, callbackFunc)
+            
+            // 设置超时（如果需要）
+            if (timeOutSec > 0) {
+                // TODO: 实现超时机制
+            }
+            
+            sendObj["callbackId"] = callbackId
+        }
+        // 如果没有回调函数，则不设置callbackId字段
+        
+        sendObj["cmd"] = cmd
+        if (sendObject != null) {
+            sendObj["info"] = sendObject
+        }
+        
+        // 创建消息并发送
+        val message = LuaPandaMessage(
+            cmd = cmd,
+            info = if (sendObject != null) Gson().toJsonTree(sendObject) else null,
+            callbackId = sendObj["callbackId"] as? String ?: "", // 没有回调时为空字符串
+            stack = null
+        )
+        
+        sendMessage(message)
+    }
+
     fun setMessageHandler(handler: (LuaPandaMessage) -> Unit) {
         this.messageHandler = handler
     }
@@ -58,6 +100,28 @@ abstract class LuaPandaTransporter(private val logger: DebugLogger? = null) {
 
     fun generateCallbackId(): String {
         return (++callbackCounter).toString()
+    }
+
+    /**
+     * 生成唯一的回调ID - 仿照VSCode插件的实现
+     */
+    private fun generateUniqueCallbackId(): String {
+        val max = 999999999
+        val min = 10  // 10以内是保留位
+        var isSame: Boolean
+        var ranNum: Int
+        
+        do {
+            isSame = false
+            ranNum = (Math.random() * (max - min + 1) + min).toInt()
+            
+            // 检查随机数唯一性
+            if (callbacks.containsKey(ranNum.toString())) {
+                isSame = true
+            }
+        } while (isSame)
+        
+        return ranNum.toString()
     }
 
     fun registerCallback(callbackId: String, callback: (LuaPandaMessage) -> Unit) {
