@@ -75,8 +75,9 @@ class LuaPandaStackFrame(
 
     override fun getSourcePosition(): XSourcePosition? {
         val file = LocalFileSystem.getInstance().findFileByPath(stack.file)
-        return if (file != null && stack.line > 0) {
-            XDebuggerUtil.getInstance().createPosition(file, stack.line - 1) // Convert to 0-based
+        val lineNumber = stack.getLineNumber()
+        return if (file != null && lineNumber > 0) {
+            XDebuggerUtil.getInstance().createPosition(file, lineNumber - 1) // Convert to 0-based
         } else null
     }
 
@@ -97,7 +98,7 @@ class LuaPandaStackFrame(
     }
 
     override fun customizePresentation(component: ColoredTextContainer) {
-        component.append(stack.functionName ?: "unknown", SimpleTextAttributes.REGULAR_ATTRIBUTES)
+        component.append(stack.name ?: "unknown", SimpleTextAttributes.REGULAR_ATTRIBUTES)
         component.append(" (${stack.file}:${stack.line})", SimpleTextAttributes.GRAYED_ATTRIBUTES)
     }
 }

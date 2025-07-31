@@ -17,20 +17,39 @@
 package com.tang.intellij.lua.debugger.luapanda
 
 import com.google.gson.JsonObject
+import com.google.gson.JsonElement
 
 data class LuaPandaMessage(
     val cmd: String,
-    val info: JsonObject?,
-    val callbackId: String
-)
+    val info: JsonElement?,
+    val callbackId: String,
+    val stack: List<LuaPandaStack>? = null
+) {
+    // 便利方法来获取info作为JsonObject
+    fun getInfoAsObject(): JsonObject? {
+        return if (info?.isJsonObject == true) info.asJsonObject else null
+    }
+}
 
 data class LuaPandaStack(
     val file: String,
-    val line: Int,
-    val functionName: String?,
+    val line: String,  // Lua端发送的是字符串格式的行号
+    val name: String,  // 对应Lua端的name字段
+    val index: String, // 对应Lua端的index字段
+    val oPath: String? = null, // 对应Lua端的oPath字段
     val locals: List<LuaPandaVariable>? = null,
     val upvalues: List<LuaPandaVariable>? = null
-)
+) {
+    // 提供一个便利方法来获取整数行号
+    fun getLineNumber(): Int {
+        return line.toIntOrNull() ?: 0
+    }
+    
+    // 提供一个便利方法来获取索引
+    fun getIndex(): Int {
+        return index.toIntOrNull() ?: 0
+    }
+}
 
 data class LuaPandaVariable(
     val name: String,
@@ -73,6 +92,7 @@ object LuaPandaCommands {
     const val INIT_SUCCESS = "initSuccess"
     const val SET_BREAKPOINT = "setBreakPoint"  // 注意大小写
     const val STOP_ON_BREAKPOINT = "stopOnBreakpoint"
+    const val STOP_ON_ENTRY = "stopOnEntry"
     const val CONTINUE = "continue"
     const val STEP_OVER = "stopOnStep"  // Lua中使用的是stopOnStep
     const val STEP_IN = "stopOnStepIn"  // Lua中使用的是stopOnStepIn

@@ -152,7 +152,7 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
         transporter?.sendMessage(initMessage) { response ->
             println("[LuaPanda] 收到初始化响应", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
             // 处理initSuccess的回调响应
-            response?.info?.let { info ->
+            response?.getInfoAsObject()?.let { info ->
                 val useHookLib = info.get("UseHookLib")?.asString ?: "0"
                 val useLoadstring = info.get("UseLoadstring")?.asString ?: "0"
                 val isNeedB64EncodeStr = info.get("isNeedB64EncodeStr")?.asString ?: "false"
@@ -183,14 +183,26 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
     private fun handleMessage(message: LuaPandaMessage) {
         println("[LuaPanda] 处理调试器消息，命令: ${message.cmd}", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
         when (message.cmd) {
-            LuaPandaCommands.STOP_ON_BREAKPOINT -> {
-                println("[LuaPanda] 处理断点停止消息", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
-                val stacks = Gson().fromJson(message.info, Array<LuaPandaStack>::class.java).toList()
+            LuaPandaCommands.STOP_ON_BREAKPOINT, LuaPandaCommands.STOP_ON_ENTRY -> {
+                println("[LuaPanda] 处理断点/入口停止消息", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+                
+                // 优先从stack字段获取堆栈信息（新格式），如果没有则从info字段获取（旧格式）
+                val stacks = if (message.stack != null) {
+                    println("[LuaPanda] 从stack字段解析堆栈信息", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+                    message.stack
+                } else if (message.getInfoAsObject() != null) {
+                    println("[LuaPanda] 从info字段解析堆栈信息", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+                    Gson().fromJson(message.getInfoAsObject(), Array<LuaPandaStack>::class.java).toList()
+                } else {
+                    println("[LuaPanda] 警告：消息中没有找到堆栈信息", LogConsoleType.NORMAL, ConsoleViewContentType.ERROR_OUTPUT)
+                    emptyList()
+                }
+                
                 println("[LuaPanda] 解析到 ${stacks.size} 个堆栈帧", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
                 onBreak(stacks)
             }
             LuaPandaCommands.OUTPUT -> {
-                val outputText = message.info?.get("content")?.asString ?: ""
+                val outputText = message.getInfoAsObject()?.get("content")?.asString ?: ""
                 println("[LuaPanda] 处理输出消息: $outputText", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
                 println(outputText, LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
             }
@@ -206,7 +218,7 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
         
         if (stacks.isNotEmpty()) {
             val topStack = stacks[0]
-            println("[LuaPanda] 当前执行位置 - 文件: ${topStack.file}, 行号: ${topStack.line}, 函数: ${topStack.functionName}", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+            println("[LuaPanda] 当前执行位置 - 文件: ${topStack.file}, 行号: ${topStack.line}, 名称: ${topStack.name}", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
             
             println("[LuaPanda] 创建暂停上下文并准备暂停调试会话", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
             val suspendContext = LuaPandaSuspendContext(this, stacks)
