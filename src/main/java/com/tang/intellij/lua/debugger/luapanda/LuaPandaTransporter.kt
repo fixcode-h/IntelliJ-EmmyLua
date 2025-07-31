@@ -179,7 +179,9 @@ class LuaPandaTcpClientTransporter(private val host: String, private val port: I
                         try {
                             // 去掉协议分隔符 |*| 再解析JSON
                             val jsonString = line.removeSuffix("|*|")
-                            logInfo("接收协议: $jsonString")
+                            // 将JSON字符串中的换行符转义以避免控制台空行
+                            val displayJson = jsonString.replace("\n", "\\n").replace("\r", "\\r")
+                            logInfo("接收协议: $displayJson")
                             val message = Gson().fromJson(jsonString, LuaPandaMessage::class.java)
                             handleReceivedMessage(message)
                         } catch (e: Exception) {
@@ -210,7 +212,9 @@ class LuaPandaTcpClientTransporter(private val host: String, private val port: I
             val json = Gson().toJson(message)
             // 确保协议格式符合 sendStr..TCPSplitChar.."\n" 的要求
             val finalMessage = "$json|*|"
-            logInfo("发送协议: $json")
+            // 将JSON字符串中的换行符转义以避免控制台空行
+            val displayJson = json.replace("\n", "\\n").replace("\r", "\\r")
+            logInfo("发送协议: $displayJson")
             writer?.println(finalMessage)
         } catch (e: Exception) {
             logError("消息发送失败: ${e.message}")
@@ -245,7 +249,9 @@ class LuaPandaTcpServerTransporter(private val port: Int, logger: DebugLogger? =
                         try {
                             // 去掉协议分隔符 |*| 再解析JSON
                             val jsonString = line.removeSuffix("|*|")
-                            logInfo("接收协议: $jsonString")
+                            // 将JSON字符串中的换行符转义以避免控制台空行
+                            val displayJson = jsonString.replace("\n", "\\n").replace("\r", "\\r")
+                            logInfo("接收协议: $displayJson")
                             val message = Gson().fromJson(jsonString, LuaPandaMessage::class.java)
                             handleReceivedMessage(message)
                         } catch (e: Exception) {
@@ -277,7 +283,9 @@ class LuaPandaTcpServerTransporter(private val port: Int, logger: DebugLogger? =
             val json = Gson().toJson(message)
             // 确保协议格式符合 sendStr..TCPSplitChar.."\n" 的要求
             val finalMessage = "$json|*|"
-            logInfo("发送协议: $json")
+            // 将JSON字符串中的换行符转义以避免控制台空行
+            val displayJson = json.replace("\n", "\\n").replace("\r", "\\r")
+            logInfo("发送协议: $displayJson")
             writer?.println(finalMessage)
         } catch (e: Exception) {
             logError("消息发送失败: ${e.message}")
