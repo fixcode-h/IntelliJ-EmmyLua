@@ -322,10 +322,37 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
 
     override fun stop() {
         println("停止调试", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
-        // 停止运行是状态通知协议，不需要回调
-        transporter?.commandToDebugger(LuaPandaCommands.STOP_RUN)
-        transporter?.stop()
-        transporter = null
+        
+        // 发送STOP_RUN命令并等待Lua端回调确认
+        if (transporter != null) {
+            try {
+                // 使用带回调的commandToDebugger，等待Lua端确认
+                transporter?.commandToDebugger(LuaPandaCommands.STOP_RUN, null, { response ->
+                    println("收到停止确认，关闭连接", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+                    // 收到Lua端回调后再停止传输器并清理资源
+                    transporter?.stop()
+                    transporter = null
+                })
+                // 设置超时机制，如果3秒内没有收到回调，强制停止
+                Thread {
+                    Thread.sleep(3000)
+                    if (transporter != null) {
+                        println("停止确认超时，强制关闭连接", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+                        transporter?.stop()
+                        transporter = null
+                    }
+                }.start()
+                
+            } catch (e: Exception) {
+                println("发送停止命令时出错: ${e.message}", LogConsoleType.NORMAL, ConsoleViewContentType.ERROR_OUTPUT)
+                e.printStackTrace()
+                // 发送失败时直接停止
+                transporter?.stop()
+                transporter = null
+            }
+        } else {
+            println("transporter为null，无法发送stopRun命令", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+        }
     }
 
     override fun startStepOver(context: XSuspendContext?) {

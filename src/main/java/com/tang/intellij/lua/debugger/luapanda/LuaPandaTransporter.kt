@@ -17,6 +17,7 @@
 package com.tang.intellij.lua.debugger.luapanda
 
 import com.google.gson.Gson
+import com.google.gson.JsonObject
 import com.intellij.execution.ui.ConsoleViewContentType
 import com.tang.intellij.lua.debugger.DebugLogger
 import com.tang.intellij.lua.debugger.LogConsoleType
@@ -77,13 +78,15 @@ abstract class LuaPandaTransporter(private val logger: DebugLogger? = null) {
         sendObj["cmd"] = cmd
         if (sendObject != null) {
             sendObj["info"] = sendObject
+        } else {
+            sendObj["info"] = JsonObject() // 当sendObject是null时，info字段设为空的JsonObject
         }
         
         // 创建消息并发送
         val message = LuaPandaMessage(
             cmd = cmd,
-            info = if (sendObject != null) Gson().toJsonTree(sendObject) else null,
-            callbackId = sendObj["callbackId"] as? String ?: "", // 没有回调时为空字符串
+            info = if (sendObject != null) Gson().toJsonTree(sendObject) else JsonObject(), // 确保info字段始终有值
+            callbackId = sendObj["callbackId"] as? String ?: "0", // 没有回调时为空字符串
             stack = null
         )
         
