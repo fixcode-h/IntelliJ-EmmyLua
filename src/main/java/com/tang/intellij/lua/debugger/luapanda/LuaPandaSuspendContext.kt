@@ -77,7 +77,9 @@ class LuaPandaStackFrame(
 ) : XStackFrame() {
 
     override fun getSourcePosition(): XSourcePosition? {
-        val file = LocalFileSystem.getInstance().findFileByPath(stack.file)
+        // 优先使用oPath（完整路径），如果没有则使用file字段
+        val filePath = stack.oPath ?: stack.file
+        val file = LocalFileSystem.getInstance().findFileByPath(filePath)
         val lineNumber = stack.getLineNumber()
         return if (file != null && lineNumber > 0) {
             XDebuggerUtil.getInstance().createPosition(file, lineNumber - 1) // Convert to 0-based
@@ -85,19 +87,53 @@ class LuaPandaStackFrame(
     }
 
     override fun computeChildren(node: XCompositeNode) {
-        val children = XValueChildrenList()
-        
-        // 添加局部变量
-        stack.locals?.forEach { variable ->
-            children.add(variable.name, LuaPandaValue(debugProcess, variable, stackId))
+        // 如果已经有变量信息，直接使用
+        if (stack.locals != null || stack.upvalues != null) {
+            val children = XValueChildrenList()
+            
+            // 添加局部变量
+            stack.locals?.forEach { variable ->
+                children.add(variable.name, LuaPandaValue(debugProcess, variable, stackId))
+            }
+            
+            // 添加上值
+            stack.upvalues?.forEach { variable ->
+                children.add(variable.name, LuaPandaValue(debugProcess, variable, stackId))
+            }
+            
+            node.addChildren(children, true)
+        } else {
+            // 主动发送getVariable请求获取栈帧变量
+            val info = JsonObject().apply {
+                addProperty("varRef", "10000")  // 10000表示获取栈帧的局部变量
+                addProperty("stackId", stackId.toString())
+            }
+            
+            debugProcess.transporter?.commandToDebugger(LuaPandaCommands.GET_VARIABLE, info, { response ->
+                try {
+                    val children = XValueChildrenList()
+                    
+                    // 解析返回的变量信息 - info字段直接是变量数组
+                    if (response.info?.isJsonArray == true) {
+                        response.info.asJsonArray.forEach { element ->
+                            val varObj = element.asJsonObject
+                            val variable = LuaPandaVariable(
+                                name = varObj.get("name")?.asString ?: "",
+                                value = varObj.get("value")?.asString,
+                                type = varObj.get("type")?.asString,
+                                variablesReference = varObj.get("variablesReference")?.asInt ?: 0
+                            )
+                            children.add(variable.name, LuaPandaValue(debugProcess, variable, stackId))
+                        }
+                    }
+                    
+                    node.addChildren(children, true)
+                } catch (e: Exception) {
+                    println("[LuaPanda] 解析栈帧变量响应失败: ${e.message}")
+                    node.addChildren(XValueChildrenList.EMPTY, true)
+                }
+            })
         }
-        
-        // 添加上值
-        stack.upvalues?.forEach { variable ->
-            children.add(variable.name, LuaPandaValue(debugProcess, variable, stackId))
-        }
-        
-        node.addChildren(children, true)
     }
 
     override fun customizePresentation(component: ColoredTextContainer) {
@@ -138,19 +174,20 @@ class LuaPandaValue(
             // GET_VARIABLE是响应协议，需要回调
             debugProcess.transporter?.commandToDebugger(LuaPandaCommands.GET_VARIABLE, info, { response ->
                 try {
-                    val responseInfo = response.getInfoAsObject()
                     val children = XValueChildrenList()
                     
-                    // 解析返回的变量信息
-                    responseInfo?.getAsJsonArray("variables")?.forEach { element ->
-                        val varObj = element.asJsonObject
-                        val childVar = LuaPandaVariable(
-                            name = varObj.get("name")?.asString ?: "",
-                            value = varObj.get("value")?.asString,
-                            type = varObj.get("type")?.asString,
-                            variablesReference = varObj.get("variablesReference")?.asInt ?: 0
-                        )
-                        children.add(childVar.name, LuaPandaValue(debugProcess, childVar, stackId))
+                    // 解析返回的变量信息 - info字段直接是变量数组
+                    if (response.info?.isJsonArray == true) {
+                        response.info.asJsonArray.forEach { element ->
+                            val varObj = element.asJsonObject
+                            val childVar = LuaPandaVariable(
+                                name = varObj.get("name")?.asString ?: "",
+                                value = varObj.get("value")?.asString,
+                                type = varObj.get("type")?.asString,
+                                variablesReference = varObj.get("variablesReference")?.asInt ?: 0
+                            )
+                            children.add(childVar.name, LuaPandaValue(debugProcess, childVar, stackId))
+                        }
                     }
                     
                     node.addChildren(children, true)
