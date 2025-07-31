@@ -38,7 +38,7 @@ class CopyLuaRequirePathAction : AnAction() {
         // Try to use LuaFileUtil if available, otherwise use manual conversion
         val requirePath = try {
             // Attempt to use existing utility
-            com.tang.intellij.lua.psi.LuaFileUtil.asRequirePath(project, virtualFile.path)
+            com.tang.intellij.lua.psi.LuaFileUtil.asRequirePath(project, virtualFile)
         } catch (ex: Exception) {
             // Fallback to manual conversion
             convertToRequirePath(virtualFile.path, project)
