@@ -18,7 +18,7 @@ jobs:
 
     steps:
       # 第一步：检出代码
-      # actions/checkout@v4 默认只拉取最新的 commit，我们需要设置 fetch-depth: 0 来获取完整的 git 历史，以便生成更新日志
+      # 设置 fetch-depth: 0 来获取完整的 git 历史，以便生成更新日志
       - name: Checkout code
         uses: actions/checkout@v4
         with:
@@ -38,7 +38,7 @@ jobs:
         uses: gradle/actions/setup-gradle@v3
 
       # 第四步：执行 Gradle 打包命令
-      # 使用 -x buildSearchableOptions 来跳过导致内存泄漏错误的 'buildSearchableOptions' 任务
+      # 使用 -x buildSearchableOptions 来跳过之前导致错误的 'buildSearchableOptions' 任务
       - name: Build with Gradle
         run: ./gradlew buildPlugin -x buildSearchableOptions
 
@@ -50,8 +50,6 @@ jobs:
           # 将生成的日志内容赋值给一个名为 "changelog" 的输出变量
           # github.event.before 是推送前的 commit SHA
           # github.event.after 是推送后的 commit SHA
-          # git log 会提取这两个 SHA 之间的所有提交记录
-          # --pretty=format:'* %s (%h)' 会将每条 commit 格式化为: * 提交信息 (短哈希)
           echo "changelog=$(git log ${{ github.event.before }}..${{ github.event.after }} --pretty=format:'* %s (%h)')" >> $GITHUB_OUTPUT
 
       # 第六步：创建 GitHub Release 并上传构建产物
@@ -64,14 +62,19 @@ jobs:
 
             **✨ 本次更新包含以下提交:**
             ${{ steps.generate_notes.outputs.changelog }}
-          # 使用日期和 commit hash 生成一个唯一的标签名
+          
+          # 引用在下面 env 块中计算好的变量来创建合法的标签
           tag_name: release-${{ env.RELEASE_DATE }}-${{ github.sha }}
+          
           # Release 的标题
           name: Auto Build - ${{ env.RELEASE_DATE }}
+          
           # 标记为预发布版本
           prerelease: true
+          
           # 从构建输出目录中找到插件的 zip 包并上传
           files: build/distributions/*.zip
+          
         env:
-          # 设置一个环境变量用于 Release 标签和标题
+          # 将 Shell 命令放在 env 块中，以正确执行并为 tag_name 赋值
           RELEASE_DATE: $(date +'%Y%m%d')
