@@ -26,6 +26,15 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
 
+/**
+ * 日志级别枚举
+ */
+enum class LogLevel(val value: Int, val description: String) {
+    DEBUG(0, "调试日志"),      // 调试日志
+    CONNECTION(1, "连接状态日志"), // 连接状态相关的日志
+    ERROR(2, "错误日志")       // 错误日志
+}
+
 interface ILuaPandaTransportHandler {
     fun onReceiveMessage(message: LuaPandaMessage)
     fun onDisconnect()
@@ -37,10 +46,15 @@ abstract class LuaPandaTransporter(private val logger: DebugLogger? = null) {
     private var connectionHandler: ((Boolean) -> Unit)? = null
     protected var callbackCounter = 0
     protected val callbacks = ConcurrentHashMap<String, (LuaPandaMessage) -> Unit>()
+    private var logLevel: Int = LogLevel.CONNECTION.value // 默认日志级别为连接状态日志
 
     abstract fun start()
     abstract fun stop()
     abstract fun sendMessage(message: LuaPandaMessage)
+
+    fun setLogLevel(level: Int) {
+        this.logLevel = level
+    }
 
     fun sendMessage(message: LuaPandaMessage, callback: (LuaPandaMessage?) -> Unit) {
         val callbackId = generateCallbackId()
@@ -131,12 +145,24 @@ abstract class LuaPandaTransporter(private val logger: DebugLogger? = null) {
         callbacks[callbackId] = callback
     }
 
-    protected fun logInfo(message: String) {
-        logger?.println(message, LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT) ?: println(message)
+    /**
+     * 根据日志级别打印信息日志
+     * @param message 日志消息
+     * @param level 日志级别
+     */
+    protected fun logInfo(message: String, level: LogLevel = LogLevel.CONNECTION) {
+        if (level.value >= logLevel) {
+            logger?.println(message, LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT) ?: println(message)
+        }
     }
 
-    protected fun logError(message: String) {
-        logger?.println(message, LogConsoleType.NORMAL, ConsoleViewContentType.ERROR_OUTPUT) ?: println(message)
+    /**
+     * 打印错误日志
+     */
+    protected fun logError(message: String, level: LogLevel = LogLevel.ERROR) {
+        if (level.value >= logLevel) {
+            logger?.println(message, LogConsoleType.NORMAL, ConsoleViewContentType.ERROR_OUTPUT) ?: println(message)
+        }
     }
 
     protected fun handleReceivedMessage(message: LuaPandaMessage) {
@@ -165,7 +191,7 @@ class LuaPandaTcpClientTransporter(private val host: String, private val port: I
     private var isRunning = false
 
     override fun start() {
-        logInfo("TCP客户端连接 $host:$port")
+        logInfo("TCP客户端连接 $host:$port", LogLevel.CONNECTION) // 连接状态日志
         Thread {
             try {
                 socket = Socket(host, port)
@@ -184,16 +210,16 @@ class LuaPandaTcpClientTransporter(private val host: String, private val port: I
                             val jsonString = line.removeSuffix("|*|")
                             // 将JSON字符串中的换行符转义以避免控制台空行
                             val displayJson = jsonString.replace("\n", "\\n").replace("\r", "\\r")
-                            logInfo("接收协议: $displayJson")
+                            logInfo("接收协议: $displayJson", LogLevel.DEBUG) // 调试日志
                             val message = Gson().fromJson(jsonString, LuaPandaMessage::class.java)
                             handleReceivedMessage(message)
                         } catch (e: Exception) {
-                            logError("消息解析失败: ${e.message}")
+                            logError("消息解析失败: ${e.message}", LogLevel.ERROR) // 错误日志
                         }
                     }
                 }
             } catch (e: Exception) {
-                logError("TCP客户端连接失败: ${e.message}")
+                logError("TCP客户端连接失败: ${e.message}", LogLevel.CONNECTION) // 连接错误
                 notifyConnect(false)
             }
         }.start()
@@ -206,7 +232,7 @@ class LuaPandaTcpClientTransporter(private val host: String, private val port: I
             reader?.close()
             socket?.close()
         } catch (e: Exception) {
-            logError("TCP客户端关闭异常: ${e.message}")
+            logError("TCP客户端关闭异常: ${e.message}", LogLevel.CONNECTION) // 连接状态日志
         }
     }
 
@@ -217,10 +243,10 @@ class LuaPandaTcpClientTransporter(private val host: String, private val port: I
             val finalMessage = "$json|*|"
             // 将JSON字符串中的换行符转义以避免控制台空行
             val displayJson = json.replace("\n", "\\n").replace("\r", "\\r")
-            logInfo("发送协议: $displayJson")
+            logInfo("发送协议: $displayJson", LogLevel.DEBUG) // 调试日志
             writer?.println(finalMessage)
         } catch (e: Exception) {
-            logError("消息发送失败: ${e.message}")
+            logError("消息发送失败: ${e.message}", LogLevel.ERROR) // 错误日志
         }
     }
 }
@@ -233,12 +259,12 @@ class LuaPandaTcpServerTransporter(private val port: Int, logger: DebugLogger? =
     private var isRunning = false
 
     override fun start() {
-        logInfo("TCP服务器监听端口 $port")
+        logInfo("TCP服务器监听端口 $port", LogLevel.CONNECTION)
         Thread {
             try {
                 serverSocket = ServerSocket(port)
                 clientSocket = serverSocket!!.accept()
-                logInfo("客户端已连接: ${clientSocket!!.remoteSocketAddress}")
+                logInfo("客户端已连接: ${clientSocket!!.remoteSocketAddress}", LogLevel.CONNECTION)
                 writer = PrintWriter(clientSocket!!.getOutputStream(), true)
                 reader = BufferedReader(InputStreamReader(clientSocket!!.getInputStream()))
                 isRunning = true
@@ -254,16 +280,16 @@ class LuaPandaTcpServerTransporter(private val port: Int, logger: DebugLogger? =
                             val jsonString = line.removeSuffix("|*|")
                             // 将JSON字符串中的换行符转义以避免控制台空行
                             val displayJson = jsonString.replace("\n", "\\n").replace("\r", "\\r")
-                            logInfo("接收协议: $displayJson")
+                            logInfo("接收协议: $displayJson", LogLevel.DEBUG)
                             val message = Gson().fromJson(jsonString, LuaPandaMessage::class.java)
                             handleReceivedMessage(message)
                         } catch (e: Exception) {
-                            logError("消息解析失败: ${e.message}")
+                            logError("消息解析失败: ${e.message}", LogLevel.ERROR)
                         }
                     }
                 }
             } catch (e: Exception) {
-                logError("TCP服务器启动失败: ${e.message}")
+                logError("TCP服务器启动失败: ${e.message}", LogLevel.CONNECTION)
                 notifyConnect(false)
             }
         }.start()
@@ -277,7 +303,7 @@ class LuaPandaTcpServerTransporter(private val port: Int, logger: DebugLogger? =
             clientSocket?.close()
             serverSocket?.close()
         } catch (e: Exception) {
-            logError("TCP服务器关闭异常: ${e.message}")
+            logError("TCP服务器关闭异常: ${e.message}", LogLevel.CONNECTION)
         }
     }
 
@@ -288,10 +314,10 @@ class LuaPandaTcpServerTransporter(private val port: Int, logger: DebugLogger? =
             val finalMessage = "$json|*|"
             // 将JSON字符串中的换行符转义以避免控制台空行
             val displayJson = json.replace("\n", "\\n").replace("\r", "\\r")
-            logInfo("发送协议: $displayJson")
+            logInfo("发送协议: $displayJson", LogLevel.DEBUG)
             writer?.println(finalMessage)
         } catch (e: Exception) {
-            logError("消息发送失败: ${e.message}")
+            logError("消息发送失败: ${e.message}", LogLevel.ERROR)
         }
     }
 }
