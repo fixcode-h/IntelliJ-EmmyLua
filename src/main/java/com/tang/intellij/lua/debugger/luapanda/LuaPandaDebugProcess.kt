@@ -47,45 +47,49 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
     
     override fun sessionInitialized() {
         super.sessionInitialized()
-        println("[LuaPanda] 调试会话初始化完成", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+        println(" 调试会话初始化完成", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
         ApplicationManager.getApplication().executeOnPooledThread {
             setupTransporter()
         }
     }
 
     private fun setupTransporter() {
-        println("[LuaPanda] 开始设置传输器，传输类型: ${configuration.transportType}", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+        val transportInfo = when (configuration.transportType) {
+            LuaPandaTransportType.TCP_CLIENT -> {
+                "TCP客户端 ${configuration.host}:${configuration.port}"
+            }
+            LuaPandaTransportType.TCP_SERVER -> {
+                "TCP服务器 端口:${configuration.port}"
+            }
+        }
+        println(" 设置传输器: $transportInfo", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+        
         transporter = when (configuration.transportType) {
             LuaPandaTransportType.TCP_CLIENT -> {
-                println("[LuaPanda] 创建TCP客户端传输器，目标: ${configuration.host}:${configuration.port}", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
                 LuaPandaTcpClientTransporter(configuration.host, configuration.port, this)
             }
             LuaPandaTransportType.TCP_SERVER -> {
-                println("[LuaPanda] 创建TCP服务器传输器，监听端口: ${configuration.port}", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
                 LuaPandaTcpServerTransporter(configuration.port, this)
             }
         }
         
         transporter?.setMessageHandler { message ->
-            println("[LuaPanda] 收到调试器消息，开始处理", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
             handleMessage(message)
         }
         
         transporter?.setConnectionHandler { connected ->
+            println(" 连接状态: ${if (connected) "已连接" else "已断开"}", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
             if (connected) {
-                println("[LuaPanda] 调试器连接状态变更: 已连接", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
                 onConnect()
             } else {
-                println("[LuaPanda] 调试器连接状态变更: 已断开", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
                 onDisconnect()
             }
         }
         
         try {
-            println("[LuaPanda] 启动传输器", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
             transporter?.start()
         } catch (e: Exception) {
-            println("[LuaPanda] 传输器启动失败: ${e.message}", LogConsoleType.NORMAL, ConsoleViewContentType.ERROR_OUTPUT)
+            println(" 传输器启动失败: ${e.message}", LogConsoleType.NORMAL, ConsoleViewContentType.ERROR_OUTPUT)
             logger.error("Failed to start transporter", e)
             onDisconnect()
         }
@@ -96,35 +100,27 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
     }
 
     private fun onConnect() {
-        println("[LuaPanda] 开始初始化调试器连接", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
-        
         // 获取插件目录下的libpdebug库路径
         val pluginPath = try {
-            println("[LuaPanda] 尝试获取插件路径...", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
             val pluginDescriptor = PluginManagerCore.getPlugin(
                 PluginId.getId("com.tang")
             )
-            println("[LuaPanda] 插件描述符: $pluginDescriptor", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
             
             if (pluginDescriptor != null) {
                 val pluginBasePath = pluginDescriptor.pluginPath
-                println("[LuaPanda] 插件基础路径: $pluginBasePath", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
-                
                 val debuggerLibPath = pluginBasePath?.resolve("Debugger")?.resolve("luapanda")
-                println("[LuaPanda] 调试器库路径: $debuggerLibPath", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
-                
-                debuggerLibPath?.toString()?.let { it + java.io.File.separator } ?: ""
+                val path = debuggerLibPath?.toString()?.let { it + java.io.File.separator } ?: ""
+                println(" 插件路径: $path", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+                path
             } else {
-                println("[LuaPanda] 插件描述符为null", LogConsoleType.NORMAL, ConsoleViewContentType.ERROR_OUTPUT)
+                println(" 插件描述符为null", LogConsoleType.NORMAL, ConsoleViewContentType.ERROR_OUTPUT)
                 ""
             }
         } catch (e: Exception) {
-            println("[LuaPanda] 获取插件路径失败: ${e.message}", LogConsoleType.NORMAL, ConsoleViewContentType.ERROR_OUTPUT)
+            println(" 获取插件路径失败: ${e.message}", LogConsoleType.NORMAL, ConsoleViewContentType.ERROR_OUTPUT)
             e.printStackTrace()
             ""
         }
-        
-        println("[LuaPanda] 设置clibPath为: $pluginPath", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
         
         // 发送初始化消息，包含完整的初始化参数
         val initInfo = LuaPandaInitInfo(
@@ -146,18 +142,16 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
         )
         
         val initMessage = LuaPandaMessage(LuaPandaCommands.INIT_SUCCESS, Gson().toJsonTree(initInfo).asJsonObject, "")
-        println("[LuaPanda] 发送初始化消息: ${Gson().toJson(initMessage)}", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
         
         // 使用commandToDebugger发送initSuccess消息并处理回调
         transporter?.commandToDebugger(LuaPandaCommands.INIT_SUCCESS, initInfo, { response ->
-            println("[LuaPanda] 收到初始化响应", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
             // 处理initSuccess的回调响应
             response.getInfoAsObject()?.let { info ->
                 val useHookLib = info.get("UseHookLib")?.asString ?: "0"
                 val useLoadstring = info.get("UseLoadstring")?.asString ?: "0"
                 val isNeedB64EncodeStr = info.get("isNeedB64EncodeStr")?.asString ?: "false"
                 
-                println("[LuaPanda] 初始化参数 - UseHookLib: $useHookLib, UseLoadstring: $useLoadstring, B64Encode: $isNeedB64EncodeStr", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+                println(" 初始化完成 - HookLib:$useHookLib, Loadstring:$useLoadstring, B64:$isNeedB64EncodeStr", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
                 logger.info("LuaPanda initialized - UseHookLib: $useHookLib, UseLoadstring: $useLoadstring, B64Encode: $isNeedB64EncodeStr")
             }
             
@@ -165,70 +159,59 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
             val breakpoints = XDebuggerManager.getInstance(session.project)
                 .breakpointManager
                 .getBreakpoints(LuaLineBreakpointType::class.java)
-            println("[LuaPanda] 发送现有断点，数量: ${breakpoints.size}", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
-            breakpoints.forEach { breakpoint ->
-                breakpoint.sourcePosition?.let { position ->
-                    registerBreakpoint(position, breakpoint)
+            if (breakpoints.isNotEmpty()) {
+                println(" 发送现有断点: ${breakpoints.size}个", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+                breakpoints.forEach { breakpoint ->
+                    breakpoint.sourcePosition?.let { position ->
+                        registerBreakpoint(position, breakpoint)
+                    }
                 }
             }
         })
     }
 
     private fun onDisconnect() {
-        println("[LuaPanda] 调试器连接断开，停止调试会话", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+        println(" 连接断开，停止调试会话", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
         stop()
         session?.stop()
     }
 
     private fun handleMessage(message: LuaPandaMessage) {
-        println("[LuaPanda] 处理调试器消息，命令: ${message.cmd}", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
         when (message.cmd) {
             LuaPandaCommands.STOP_ON_BREAKPOINT, LuaPandaCommands.STOP_ON_ENTRY -> {
-                println("[LuaPanda] 处理断点/入口停止消息", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
-                
                 // 优先从stack字段获取堆栈信息（新格式），如果没有则从info字段获取（旧格式）
                 val stacks = if (message.stack != null) {
-                    println("[LuaPanda] 从stack字段解析堆栈信息", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
                     message.stack
                 } else if (message.getInfoAsObject() != null) {
-                    println("[LuaPanda] 从info字段解析堆栈信息", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
                     Gson().fromJson(message.getInfoAsObject(), Array<LuaPandaStack>::class.java).toList()
                 } else {
-                    println("[LuaPanda] 警告：消息中没有找到堆栈信息", LogConsoleType.NORMAL, ConsoleViewContentType.ERROR_OUTPUT)
+                    println(" 警告：消息中没有找到堆栈信息", LogConsoleType.NORMAL, ConsoleViewContentType.ERROR_OUTPUT)
                     emptyList()
                 }
                 
-                println("[LuaPanda] 解析到 ${stacks.size} 个堆栈帧", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+                if (stacks.isNotEmpty()) {
+                    println(" 断点命中: ${stacks[0].file}:${stacks[0].line} (${stacks.size}个堆栈帧)", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+                }
                 onBreak(stacks)
             }
             LuaPandaCommands.OUTPUT -> {
                 val outputText = message.getInfoAsObject()?.get("content")?.asString ?: ""
-                println("[LuaPanda] 处理输出消息: $outputText", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
                 println(outputText, LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
             }
             else -> {
-                println("[LuaPanda] 处理未知消息类型: ${message.cmd}", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
                 logger.info("Unknown message: ${message.cmd}")
             }
         }
     }
 
     private fun onBreak(stacks: List<LuaPandaStack>) {
-        println("[LuaPanda] 程序在断点处暂停，堆栈帧数量: ${stacks.size}", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
-        
         if (stacks.isNotEmpty()) {
-            val topStack = stacks[0]
-            println("[LuaPanda] 当前执行位置 - 文件: ${topStack.file}, 行号: ${topStack.line}, 名称: ${topStack.name}", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
-            
-            println("[LuaPanda] 创建暂停上下文并准备暂停调试会话", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
             val suspendContext = LuaPandaSuspendContext(this, stacks)
             ApplicationManager.getApplication().invokeLater {
-                println("[LuaPanda] 调试会话已暂停在断点位置", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
                 session.positionReached(suspendContext)
                 session.showExecutionPoint()
             }
         } else {
-            println("[LuaPanda] 警告：收到空的堆栈帧列表", LogConsoleType.NORMAL, ConsoleViewContentType.ERROR_OUTPUT)
             logger.warn("Received empty stack frames")
         }
     }
@@ -239,7 +222,7 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
         val newId = idCounter++
         breakpoint.putUserData(ID, newId)
         
-        println("[LuaPanda] 注册断点 - 文件: $filePath, 行号: ${breakpoint.line + 1}, ID: $newId", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+        println(" 设置断点: ${sourcePosition.file.name}:${breakpoint.line + 1}", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
         
         val breakpointInfo = BreakpointInfo(
             verified = true,
@@ -254,7 +237,6 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
         
         breakpoints[newId] = luaPandaBreakpoint
         
-        println("[LuaPanda] 发送设置断点消息: ${Gson().toJson(luaPandaBreakpoint)}", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
         // 断点设置是状态通知协议，不需要回调
         transporter?.commandToDebugger(LuaPandaCommands.SET_BREAKPOINT, luaPandaBreakpoint)
     }
@@ -263,14 +245,13 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
         val id = breakpoint.getUserData(ID)
         val luaPandaBreakpoint = breakpoints[id]
         if (luaPandaBreakpoint != null) {
-            println("[LuaPanda] 取消断点 - 文件: ${luaPandaBreakpoint.path}, ID: $id", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+            println(" 移除断点: ${sourcePosition.file.name}:${breakpoint.line + 1}", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
             breakpoints.remove(id)
             // 发送空的断点列表来移除断点
             val emptyBreakpoint = LuaPandaBreakpoint(
                 path = luaPandaBreakpoint.path,
                 bks = emptyList()
             )
-            println("[LuaPanda] 发送移除断点消息: ${Gson().toJson(emptyBreakpoint)}", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
             // 断点移除是状态通知协议，不需要回调
             transporter?.commandToDebugger(LuaPandaCommands.SET_BREAKPOINT, emptyBreakpoint)
         }
@@ -297,48 +278,39 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
     }
 
     override fun run() {
-        println("[LuaPanda] 执行继续运行命令", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
-        println("[LuaPanda] 发送继续运行消息", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+        println(" 继续运行", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
         // 继续运行是状态通知协议，不需要回调
         transporter?.commandToDebugger(LuaPandaCommands.CONTINUE)
     }
 
     override fun stop() {
-        println("[LuaPanda] 停止调试会话", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
-        println("[LuaPanda] 发送停止运行消息", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+        println(" 停止调试", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
         // 停止运行是状态通知协议，不需要回调
         transporter?.commandToDebugger(LuaPandaCommands.STOP_RUN)
         transporter?.stop()
         transporter = null
-        println("[LuaPanda] 传输器已停止", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
     }
 
     override fun startStepOver(context: XSuspendContext?) {
-        println("[LuaPanda] 执行单步跳过命令", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
-        println("[LuaPanda] 发送单步跳过消息", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+        println(" 单步跳过", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
         // 单步跳过是响应协议，需要回调
         transporter?.commandToDebugger(LuaPandaCommands.STEP_OVER, null, { response ->
-            println("[LuaPanda] 收到单步跳过响应", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
             // 处理单步跳过的回调响应
         })
     }
 
     override fun startStepInto(context: XSuspendContext?) {
-        println("[LuaPanda] 执行单步进入命令", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
-        println("[LuaPanda] 发送单步进入消息", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+        println(" 单步进入", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
         // 单步进入是响应协议，需要回调
         transporter?.commandToDebugger(LuaPandaCommands.STEP_IN, null, { response ->
-            println("[LuaPanda] 收到单步进入响应", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
             // 处理单步进入的回调响应
         })
     }
 
     override fun startStepOut(context: XSuspendContext?) {
-        println("[LuaPanda] 执行单步跳出命令", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
-        println("[LuaPanda] 发送单步跳出消息", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+        println(" 单步跳出", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
         // 单步跳出是响应协议，需要回调
         transporter?.commandToDebugger(LuaPandaCommands.STEP_OUT, null, { response ->
-            println("[LuaPanda] 收到单步跳出响应", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
             // 处理单步跳出的回调响应
         })
     }

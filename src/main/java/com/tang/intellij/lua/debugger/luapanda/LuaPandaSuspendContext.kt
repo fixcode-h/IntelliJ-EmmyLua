@@ -129,7 +129,7 @@ class LuaPandaStackFrame(
                     
                     node.addChildren(children, true)
                 } catch (e: Exception) {
-                    println("[LuaPanda] 解析栈帧变量响应失败: ${e.message}")
+                    println(" 解析栈帧变量响应失败: ${e.message}")
                     node.addChildren(XValueChildrenList.EMPTY, true)
                 }
             })
@@ -192,7 +192,7 @@ class LuaPandaValue(
                     
                     node.addChildren(children, true)
                 } catch (e: Exception) {
-                    println("[LuaPanda] 解析getVariable响应失败: ${e.message}")
+                    println(" 解析getVariable响应失败: ${e.message}")
                     node.addChildren(XValueChildrenList.EMPTY, true)
                 }
             })

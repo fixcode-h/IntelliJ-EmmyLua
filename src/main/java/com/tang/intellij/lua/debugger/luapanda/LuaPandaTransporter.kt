@@ -137,29 +137,20 @@ abstract class LuaPandaTransporter(private val logger: DebugLogger? = null) {
     }
 
     protected fun handleReceivedMessage(message: LuaPandaMessage) {
-        logInfo("[LuaPanda] 接收到消息: ${Gson().toJson(message)}")
         // 检查是否是回调消息
         val callback = callbacks.remove(message.callbackId)
         if (callback != null) {
-            logInfo("[LuaPanda] 处理回调消息，回调ID: ${message.callbackId}")
             callback(message)
         } else {
-            logInfo("[LuaPanda] 处理普通消息，命令: ${message.cmd}")
             messageHandler?.invoke(message)
         }
     }
 
     protected fun notifyConnect(success: Boolean) {
-        if (success) {
-            logInfo("[LuaPanda] 连接状态变更: 连接成功")
-        } else {
-            logError("[LuaPanda] 连接状态变更: 连接失败")
-        }
         connectionHandler?.invoke(success)
     }
 
     protected fun notifyDisconnect() {
-        logInfo("[LuaPanda] 连接状态变更: 连接断开")
         connectionHandler?.invoke(false)
     }
 }
@@ -171,7 +162,7 @@ class LuaPandaTcpClientTransporter(private val host: String, private val port: I
     private var isRunning = false
 
     override fun start() {
-        logInfo("[LuaPanda] TCP客户端开始连接到 $host:$port")
+        logInfo(" TCP客户端连接 $host:$port")
         Thread {
             try {
                 socket = Socket(host, port)
@@ -179,40 +170,37 @@ class LuaPandaTcpClientTransporter(private val host: String, private val port: I
                 reader = BufferedReader(InputStreamReader(socket!!.getInputStream()))
                 isRunning = true
                 
-                logInfo("[LuaPanda] TCP客户端连接成功")
                 notifyConnect(true)
                 
                 // 开始接收消息
                 while (isRunning && !socket!!.isClosed) {
                     val line = reader?.readLine()
                     if (line != null) {
-                        logInfo("[LuaPanda] 接收到原始消息: $line")
                         try {
                             // 去掉协议分隔符 |*| 再解析JSON
                             val jsonString = line.removeSuffix("|*|")
                             val message = Gson().fromJson(jsonString, LuaPandaMessage::class.java)
                             handleReceivedMessage(message)
                         } catch (e: Exception) {
-                            logError("[LuaPanda] 消息解析失败: ${e.message}")
+                            logError(" 消息解析失败: ${e.message}")
                         }
                     }
                 }
             } catch (e: Exception) {
-                logError("[LuaPanda] TCP客户端连接失败: ${e.message}")
+                logError(" TCP客户端连接失败: ${e.message}")
                 notifyConnect(false)
             }
         }.start()
     }
 
     override fun stop() {
-        logInfo("[LuaPanda] TCP客户端正在断开连接")
         isRunning = false
         try {
             writer?.close()
             reader?.close()
             socket?.close()
         } catch (e: Exception) {
-            logError("[LuaPanda] TCP客户端关闭异常: ${e.message}")
+            logError(" TCP客户端关闭异常: ${e.message}")
         }
     }
 
@@ -221,10 +209,9 @@ class LuaPandaTcpClientTransporter(private val host: String, private val port: I
             val json = Gson().toJson(message)
             // 确保协议格式符合 sendStr..TCPSplitChar.."\n" 的要求
             val finalMessage = "$json|*|"
-            logInfo("[LuaPanda] 发送消息: $finalMessage")
             writer?.println(finalMessage)
         } catch (e: Exception) {
-            logError("[LuaPanda] 消息发送失败: ${e.message}")
+            logError(" 消息发送失败: ${e.message}")
         }
     }
 }
@@ -237,44 +224,40 @@ class LuaPandaTcpServerTransporter(private val port: Int, logger: DebugLogger? =
     private var isRunning = false
 
     override fun start() {
-        logInfo("[LuaPanda] TCP服务器开始监听端口 $port")
+        logInfo(" TCP服务器监听端口 $port")
         Thread {
             try {
                 serverSocket = ServerSocket(port)
-                logInfo("[LuaPanda] TCP服务器启动成功，等待客户端连接")
                 clientSocket = serverSocket!!.accept()
-                logInfo("[LuaPanda] TCP服务器接受客户端连接: ${clientSocket!!.remoteSocketAddress}")
+                logInfo(" 客户端已连接: ${clientSocket!!.remoteSocketAddress}")
                 writer = PrintWriter(clientSocket!!.getOutputStream(), true)
                 reader = BufferedReader(InputStreamReader(clientSocket!!.getInputStream()))
                 isRunning = true
                 
-                logInfo("[LuaPanda] TCP服务器连接建立成功")
                 notifyConnect(true)
                 
                 // 开始接收消息
                 while (isRunning && !clientSocket!!.isClosed) {
                     val line = reader?.readLine()
                     if (line != null) {
-                        logInfo("[LuaPanda] 接收到原始消息: $line")
                         try {
                             // 去掉协议分隔符 |*| 再解析JSON
                             val jsonString = line.removeSuffix("|*|")
                             val message = Gson().fromJson(jsonString, LuaPandaMessage::class.java)
                             handleReceivedMessage(message)
                         } catch (e: Exception) {
-                            logError("[LuaPanda] 消息解析失败: ${e.message}")
+                            logError(" 消息解析失败: ${e.message}")
                         }
                     }
                 }
             } catch (e: Exception) {
-                logError("[LuaPanda] TCP服务器启动失败: ${e.message}")
+                logError(" TCP服务器启动失败: ${e.message}")
                 notifyConnect(false)
             }
         }.start()
     }
 
     override fun stop() {
-        logInfo("[LuaPanda] TCP服务器正在关闭")
         isRunning = false
         try {
             writer?.close()
@@ -282,7 +265,7 @@ class LuaPandaTcpServerTransporter(private val port: Int, logger: DebugLogger? =
             clientSocket?.close()
             serverSocket?.close()
         } catch (e: Exception) {
-            logError("[LuaPanda] TCP服务器关闭异常: ${e.message}")
+            logError(" TCP服务器关闭异常: ${e.message}")
         }
     }
 
@@ -291,10 +274,9 @@ class LuaPandaTcpServerTransporter(private val port: Int, logger: DebugLogger? =
             val json = Gson().toJson(message)
             // 确保协议格式符合 sendStr..TCPSplitChar.."\n" 的要求
             val finalMessage = "$json|*|"
-            logInfo("[LuaPanda] 发送消息: $finalMessage")
             writer?.println(finalMessage)
         } catch (e: Exception) {
-            logError("[LuaPanda] 消息发送失败: ${e.message}")
+            logError(" 消息发送失败: ${e.message}")
         }
     }
 }
