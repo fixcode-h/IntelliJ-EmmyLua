@@ -18,9 +18,11 @@ jobs:
 
     steps:
       # 第一步：检出代码
-      # 使用 actions/checkout@v4 拉取仓库的最新代码
+      # actions/checkout@v4 默认只拉取最新的 commit，我们需要设置 fetch-depth: 0 来获取完整的 git 历史，以便生成更新日志
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       # 第二步：设置 Java 环境
       # 根据用户要求，使用 Java 17
@@ -40,18 +42,35 @@ jobs:
       - name: Build with Gradle
         run: ./gradlew buildPlugin
 
-      # 第五步：创建 GitHub Release 并上传构建产物
+      # 第五步：生成 Release 的更新日志 (Release Body)
+      # 提取本次推送中包含的所有 commit 信息
+      - name: Generate release notes
+        id: generate_notes
+        run: |
+          # 将生成的日志内容赋值给一个名为 "changelog" 的输出变量
+          # github.event.before 是推送前的 commit SHA
+          # github.event.after 是推送后的 commit SHA
+          # git log 会提取这两个 SHA 之间的所有提交记录
+          # --pretty=format:'* %s (%h)' 会将每条 commit 格式化为: * 提交信息 (短哈希)
+          echo "changelog=$(git log ${{ github.event.before }}..${{ github.event.after }} --pretty=format:'* %s (%h)')" >> $GITHUB_OUTPUT
+
+      # 第六步：创建 GitHub Release 并上传构建产物
       - name: Create Release and Upload Asset
         uses: softprops/action-gh-release@v2
         with:
-          # 使用日期和 commit hash 生成一个唯一的标签名，例如: release-20250731-a1b2c3d
+          # 使用前面步骤生成的更新日志作为 Release 的 Body
+          body: |
+            ## 自动构建产物
+
+            **✨ 本次更新包含以下提交:**
+            ${{ steps.generate_notes.outputs.changelog }}
+          # 使用日期和 commit hash 生成一个唯一的标签名
           tag_name: release-${{ env.RELEASE_DATE }}-${{ github.sha }}
           # Release 的标题
           name: Auto Build - ${{ env.RELEASE_DATE }}
           # 标记为预发布版本
           prerelease: true
           # 从构建输出目录中找到插件的 zip 包并上传
-          # build/distributions/ 目录下通常会存放最终的插件包
           files: build/distributions/*.zip
         env:
           # 设置一个环境变量用于 Release 标签和标题
