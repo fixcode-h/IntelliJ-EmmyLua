@@ -65,9 +65,9 @@ data class LuaPandaBreakpoint(
 )
 
 data class BreakpointInfo(
-    val line: Int,
-    val condition: String? = null,
-    val logMessage: String? = null
+    val verified: Boolean = true,
+    val type: Int = 2,
+    val line: Int
 )
 
 data class LuaPandaInitInfo(

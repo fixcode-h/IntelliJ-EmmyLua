@@ -31,6 +31,8 @@ import com.intellij.xdebugger.frame.XExecutionStack
 import com.intellij.ui.ColoredTextContainer
 import com.intellij.ui.SimpleTextAttributes
 import com.tang.intellij.lua.debugger.LuaDebuggerEditorsProvider
+import com.google.gson.Gson
+import com.google.gson.JsonObject
 import javax.swing.Icon
 
 class LuaPandaSuspendContext(
@@ -70,7 +72,8 @@ class LuaPandaExecutionStack(
 
 class LuaPandaStackFrame(
     private val debugProcess: LuaPandaDebugProcess,
-    private val stack: LuaPandaStack
+    private val stack: LuaPandaStack,
+    private val stackId: Int = stack.getIndex()
 ) : XStackFrame() {
 
     override fun getSourcePosition(): XSourcePosition? {
@@ -86,12 +89,12 @@ class LuaPandaStackFrame(
         
         // 添加局部变量
         stack.locals?.forEach { variable ->
-            children.add(variable.name, LuaPandaValue(debugProcess, variable))
+            children.add(variable.name, LuaPandaValue(debugProcess, variable, stackId))
         }
         
         // 添加上值
         stack.upvalues?.forEach { variable ->
-            children.add(variable.name, LuaPandaValue(debugProcess, variable))
+            children.add(variable.name, LuaPandaValue(debugProcess, variable, stackId))
         }
         
         node.addChildren(children, true)
@@ -105,7 +108,8 @@ class LuaPandaStackFrame(
 
 class LuaPandaValue(
     private val debugProcess: LuaPandaDebugProcess,
-    private val variable: LuaPandaVariable
+    private val variable: LuaPandaVariable,
+    private val stackId: Int = 0
 ) : XValue() {
 
     override fun computePresentation(node: XValueNode, place: XValuePlace) {
@@ -121,13 +125,49 @@ class LuaPandaValue(
         if (variable.children != null && variable.children.isNotEmpty()) {
             val children = XValueChildrenList()
             variable.children.forEach { child ->
-                children.add(child.name, LuaPandaValue(debugProcess, child))
+                children.add(child.name, LuaPandaValue(debugProcess, child, stackId))
             }
             node.addChildren(children, true)
         } else if (variable.variablesReference > 0) {
-            // 如果有变量引用但没有子变量，需要向调试器请求
-            // 这里可以实现懒加载逻辑
-            node.addChildren(XValueChildrenList.EMPTY, true)
+            // 发送getVariable请求获取子变量
+            val info = JsonObject().apply {
+                addProperty("varRef", variable.variablesReference.toString())
+                addProperty("stackId", stackId.toString())
+            }
+            
+            val message = LuaPandaMessage(
+                cmd = LuaPandaCommands.GET_VARIABLE,
+                info = info,
+                callbackId = System.currentTimeMillis().toString()
+            )
+            
+            debugProcess.sendMessage(message) { response ->
+                if (response != null) {
+                    try {
+                        val responseInfo = response.getInfoAsObject()
+                        val children = XValueChildrenList()
+                        
+                        // 解析返回的变量信息
+                        responseInfo?.getAsJsonArray("variables")?.forEach { element ->
+                            val varObj = element.asJsonObject
+                            val childVar = LuaPandaVariable(
+                                name = varObj.get("name")?.asString ?: "",
+                                value = varObj.get("value")?.asString,
+                                type = varObj.get("type")?.asString,
+                                variablesReference = varObj.get("variablesReference")?.asInt ?: 0
+                            )
+                            children.add(childVar.name, LuaPandaValue(debugProcess, childVar, stackId))
+                        }
+                        
+                        node.addChildren(children, true)
+                    } catch (e: Exception) {
+                        println("[LuaPanda] 解析getVariable响应失败: ${e.message}")
+                        node.addChildren(XValueChildrenList.EMPTY, true)
+                    }
+                } else {
+                    node.addChildren(XValueChildrenList.EMPTY, true)
+                }
+            }
         } else {
             node.addChildren(XValueChildrenList.EMPTY, true)
         }

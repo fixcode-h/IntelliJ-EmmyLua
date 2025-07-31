@@ -242,9 +242,9 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
         println("[LuaPanda] 注册断点 - 文件: $filePath, 行号: ${breakpoint.line + 1}, ID: $newId", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
         
         val breakpointInfo = BreakpointInfo(
-            line = breakpoint.line + 1, // Convert to 1-based
-            condition = breakpoint.conditionExpression?.expression,
-            logMessage = if (breakpoint.isLogMessage) breakpoint.logExpressionObject?.expression else null
+            verified = true,
+            type = 2,
+            line = breakpoint.line + 1 // Convert to 1-based
         )
         
         val luaPandaBreakpoint = LuaPandaBreakpoint(
@@ -284,9 +284,9 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
     override fun runToPosition(position: XSourcePosition, context: XSuspendContext?) {
         val filePath = position.file.canonicalPath ?: position.file.path
         val tempBreakpointInfo = BreakpointInfo(
-            line = position.line + 1,
-            condition = null,
-            logMessage = null
+            verified = true,
+            type = 2,
+            line = position.line + 1
         )
         val tempBreakpoint = LuaPandaBreakpoint(
             path = filePath,
@@ -332,6 +332,11 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
         val message = LuaPandaMessage(LuaPandaCommands.STEP_OUT, null, "0")
         println("[LuaPanda] 发送单步跳出消息: ${Gson().toJson(message)}", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
         transporter?.sendMessage(message)
+    }
+
+    // 支持回调的sendMessage方法
+    fun sendMessage(message: LuaPandaMessage, callback: ((LuaPandaMessage?) -> Unit)) {
+        transporter?.sendMessage(message, callback)
     }
 
     override fun getBreakpointHandlers(): Array<XBreakpointHandler<*>> {

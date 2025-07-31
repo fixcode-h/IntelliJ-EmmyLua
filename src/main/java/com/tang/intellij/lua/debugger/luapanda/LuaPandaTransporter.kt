@@ -44,7 +44,7 @@ abstract class LuaPandaTransporter(private val logger: DebugLogger? = null) {
     fun sendMessage(message: LuaPandaMessage, callback: (LuaPandaMessage?) -> Unit) {
         val callbackId = generateCallbackId()
         val messageWithCallback = LuaPandaMessage(message.cmd, message.info, callbackId, message.stack)
-        registerCallback(callbackId, callback)
+        registerCallback(callbackId) { response -> callback(response) }
         sendMessage(messageWithCallback)
     }
 
