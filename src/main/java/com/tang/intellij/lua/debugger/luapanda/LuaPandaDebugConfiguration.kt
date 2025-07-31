@@ -37,7 +37,7 @@ class LuaPandaDebugConfiguration(
     name: String
 ) : LuaRunConfiguration(project, factory) {
 
-    var transportType: LuaPandaTransportType = LuaPandaTransportType.TCP_CLIENT
+    var transportType: LuaPandaTransportType = LuaPandaTransportType.TCP_SERVER
     var host: String = "localhost"
     var port: Int = 8818
     var stopOnEntry: Boolean = false
@@ -75,7 +75,7 @@ class LuaPandaDebugConfiguration(
     override fun readExternal(element: Element) {
         super.readExternal(element)
         transportType = LuaPandaTransportType.valueOf(
-            element.getAttributeValue("transportType") ?: LuaPandaTransportType.TCP_CLIENT.name
+            element.getAttributeValue("transportType") ?: LuaPandaTransportType.TCP_SERVER.name
         )
         host = element.getAttributeValue("host") ?: "localhost"
         port = element.getAttributeValue("port")?.toIntOrNull() ?: 8818

@@ -30,23 +30,23 @@ import javax.swing.SpinnerNumberModel
 
 class LuaPandaSettingsEditor : SettingsEditor<LuaPandaDebugConfiguration>() {
     
-    private val transportTypeCombo = ComboBox(LuaPandaTransportType.values())
+    private val transportTypeCombo = ComboBox(arrayOf(LuaPandaTransportType.TCP_SERVER, LuaPandaTransportType.TCP_CLIENT))
     private val hostField = JBTextField()
     private val portSpinner = JSpinner(SpinnerNumberModel(8818, 1, 65535, 1))
-    private val stopOnEntryCheckBox = JBCheckBox("Stop on entry")
-    private val useCHookCheckBox = JBCheckBox("Use C Hook")
+    private val stopOnEntryCheckBox = JBCheckBox("入口处停止")
+    private val useCHookCheckBox = JBCheckBox("使用C Hook")
     private val logLevelSpinner = JSpinner(SpinnerNumberModel(1, 0, 3, 1))
 
     override fun createEditor(): JComponent {
         val panel = JPanel(BorderLayout())
         
         val formBuilder = FormBuilder.createFormBuilder()
-            .addLabeledComponent(JBLabel("Transport Type:"), transportTypeCombo)
-            .addLabeledComponent(JBLabel("Host:"), hostField)
-            .addLabeledComponent(JBLabel("Port:"), portSpinner)
+            .addLabeledComponent(JBLabel("传输类型:"), transportTypeCombo)
+            .addLabeledComponent(JBLabel("主机:"), hostField)
+            .addLabeledComponent(JBLabel("端口:"), portSpinner)
             .addComponent(stopOnEntryCheckBox)
             .addComponent(useCHookCheckBox)
-            .addLabeledComponent(JBLabel("Log Level:"), logLevelSpinner)
+            .addLabeledComponent(JBLabel("日志级别:"), logLevelSpinner)
         
         panel.add(formBuilder.panel, BorderLayout.NORTH)
         

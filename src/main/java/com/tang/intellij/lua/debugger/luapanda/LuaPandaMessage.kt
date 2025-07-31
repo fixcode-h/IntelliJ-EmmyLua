@@ -104,7 +104,11 @@ object LuaPandaCommands {
     const val GET_WATCHED_VARIABLE = "getWatchedVariable"
 }
 
-enum class LuaPandaTransportType {
-    TCP_CLIENT,
-    TCP_SERVER
+enum class LuaPandaTransportType(val desc: String) {
+    TCP_CLIENT("TCP客户端"),
+    TCP_SERVER("TCP服务器");
+
+    override fun toString(): String {
+        return desc
+    }
 }
