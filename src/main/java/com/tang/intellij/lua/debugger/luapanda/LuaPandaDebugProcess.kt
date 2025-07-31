@@ -194,8 +194,22 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
 
     private fun onDisconnect() {
         logWithLevel("连接断开，停止调试会话", LogLevel.CONNECTION)
-        stop()
-        session?.stop()
+        
+        // 确保在UI线程中停止调试会话
+        ApplicationManager.getApplication().invokeLater {
+            try {
+                // 先停止传输器
+                transporter?.stop()
+                transporter = null
+                
+                // 然后停止调试会话
+                session?.stop()
+                logWithLevel("调试会话已停止", LogLevel.CONNECTION)
+            } catch (e: Exception) {
+                logWithLevel("停止调试会话时出错: ${e.message}", LogLevel.ERROR, contentType = ConsoleViewContentType.ERROR_OUTPUT)
+                logger.error("Error stopping debug session", e)
+            }
+        }
     }
 
     private fun handleMessage(message: LuaPandaMessage) {
@@ -221,6 +235,20 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
                     logWithLevel("$actionType: ${stacks[0].file}:${stacks[0].line} (${stacks.size}个堆栈帧)", LogLevel.DEBUG)
                 }
                 onBreak(stacks)
+            }
+            LuaPandaCommands.STOP_RUN -> {
+                // 处理Lua程序主动发送的停止运行命令
+                logWithLevel("收到Lua程序停止运行命令", LogLevel.CONNECTION)
+                ApplicationManager.getApplication().invokeLater {
+                    try {
+                        // 停止调试会话
+                        session?.stop()
+                        logWithLevel("调试会话已停止", LogLevel.CONNECTION)
+                    } catch (e: Exception) {
+                        logWithLevel("停止调试会话时出错: ${e.message}", LogLevel.ERROR, contentType = ConsoleViewContentType.ERROR_OUTPUT)
+                        logger.error("Error stopping debug session on STOP_RUN", e)
+                    }
+                }
             }
             LuaPandaCommands.OUTPUT -> {
                 val outputText = message.getInfoAsObject()?.get("content")?.asString ?: ""
