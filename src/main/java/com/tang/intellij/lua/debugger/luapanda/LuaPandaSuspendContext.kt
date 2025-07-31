@@ -138,7 +138,31 @@ class LuaPandaStackFrame(
 
     override fun customizePresentation(component: ColoredTextContainer) {
         component.append(stack.name ?: "unknown", SimpleTextAttributes.REGULAR_ATTRIBUTES)
-        component.append(" (${stack.file}:${stack.line})", SimpleTextAttributes.GRAYED_ATTRIBUTES)
+        
+        // 获取相对路径或文件名
+        val displayPath = getDisplayPath(stack.file)
+        component.append(" ($displayPath:${stack.line})", SimpleTextAttributes.GRAYED_ATTRIBUTES)
+    }
+    
+    private fun getDisplayPath(filePath: String): String {
+        // 尝试获取项目根目录
+        val project = debugProcess.session.project
+        val projectBasePath = project.basePath
+        
+        return if (projectBasePath != null && filePath.startsWith(projectBasePath)) {
+            // 返回相对于项目根目录的相对路径
+            val relativePath = filePath.substring(projectBasePath.length)
+            // 移除开头的路径分隔符
+            if (relativePath.startsWith("/") || relativePath.startsWith("\\")) {
+                relativePath.substring(1)
+            } else {
+                relativePath
+            }
+        } else {
+            // 如果无法获取相对路径，则只显示文件名
+            val file = java.io.File(filePath)
+            file.name
+        }
     }
 }
 
