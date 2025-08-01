@@ -18,14 +18,12 @@ jobs:
 
     steps:
       # 第一步：检出代码
-      # 设置 fetch-depth: 0 来获取完整的 git 历史，以便生成更新日志
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       # 第二步：设置 Java 环境
-      # 根据用户要求，使用 Java 17
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -33,30 +31,35 @@ jobs:
           distribution: 'temurin'
 
       # 第三步：设置 Gradle 环境
-      # 使用 Gradle Wrapper 来确保构建环境的一致性
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
 
       # 第四步：执行 Gradle 打包命令
-      # 使用 -x buildSearchableOptions 来跳过可能导致错误的 'buildSearchableOptions' 任务
       - name: Build with Gradle
         run: ./gradlew buildPlugin -x buildSearchableOptions
 
       # 第五步：生成 Release 的更新日志 (Release Body)
-      # <--- 修正点 1：处理多行 commit 日志
-      # 使用 GITHUB_OUTPUT 的多行字符串语法，防止 git log 产生多条记录时破坏输出格式。
+      # <--- 修正点：增加对空 commit 日志的判断，使工作流更健壮
       - name: Generate release notes
         id: generate_notes
         run: |
+          # 1. 将 git log 的结果存入一个变量
+          LOG_CONTENT=$(git log ${{ github.event.before }}..${{ github.event.after }} --pretty=format:'* %s (%h)')
+
+          # 2. 检查变量是否为空
+          if [ -z "$LOG_CONTENT" ]; then
+            # 3. 如果为空，则设置一个默认的提示信息
+            LOG_CONTENT="* 本次推送没有包含新的代码提交。"
+          fi
+          
+          # 4. 使用多行语法将保证非空的变量写入 GITHUB_OUTPUT
           {
             echo 'changelog<<EOF'
-            git log ${{ github.event.before }}..${{ github.event.after }} --pretty=format:'* %s (%h)'
+            echo "$LOG_CONTENT"
             echo 'EOF'
           } >> "$GITHUB_OUTPUT"
       
-      # 第六步：设置发布信息，如此处的日期
-      # <--- 修正点 2：正确生成日期变量
-      # 单独一个步骤来执行 shell 命令，并将结果输出到 GITHUB_ENV，使其成为后续步骤可用的环境变量。
+      # 第六步：设置发布信息
       - name: Set Release Info
         id: set_release_info
         run: echo "RELEASE_DATE=$(date +'%Y%m%d')" >> $GITHUB_ENV
@@ -65,21 +68,13 @@ jobs:
       - name: Create Release and Upload Asset
         uses: softprops/action-gh-release@v2
         with:
-          # 使用前面步骤生成的更新日志作为 Release 的 Body
           body: |
             ## 自动构建产物
 
             **✨ 本次更新包含以下提交:**
             ${{ steps.generate_notes.outputs.changelog }}
           
-          # 引用在上面步骤中计算好的环境变量来创建合法的标签
           tag_name: release-${{ env.RELEASE_DATE }}-${{ github.sha }}
-          
-          # Release 的标题
           name: Auto Build - ${{ env.RELEASE_DATE }}
-          
-          # 标记为预发布版本
           prerelease: true
-          
-          # 从构建输出目录中找到插件的 zip 包并上传
           files: build/distributions/*.zip
