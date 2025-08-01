@@ -56,17 +56,22 @@ class LuaPandaExecutionStack(
     private val debugProcess: LuaPandaDebugProcess,
     private val stacks: List<LuaPandaStack>
 ) : XExecutionStack("LuaPanda") {
+    private var _topFrame: XStackFrame? = null
+    private val stackFrameList: List<XStackFrame> = stacks.map { stack -> LuaPandaStackFrame(debugProcess, stack) }
 
-    override fun getTopFrame(): XStackFrame? {
-        return if (stacks.isNotEmpty()) {
-            LuaPandaStackFrame(debugProcess, stacks[0])
-        } else null
+    init {
+        if (stackFrameList.isNotEmpty())
+            _topFrame = stackFrameList[0]
+    }
+
+    override fun getTopFrame() = _topFrame
+
+    fun setTopFrame(frame: XStackFrame) {
+        _topFrame = frame
     }
 
     override fun computeStackFrames(firstFrameIndex: Int, container: XStackFrameContainer?) {
-        val frames = stacks.drop(firstFrameIndex).map { stack ->
-            LuaPandaStackFrame(debugProcess, stack)
-        }
+        val frames = stackFrameList.drop(firstFrameIndex)
         container?.addStackFrames(frames, true)
     }
 }
@@ -142,11 +147,9 @@ class LuaPandaStackFrame(
     }
 
     override fun customizePresentation(component: ColoredTextContainer) {
-        component.append(stack.name ?: "unknown", SimpleTextAttributes.REGULAR_ATTRIBUTES)
-        
         // 获取相对路径或文件名
         val displayPath = getDisplayPath(stack.file)
-        component.append(" ($displayPath:${stack.line})", SimpleTextAttributes.GRAYED_ATTRIBUTES)
+        component.append("$displayPath:${stack.line}", SimpleTextAttributes.REGULAR_ATTRIBUTES)
     }
     
     private fun getDisplayPath(filePath: String): String {
@@ -154,20 +157,29 @@ class LuaPandaStackFrame(
         val project = debugProcess.session.project
         val projectBasePath = project.basePath
         
-        return if (projectBasePath != null && filePath.startsWith(projectBasePath)) {
-            // 返回相对于项目根目录的相对路径
-            val relativePath = filePath.substring(projectBasePath.length)
-            // 移除开头的路径分隔符
-            if (relativePath.startsWith("/") || relativePath.startsWith("\\")) {
-                relativePath.substring(1)
+        if (projectBasePath != null) {
+            // 标准化路径分隔符，统一使用系统分隔符
+            val normalizedFilePath = filePath.replace('/', java.io.File.separatorChar).replace('\\', java.io.File.separatorChar)
+            val normalizedProjectPath = projectBasePath.replace('/', java.io.File.separatorChar).replace('\\', java.io.File.separatorChar)
+            
+            // 确保项目路径以分隔符结尾
+            val projectPathWithSeparator = if (normalizedProjectPath.endsWith(java.io.File.separator)) {
+                normalizedProjectPath
             } else {
-                relativePath
+                normalizedProjectPath + java.io.File.separator
             }
-        } else {
-            // 如果无法获取相对路径，则只显示文件名
-            val file = java.io.File(filePath)
-            file.name
+            
+            // 检查文件路径是否在项目目录下（忽略大小写，适用于Windows）
+            if (normalizedFilePath.lowercase().startsWith(projectPathWithSeparator.lowercase())) {
+                // 返回相对于项目根目录的相对路径
+                val relativePath = normalizedFilePath.substring(projectPathWithSeparator.length)
+                return if (relativePath.isNotEmpty()) relativePath else normalizedFilePath
+            }
         }
+        
+        // 如果无法获取相对路径，则只显示文件名
+        val file = java.io.File(filePath)
+        return file.name
     }
 }
 

@@ -279,6 +279,15 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
                     } else null
                 }
                 
+                // 设置顶部帧，确保堆栈窗口正确选中当前执行位置
+                val executionStack = suspendContext.activeExecutionStack
+                if (executionStack is LuaPandaExecutionStack && sourcePosition != null) {
+                    val topFrame = executionStack.topFrame
+                    if (topFrame != null) {
+                        executionStack.setTopFrame(topFrame)
+                    }
+                }
+                
                 val breakpoint = sourcePosition?.let { position ->
                     val breakpointManager = XDebuggerManager.getInstance(session.project).breakpointManager
                     val breakpoints = breakpointManager.getBreakpoints(LuaLineBreakpointType::class.java)
