@@ -19,8 +19,11 @@ package com.tang.intellij.lua.actions
 import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.vfs.VirtualFile
+import com.intellij.openapi.fileEditor.FileDocumentManager
+import com.intellij.util.ui.UIUtil
 import com.tang.intellij.lua.lang.LuaFileType
 import com.tang.intellij.lua.project.LuaSettings
 import java.awt.datatransfer.StringSelection
@@ -31,29 +34,95 @@ import java.io.File
  */
 class CopyLuaRequirePathAction : AnAction() {
 
-    override fun actionPerformed(e: AnActionEvent) {
-        val virtualFile = e.getData(CommonDataKeys.VIRTUAL_FILE) ?: return
-        val project = e.project ?: return
+    override fun getActionUpdateThread(): ActionUpdateThread {
+        return ActionUpdateThread.BGT
+    }
+
+    private fun getVirtualFile(e: AnActionEvent): VirtualFile? {
+        // 首先尝试从项目视图获取文件
+        var file = e.getData(CommonDataKeys.VIRTUAL_FILE)
+        if (file != null) return file
         
-        // Try to use LuaFileUtil if available, otherwise use manual conversion
-        val requirePath = try {
-            // Attempt to use existing utility
-            com.tang.intellij.lua.psi.LuaFileUtil.asRequirePath(project, virtualFile)
-        } catch (ex: Exception) {
-            // Fallback to manual conversion
-            convertToRequirePath(virtualFile.path, project)
+        // 尝试从文件数组获取
+        file = e.getData(CommonDataKeys.VIRTUAL_FILE_ARRAY)?.firstOrNull()
+        if (file != null) return file
+        
+        // 尝试从编辑器获取当前文件
+        val editor = e.getData(CommonDataKeys.EDITOR)
+        if (editor != null) {
+            val document = editor.document
+            file = FileDocumentManager.getInstance().getFile(document)
+            if (file != null) return file
         }
         
-        if (requirePath != null) {
+        return null
+    }
+
+    override fun actionPerformed(e: AnActionEvent) {
+        val virtualFile = getVirtualFile(e) ?: return
+        val project = e.project ?: return
+        
+        val requireStatement = generateRequireStatement(virtualFile, project)
+        
+        if (requireStatement != null) {
             val copyPasteManager = CopyPasteManager.getInstance()
-            copyPasteManager.setContents(StringSelection(requirePath))
+            copyPasteManager.setContents(StringSelection(requireStatement))
         }
     }
 
     override fun update(e: AnActionEvent) {
-        val virtualFile = e.getData(CommonDataKeys.VIRTUAL_FILE)
-        val isLuaFile = virtualFile?.fileType is LuaFileType
+        val virtualFile = getVirtualFile(e)
+        val isLuaFile = virtualFile != null && !virtualFile.isDirectory && 
+                       (virtualFile.fileType is LuaFileType || virtualFile.extension?.lowercase() == "lua")
+        
+        if (isLuaFile && virtualFile != null) {
+            val project = e.project
+            if (project != null) {
+                val requireStatement = generateRequireStatement(virtualFile, project)
+                if (requireStatement != null) {
+                    // 获取当前主题下的灰色
+                    val grayColor = UIUtil.getInactiveTextColor()
+                    val hexColor = String.format("#%02x%02x%02x", 
+                        grayColor.red, grayColor.green, grayColor.blue)
+                    
+                    // 使用HTML来显示主文本和灰色预览文本
+                    e.presentation.text = "<html>复制Lua Require路径 <font color='$hexColor'>$requireStatement</font></html>"
+                } else {
+                    e.presentation.text = "复制Lua Require路径"
+                }
+            } else {
+                e.presentation.text = "复制Lua Require路径"
+            }
+        }
+        
         e.presentation.isEnabledAndVisible = isLuaFile
+    }
+    
+    /**
+     * Generate complete require statement: local fileName = require("path")
+     */
+    private fun generateRequireStatement(virtualFile: VirtualFile, project: com.intellij.openapi.project.Project): String? {
+        // Get require path
+        var requirePath: String? = null
+        
+        try {
+            // Attempt to use existing utility
+            requirePath = com.tang.intellij.lua.psi.LuaFileUtil.asRequirePath(project, virtualFile)
+        } catch (ex: Exception) {
+            // Ignore exception and use fallback
+        }
+        
+        // If asRequirePath returns null or throws exception, use fallback
+        if (requirePath == null) {
+            requirePath = convertToRequirePath(virtualFile.path, project)
+        }
+        
+        if (requirePath != null) {
+            val fileName = virtualFile.nameWithoutExtension
+            return "local $fileName = require(\"$requirePath\")"
+        }
+        
+        return null
     }
 
     /**

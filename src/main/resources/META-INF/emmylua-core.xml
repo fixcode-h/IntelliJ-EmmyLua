@@ -350,6 +350,21 @@
             <add-to-group group-id="NewGroup" anchor="after" relative-to-action="lua.newFile"/>
         </action>
 
+        <!-- Add Lua copy actions to Copy Path/Reference menu -->
+        <action class="com.tang.intellij.lua.actions.CopyLuaRelativePathAction"
+                text="复制Lua相对路径"
+                description="Copy relative path of Lua file (converts / to . and removes .lua suffix)"
+                id="lua.copyReference.copyRelativePath">
+            <add-to-group group-id="CopyReferencePopupGroup"/>
+        </action>
+        
+        <action class="com.tang.intellij.lua.actions.CopyLuaRequirePathAction"
+                text="复制Lua Require路径"
+                description="Copy require path of Lua file (converts path to require format)"
+                id="lua.copyReference.copyRequirePath">
+            <add-to-group group-id="CopyReferencePopupGroup"/>
+        </action>
+
     </actions>
 
     <extensionPoints>
