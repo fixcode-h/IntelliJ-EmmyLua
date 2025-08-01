@@ -32,6 +32,32 @@ public class LuaCodeStyleSettings extends CustomCodeStyleSettings {
 
     public boolean ALIGN_TABLE_FIELD_ASSIGN = false;
 
+    // 表格格式化设置
+    public boolean ALIGN_TABLE_FIELDS = false;
+    public boolean WRAP_TABLE_FIELDS = false;
+    public boolean SPACE_BETWEEN_TABLE_FIELDS = true;
+    public boolean SPACE_AFTER_COMMA_IN_TABLE = true;
+
+    // 注释对齐设置
+    public boolean ALIGN_LINE_COMMENTS = false;
+    public boolean SPACE_BEFORE_LINE_COMMENT = true;
+
+    // require语句设置
+    public int BLANK_LINES_AFTER_REQUIRE_BLOCK = 1;
+
+    // 函数设置
+    public int BLANK_LINES_BEFORE_FUNCTION = 1;
+    public int BLANK_LINES_AFTER_FUNCTION = 1;
+
+    // 循环语句设置
+    public boolean ALIGN_LOOP_CONDITIONS = false;
+
+    // 函数调用设置
+    public boolean ALIGN_FUNCTION_CALL_ARGUMENTS = false;
+    public boolean SPACE_BEFORE_FUNCTION_CALL_PARENTHESES = false;
+    public boolean SPACE_WITHIN_FUNCTION_CALL_PARENTHESES = false;
+    public boolean SPACE_AFTER_COMMA_IN_FUNCTION_CALLS = true;
+
     /**
      * Variable alignment options
      */

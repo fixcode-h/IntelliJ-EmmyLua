@@ -25,6 +25,7 @@ import com.intellij.openapi.project.DumbAware
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.util.ui.UIUtil
+import com.tang.intellij.lua.LuaBundle
 import com.tang.intellij.lua.lang.LuaFileType
 import java.awt.datatransfer.StringSelection
 
@@ -83,12 +84,12 @@ class CopyLuaRelativePathAction : AnAction(), DumbAware {
                         grayColor.red, grayColor.green, grayColor.blue)
                     
                     // 使用HTML来显示主文本和灰色预览文本
-                    e.presentation.text = "<html>复制Lua相对路径 <font color='$hexColor'>$relativePath</font></html>"
+                    e.presentation.text = "<html>${LuaBundle.message("action.copy_lua_relative_path")} <font color='$hexColor'>$relativePath</font></html>"
                 } else {
-                    e.presentation.text = "复制Lua相对路径"
+                    e.presentation.text = LuaBundle.message("action.copy_lua_relative_path")
                 }
             } else {
-                e.presentation.text = "复制Lua相对路径"
+                e.presentation.text = LuaBundle.message("action.copy_lua_relative_path")
             }
         }
         

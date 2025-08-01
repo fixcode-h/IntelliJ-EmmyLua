@@ -24,6 +24,7 @@ import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.util.ui.UIUtil
+import com.tang.intellij.lua.LuaBundle
 import com.tang.intellij.lua.lang.LuaFileType
 import com.tang.intellij.lua.project.LuaSettings
 import java.awt.datatransfer.StringSelection
@@ -86,12 +87,12 @@ class CopyLuaRequirePathAction : AnAction() {
                         grayColor.red, grayColor.green, grayColor.blue)
                     
                     // 使用HTML来显示主文本和灰色预览文本
-                    e.presentation.text = "<html>复制Lua Require路径 <font color='$hexColor'>$requireStatement</font></html>"
+                    e.presentation.text = "<html>${LuaBundle.message("action.copy_lua_require_path")} <font color='$hexColor'>$requireStatement</font></html>"
                 } else {
-                    e.presentation.text = "复制Lua Require路径"
+                    e.presentation.text = LuaBundle.message("action.copy_lua_require_path")
                 }
             } else {
-                e.presentation.text = "复制Lua Require路径"
+                e.presentation.text = LuaBundle.message("action.copy_lua_require_path")
             }
         }
         

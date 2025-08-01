@@ -126,16 +126,86 @@ open class LuaScriptBlock(val psi: PsiElement,
             is LuaParenExpr -> LuaParenExprBlock(element, wrap, alignment, childIndent, ctx)
             is LuaListArgs -> LuaListArgsBlock(element, wrap, alignment, childIndent, ctx)
             is LuaFuncBody -> LuaFuncBodyBlock(element, wrap, alignment, childIndent, ctx)
-            is LuaTableExpr -> LuaTableBlock(element, wrap, alignment, childIndent, ctx)
-            is LuaCallExpr -> LuaCallExprBlock(element, wrap, alignment, childIndent, ctx)
+            is LuaTableExpr -> LuaTableFormatBlock(element, wrap, alignment, childIndent, ctx)
+            is LuaCallExpr -> LuaFunctionCallBlock(element, wrap, alignment, childIndent, ctx)
             is LuaIndentRange -> LuaIndentBlock(element, wrap, alignment, childIndent, ctx)
             is LuaIndexExpr -> LuaIndexExprBlock(element, wrap, alignment, childIndent, ctx)
             is LuaAssignStat,
-            is LuaLocalDef -> LuaAssignBlock(element, wrap, alignment, childIndent, ctx)
-            else -> LuaScriptBlock(element, wrap, alignment, childIndent, ctx)
+            is LuaLocalDef -> {
+                // 检查是否是require语句
+                if (isRequireStatement(element)) {
+                    LuaRequireBlock(element, wrap, alignment, childIndent, ctx)
+                } else {
+                    LuaAssignBlock(element, wrap, alignment, childIndent, ctx)
+                }
+            }
+            // 循环语句的特殊处理
+            is LuaForAStat, is LuaForBStat, is LuaWhileStat, is LuaRepeatStat -> 
+                LuaLoopBlock(element, wrap, alignment, childIndent, ctx)
+            // 注释的特殊处理
+            is PsiComment -> LuaCommentBlock(element, wrap, alignment, childIndent, ctx)
+            // 空行管理
+            else -> {
+                if (shouldUseBlankLineBlock(element)) {
+                    LuaBlankLineBlock(element, wrap, alignment, childIndent, ctx)
+                } else {
+                    LuaScriptBlock(element, wrap, alignment, childIndent, ctx)
+                }
+            }
         }
         block.parent = this
         return block
+    }
+
+    private fun isRequireStatement(element: PsiElement): Boolean {
+        return when (element) {
+            is LuaLocalDef -> {
+                val exprList = element.exprList
+                exprList?.exprList?.any { expr ->
+                    isRequireCall(expr)
+                } ?: false
+            }
+            is LuaAssignStat -> {
+                element.valueExprList?.exprList?.any { expr ->
+                    isRequireCall(expr)
+                } ?: false
+            }
+            else -> false
+        }
+    }
+
+    private fun isRequireCall(expr: LuaExpr?): Boolean {
+        return when (expr) {
+            is LuaCallExpr -> {
+                val prefixExpr = expr.expr
+                prefixExpr is LuaNameExpr && prefixExpr.name == "require"
+            }
+            else -> false
+        }
+    }
+
+    private fun shouldUseBlankLineBlock(element: PsiElement): Boolean {
+        // 对于函数定义、类定义等需要特殊空行处理的元素
+        return element is LuaFuncDef || element is LuaLocalFuncDef ||
+               isClassLikeTable(element) || isControlStructure(element)
+    }
+
+    private fun isClassLikeTable(element: PsiElement): Boolean {
+        if (element is LuaAssignStat) {
+            val valueExpr = element.valueExprList?.exprList?.firstOrNull()
+            if (valueExpr is LuaTableExpr) {
+                val fieldCount = valueExpr.tableFieldList.size
+                val functionFieldCount = valueExpr.tableFieldList.count { field ->
+                    field.valueExpr is LuaClosureExpr
+                }
+                return fieldCount > 3 && functionFieldCount > 1
+            }
+        }
+        return false
+    }
+
+    private fun isControlStructure(element: PsiElement): Boolean {
+        return element is LuaIfStat || element is LuaDoStat
     }
 
     override fun getSpacing(child1: Block?, child2: Block): Spacing? {

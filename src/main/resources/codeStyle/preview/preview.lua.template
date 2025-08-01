@@ -1,3 +1,9 @@
+-- Require statements formatting
+local json = require("json")
+local utils = require("utils.common")
+local http = require("socket.http")
+
+-- Variable declarations
 local inlineEmmy = { name = "Emmy", age = 7, longLongProperty = 123 }
 local emmy = {
     name = "Emmy",
@@ -7,6 +13,12 @@ local emmy = {
 local a = 1
 local b, c = 2, "3"
 local var = 1 -- a short comment
+
+local a = 1
+local b, c = 2, "3"
+local var = 1 -- a short comment
+
+-- Function definitions with blank lines
 --- doc comment
 --- @param par1 Par1Type @some strings
 function var:testFun(par1, par2, par3, par4, par5)
@@ -14,12 +26,77 @@ function var:testFun(par1, par2, par3, par4, par5)
    return self.len + 2
 end
 
-var:testFun('par1Value', 'par2Value', 'par3Value', 'par4Value', 'par5Value')
-
 function globalFun()
    return "string" .. var
 end
 
-if true then return 123 end
+-- Function calls with different argument formatting
+var:testFun('par1Value', 'par2Value', 'par3Value', 'par4Value', 'par5Value')
+local result = math.max(1, 2, 3, 4, 5)
+print("Result:", result)
 
-if true then print("123") return 123 end
+-- Control structures
+if true then 
+    return 123 
+end
+
+if true then 
+    print("123") 
+    return 123 
+end
+
+-- Loop structures
+for i = 1, 10 do
+    print(i)
+end
+
+for k, v in pairs(emmy) do
+    print(k, v)
+end
+
+while var > 0 do
+    var = var - 1
+end
+
+repeat
+    var = var + 1
+until var > 10
+
+-- Class-like table definition
+local MyClass = {
+    name = "MyClass",
+    version = "1.0",
+    
+    new = function(self, name)
+        local obj = {}
+        setmetatable(obj, self)
+        self.__index = self
+        obj.name = name
+        return obj
+    end,
+    
+    getName = function(self)
+        return self.name
+    end,
+    
+    setName = function(self, name)
+        self.name = name
+    end
+}
+
+-- Comments formatting
+-- Single line comment
+--[[ 
+Multi-line comment
+with multiple lines
+]]
+
+--- Documentation comment
+--- @class TestClass
+--- @field name string
+local TestClass = {}
+
+-- Assignment statements
+local x, y, z = 1, 2, 3
+emmy.name = "New Emmy"
+emmy["age"] = 8
