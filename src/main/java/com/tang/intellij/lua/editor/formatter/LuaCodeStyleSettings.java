@@ -32,6 +32,42 @@ public class LuaCodeStyleSettings extends CustomCodeStyleSettings {
 
     public boolean ALIGN_TABLE_FIELD_ASSIGN = false;
 
+    /**
+     * Variable alignment options
+     */
+    public enum VariableAlignmentOption {
+        DO_NOT_ALIGN(0, "Do not align"),
+        ALIGN_ALL(1, "Align variables in columns"),
+        ALIGN_CONTIGUOUS_BLOCKS(2, "Align variables in contiguous blocks");
+
+        private final int value;
+        private final String description;
+
+        VariableAlignmentOption(int value, String description) {
+            this.value = value;
+            this.description = description;
+        }
+
+        public int getValue() {
+            return value;
+        }
+
+        public String getDescription() {
+            return description;
+        }
+
+        public static VariableAlignmentOption fromValue(int value) {
+            for (VariableAlignmentOption option : values()) {
+                if (option.value == value) {
+                    return option;
+                }
+            }
+            return DO_NOT_ALIGN;
+        }
+    }
+
+    public int VARIABLE_ALIGNMENT_OPTION = VariableAlignmentOption.DO_NOT_ALIGN.getValue();
+
     LuaCodeStyleSettings(CodeStyleSettings container) {
         super(LuaLanguage.INSTANCE.getID(), container);
     }

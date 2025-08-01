@@ -64,11 +64,26 @@ class LuaLanguageCodeStyleSettingsProvider : LanguageCodeStyleSettingsProvider()
                         "ALIGN_MULTILINE_PARAMETERS_IN_CALLS",
 
                         // keep when reformatting
-                        "KEEP_SIMPLE_BLOCKS_IN_ONE_LINE",
-
-                        //align group declarations
-                        "ALIGN_CONSECUTIVE_VARIABLE_DECLARATIONS"
+                        "KEEP_SIMPLE_BLOCKS_IN_ONE_LINE"
                 )
+
+                // Custom variable alignment option
+                val variableAlignmentOptions = arrayOf(
+                    LuaCodeStyleSettings.VariableAlignmentOption.DO_NOT_ALIGN.description,
+                    LuaCodeStyleSettings.VariableAlignmentOption.ALIGN_ALL.description,
+                    LuaCodeStyleSettings.VariableAlignmentOption.ALIGN_CONTIGUOUS_BLOCKS.description
+                )
+                val variableAlignmentValues = intArrayOf(
+                    LuaCodeStyleSettings.VariableAlignmentOption.DO_NOT_ALIGN.value,
+                    LuaCodeStyleSettings.VariableAlignmentOption.ALIGN_ALL.value,
+                    LuaCodeStyleSettings.VariableAlignmentOption.ALIGN_CONTIGUOUS_BLOCKS.value
+                )
+                consumer.showCustomOption(LuaCodeStyleSettings::class.java,
+                        "VARIABLE_ALIGNMENT_OPTION",
+                        "Variable alignment",
+                        "Variable declarations",
+                        variableAlignmentOptions,
+                        variableAlignmentValues)
 
                 consumer.showCustomOption(LuaCodeStyleSettings::class.java,
                         "ALIGN_TABLE_FIELD_ASSIGN",

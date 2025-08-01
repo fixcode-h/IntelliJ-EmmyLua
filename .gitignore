@@ -34,3 +34,4 @@ jflex*.jar
 *.iobj
 *.ipdb
 *.salive
+.trae/rules/project_rules.md
