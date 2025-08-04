@@ -29,6 +29,7 @@ import javax.swing.Icon
  */
 class LuaSdkType : SdkType("Lua SDK") {
 
+    @Deprecated("This method is deprecated in the parent class")
     override fun suggestHomePath() = PathEnvironmentVariableUtil.findInPath("lua")?.parent
 
     override fun isValidSdkHome(s: String) = true

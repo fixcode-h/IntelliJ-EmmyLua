@@ -76,7 +76,7 @@ class CopyLuaRequirePathAction : AnAction() {
         val isLuaFile = virtualFile != null && !virtualFile.isDirectory && 
                        (virtualFile.fileType is LuaFileType || virtualFile.extension?.lowercase() == "lua")
         
-        if (isLuaFile && virtualFile != null) {
+        if (isLuaFile) {
             val project = e.project
             if (project != null) {
                 val requireStatement = generateRequireStatement(virtualFile, project)

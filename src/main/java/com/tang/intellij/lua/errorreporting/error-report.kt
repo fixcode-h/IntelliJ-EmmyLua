@@ -17,10 +17,12 @@
 package com.tang.intellij.lua.errorreporting
 
 import com.intellij.CommonBundle
+import com.intellij.ide.BrowserUtil
 import com.intellij.ide.DataManager
 import com.intellij.ide.plugins.PluginManagerCore
 import com.intellij.ide.plugins.PluginUtil
 import com.intellij.idea.IdeaLogger
+import com.intellij.notification.NotificationAction
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationListener
 import com.intellij.notification.NotificationType
@@ -52,6 +54,7 @@ import java.io.ObjectInputStream
 import java.io.PrintWriter
 import java.io.StringWriter
 import java.net.URL
+import java.text.MessageFormat
 import java.util.*
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
@@ -203,7 +206,10 @@ class GitHubErrorReporter : LuaErrorReportSubmitter() {
 					.getInstance()
 					.getNotificationGroup("Error Report")
 					.createNotification(reportInfo.linkText, NotificationType.INFORMATION)
-					.setListener(NotificationListener.URL_OPENING_LISTENER)
+					.addAction(NotificationAction.createSimple("Open") {
+                        // Open the URL in browser
+                        BrowserUtil.browse(reportInfo.linkText)
+                    })
 					.setImportant(false)
 					.notify(project)
 		}
@@ -243,7 +249,10 @@ private object ErrorReportBundle {
 
 	@JvmStatic
 	fun message(@PropertyKey(resourceBundle = BUNDLE) key: String, vararg params: Any) =
-		CommonBundle.message(bundle, key, *params)
+		bundle.getString(key).let { template ->
+			if (params.isEmpty()) template
+			else MessageFormat.format(template, *params)
+		}
 }
 
 private class AnonymousFeedbackTask(

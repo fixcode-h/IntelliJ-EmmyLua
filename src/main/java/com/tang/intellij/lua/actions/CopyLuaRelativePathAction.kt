@@ -73,7 +73,7 @@ class CopyLuaRelativePathAction : AnAction(), DumbAware {
         val isLuaFile = file != null && !file.isDirectory && 
                        (file.fileType is LuaFileType || file.extension?.lowercase() == "lua")
         
-        if (isLuaFile && file != null) {
+        if (isLuaFile) {
             val project = e.project
             if (project != null) {
                 val relativePath = generateRelativePath(file, project)

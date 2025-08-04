@@ -95,7 +95,7 @@ abstract class LuaShortNamesManager {
     }
 
     open fun processClassNames(project: Project, processor: Processor<String>): Boolean {
-        return processAllClassNames(project, processor)
+        return true
     }
 
     open fun processClassesWithName(name: String, context: SearchContext, processor: Processor<LuaClass>): Boolean {
@@ -124,7 +124,9 @@ abstract class LuaShortNamesManager {
         context: SearchContext,
         processor: Processor<LuaClassMember>
     ): Boolean {
-        return processAllMembers(type, memberName, context, processor)
+        return if (type is TyParameter)
+            type.superClassName?.let { processMembers(it, memberName, context, processor) } ?: true
+        else processMembers(type.className, memberName, context, processor)
     }
 
     open fun processMembers(
@@ -151,7 +153,7 @@ abstract class LuaShortNamesManager {
         context: SearchContext,
         processor: Processor<LuaClassMember>
     ): Boolean {
-        return processAllMembers(type, context, processor)
+        return true
     }
 
     open fun findAlias(name: String, context: SearchContext): LuaTypeAlias? = null

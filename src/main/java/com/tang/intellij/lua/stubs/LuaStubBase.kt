@@ -45,7 +45,7 @@ abstract class LuaStubElementType<StubT : StubElement<*>, PsiT : LuaPsiElement>(
 abstract class LuaStubBase<T : PsiElement>(parent: StubElement<*>?, type: LuaStubElementType<*, *>)
     : StubBase<T>(parent, type) {
     override fun toString(): String {
-        return "${super.toString()}($stubType)"
+        return "${super.toString()}(${elementType})"
     }
 }
 
