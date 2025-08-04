@@ -9,7 +9,6 @@ on:
 
 # 全局环境变量
 env:
-  # ‼️ 这个路径仍然需要，用于首次运行时读取基础版本号
   PLUGIN_XML_PATH: src/main/resources/META-INF/plugin.xml
 
 # 工作流运行的任务
@@ -20,36 +19,27 @@ jobs:
       contents: write
 
     steps:
-      # 第一步：检出代码
+      # ... [前面的 checkout, setup-java, setup-gradle, versioning, generate_notes 步骤保持不变] ...
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      # 第二步：设置 Java 环境
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
-
-      # 第三步：设置 Gradle 环境
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
-
-      # 第四步：计算新版本号 (逻辑不变)
       - name: Calculate New Version
         id: versioning
         run: |
           TRACKING_FILE="version.properties"
           INITIAL_COMMIT="3639f63474c46a89fb15be2bd4cc4fac356d8e8c"
-
           if [ -f "$TRACKING_FILE" ]; then
-            echo "找到版本跟踪文件，开始计算新版本..."
             source $TRACKING_FILE
             LAST_COMMIT_HASH=$LAST_COMMIT
             COMMIT_COUNT=$(git rev-list --count $LAST_COMMIT_HASH..${{ github.sha }})
-            echo "从 $LAST_COMMIT_HASH 至今有 $COMMIT_COUNT 次新的提交。"
             IFS='.' read -r -a V <<< "$LAST_VERSION"
             MAJOR=${V[0]}; MINOR=${V[1]}; PATCH=${V[2]}
             CURRENT_YEAR=$(date +'%Y'); LAST_RELEASE_YEAR=$(date -d "$LAST_RELEASE_DATE" +'%Y')
@@ -64,48 +54,35 @@ jobs:
             fi
             NEW_VERSION="$MAJOR.$MINOR.$PATCH"
           else
-            echo "未找到版本跟踪文件，判定为首次运行。"
             NEW_VERSION=$(grep -oP '(?<=<version>).*?(?=</version>)' ${{ env.PLUGIN_XML_PATH }})
             LAST_COMMIT_HASH=$INITIAL_COMMIT
-            echo "使用 plugin.xml 中的基础版本: $NEW_VERSION"
           fi
-          
           echo "最终版本号为: $NEW_VERSION"
           echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
           echo "LAST_COMMIT_HASH=$LAST_COMMIT_HASH" >> $GITHUB_ENV
-
-      # 第五步：生成用于 GitHub Release 的 Markdown 格式更新日志
-      # [已修改] 此步骤不再生成 HTML，而是生成 Release Body 所需的 Markdown
       - name: Generate Release Notes
         id: generate_notes
         run: |
-          echo "正在生成并过滤 Markdown 格式的更新日志..."
-          # 使用 Markdown 列表格式
           LOG_MD=$(git log ${{ env.LAST_COMMIT_HASH }}..${{ github.sha }} --pretty=format:'* %s (%h)' \
             | grep -vE "Merge branch|Merge remote-tracking branch|Update auto-release.yml")
-
           if [ -z "$LOG_MD" ]; then
             LOG_MD="* 本次更新没有包含新的有效代码提交。"
           fi
-          
           {
             echo 'changelog<<EOF'
             echo "$LOG_MD"
             echo 'EOF'
           } >> "$GITHUB_OUTPUT"
 
-      # [已移除] 不再需要更新 plugin.xml 文件的步骤
-      
       # 第六步：执行 Gradle 打包命令
-      # 提醒：此步骤将使用 plugin.xml 中写死的版本号进行构建
+      # --- 核心修正点：在这里通过 -P 参数将版本号传递给 Gradle ---
       - name: Build with Gradle
-        run: ./gradlew buildPlugin -x buildSearchableOptions
+        run: ./gradlew buildPlugin -x buildSearchableOptions -PpluginVersion=${{ env.NEW_VERSION }}
 
       # 第七步：创建 GitHub Release 并上传构建产物
       - name: Create Release and Upload Asset
         uses: softprops/action-gh-release@v2
         with:
-          # [已修改] body 现在引用新的 generate_notes 步骤的输出
           body: |
             ## 自动构建产物 (v${{ env.NEW_VERSION }})
 
@@ -122,11 +99,8 @@ jobs:
           echo "LAST_VERSION=${{ env.NEW_VERSION }}" > version.properties
           echo "LAST_COMMIT=${{ github.sha }}" >> version.properties
           echo "LAST_RELEASE_DATE=$(date +'%Y-%m-%d')" >> version.properties
-          
           git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          
-          # [已修改] 提交时不再包含 plugin.xml
           git add version.properties
           git commit -m "chore(release): 自动更新版本至 ${{ env.NEW_VERSION }}" -m "[skip ci]"
           git push

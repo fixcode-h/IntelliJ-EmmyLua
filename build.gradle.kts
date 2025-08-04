@@ -63,9 +63,16 @@ val isWin = Os.isFamily(Os.FAMILY_WINDOWS)
 
 val isCI = System.getenv("CI") != null
 
-// CI
+// 从命令行属性 "pluginVersion" 获取版本号，这是由 GitHub Actions 传入的
+// 如果该属性不存在（例如本地构建），则设置一个清晰的默认值
+version = if (project.hasProperty("pluginVersion")) {
+    project.property("pluginVersion") as String
+} else {
+    "1.0.0-LOCAL" // 为本地构建设置一个默认版本号
+}
+
+// CI 环境下的 git 配置可以保留，因为它不影响版本号
 if (isCI) {
-    version = System.getenv("CI_BUILD_VERSION")
     exec {
         executable = "git"
         args("config", "--global", "user.email", "love.tangzx@qq.com")
