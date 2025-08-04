@@ -23,5 +23,7 @@ import com.tang.intellij.lua.editor.formatter.blocks.LuaScriptBlock
 
 class LuaFormatContext(val settings: CommonCodeStyleSettings, val luaSettings: LuaCodeStyleSettings, val spaceBuilder: SpacingBuilder) {
     var eqAlignment: Alignment? = null
+    var commentAlignment: Alignment? = null
+    var commentContentAlignment: Alignment? = null
     var lastBlock: LuaScriptBlock? = null
 }

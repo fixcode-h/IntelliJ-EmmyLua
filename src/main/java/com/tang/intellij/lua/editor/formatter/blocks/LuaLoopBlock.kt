@@ -184,6 +184,14 @@ class LuaLoopBlock(psi: PsiElement,
         return when (psi) {
             is LuaWhileStat -> element == (psi as LuaWhileStat).expr
             is LuaRepeatStat -> element == (psi as LuaRepeatStat).expr
+            is LuaForAStat -> {
+                val forStat = psi as LuaForAStat
+                element in forStat.exprList
+            }
+            is LuaForBStat -> {
+                val forStat = psi as LuaForBStat
+                forStat.exprList?.let { element in it.exprList } ?: false
+            }
             else -> false
         }
     }
