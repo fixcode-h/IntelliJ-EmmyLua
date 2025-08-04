@@ -159,7 +159,10 @@ open class LuaScriptBlock(val psi: PsiElement,
             is LuaForAStat, is LuaForBStat, is LuaWhileStat, is LuaRepeatStat -> 
                 LuaLoopBlock(element, wrap, alignment, childIndent, ctx)
             // 注释的特殊处理
-            is PsiComment -> LuaCommentBlock(element, wrap, alignment, childIndent, ctx)
+            is PsiComment -> {
+                val commentAlignment = getCommentAlignment(element)
+                LuaCommentBlock(element, wrap, commentAlignment, childIndent, ctx)
+            }
             // 空行管理
             else -> {
                 if (shouldUseBlankLineBlock(element)) {
@@ -239,6 +242,10 @@ open class LuaScriptBlock(val psi: PsiElement,
      * 获取注释对齐，只对齐连续块中的行尾注释
      */
     private fun getCommentAlignment(comment: PsiComment): Alignment? {
+        if (!ctx.luaSettings.ALIGN_LINE_COMMENTS || !isEndOfLineComment(comment)) {
+            return null
+        }
+        
         // 使用上下文中的注释对齐映射来管理连续块
         return getContiguousCommentAlignment(comment)
     }
@@ -247,22 +254,108 @@ open class LuaScriptBlock(val psi: PsiElement,
      * 获取连续块注释对齐
      */
     private fun getContiguousCommentAlignment(comment: PsiComment): Alignment? {
-        // 检查是否与前一行的注释连续
-        if (isCommentContiguousWithPrevious(comment)) {
-            // 如果连续，使用当前的对齐组
-            return ctx.commentAlignment ?: run {
-                // 如果还没有对齐组，创建一个新的
-                ctx.commentAlignment = Alignment.createAlignment(true)
-                ctx.commentContentAlignment = Alignment.createAlignment(true)
-                ctx.commentAlignment
-            }
-        } else {
-            // 如果不连续，重置并创建新的对齐组
+        val document = comment.containingFile.viewProvider.document ?: return null
+        val currentLine = document.getLineNumber(comment.textOffset)
+        
+        // 找到注释块的起始行
+        val blockStartLine = findCommentBlockStart(comment, currentLine, document)
+        val blockSize = getCommentBlockSize(comment, blockStartLine, document)
+        
+        // 只有当注释块包含多个注释时才创建对齐组
+        if (blockSize <= 1) {
+            return null
+        }
+        
+        // 使用注释块起始行作为对齐组的标识
+        val blockKey = "comment_block_$blockStartLine"
+        
+        // 检查是否已经为这个注释块创建了对齐组
+        if (ctx.commentAlignment == null || ctx.currentCommentBlockKey != blockKey) {
+            // 创建新的对齐组
             ctx.commentAlignment = Alignment.createAlignment(true)
             ctx.commentContentAlignment = Alignment.createAlignment(true)
-            return ctx.commentAlignment
+            ctx.currentCommentBlockKey = blockKey
         }
+        
+        return ctx.commentAlignment
     }
+
+    /**
+     * 获取注释块的大小（连续的行尾注释数量）
+     */
+    private fun getCommentBlockSize(comment: PsiComment, startLine: Int, document: com.intellij.openapi.editor.Document): Int {
+        var count = 0
+        var checkLine = startLine
+        
+        // 从起始行开始向下查找连续的行尾注释
+        while (checkLine < document.lineCount) {
+            val lineStart = document.getLineStartOffset(checkLine)
+            val lineEnd = document.getLineEndOffset(checkLine)
+            val lineText = document.text.substring(lineStart, lineEnd)
+            
+            // 如果是空行，停止查找
+            if (lineText.trim().isEmpty()) {
+                break
+            }
+            
+            // 检查这一行是否包含行尾注释
+            val commentIndex = lineText.indexOf("--")
+            if (commentIndex >= 0) {
+                // 检查注释前是否有代码
+                val codeBeforeComment = lineText.substring(0, commentIndex).trim()
+                if (codeBeforeComment.isNotEmpty()) {
+                    // 找到了行尾注释，计数并继续
+                    count++
+                    checkLine++
+                    continue
+                }
+            }
+            
+            // 如果这一行没有行尾注释，停止查找
+            break
+        }
+        
+        return count
+    }
+
+    /**
+     * 找到注释块的起始行
+     */
+    private fun findCommentBlockStart(comment: PsiComment, currentLine: Int, document: com.intellij.openapi.editor.Document): Int {
+        var checkLine = currentLine
+        
+        // 向上查找连续的行尾注释
+        while (checkLine > 0) {
+            val prevLine = checkLine - 1
+            val lineStart = document.getLineStartOffset(prevLine)
+            val lineEnd = document.getLineEndOffset(prevLine)
+            val lineText = document.text.substring(lineStart, lineEnd)
+            
+            // 如果是空行，停止查找
+            if (lineText.trim().isEmpty()) {
+                break
+            }
+            
+            // 检查这一行是否包含行尾注释
+            val commentIndex = lineText.indexOf("--")
+            if (commentIndex >= 0) {
+                // 检查注释前是否有代码
+                val codeBeforeComment = lineText.substring(0, commentIndex).trim()
+                if (codeBeforeComment.isNotEmpty()) {
+                    // 找到了行尾注释，继续向上查找
+                    checkLine = prevLine
+                    continue
+                }
+            }
+            
+            // 如果这一行没有行尾注释，停止查找
+            break
+        }
+        
+        return checkLine
+    }
+
+
 
     /**
      * 获取注释内容对齐
@@ -274,42 +367,31 @@ open class LuaScriptBlock(val psi: PsiElement,
     }
 
     /**
-     * 检查注释是否与前一行的注释连续（中间没有空行）
+     * 检查注释是否与前一行的注释连续（中间没有空行或非注释行）
      */
     private fun isCommentContiguousWithPrevious(comment: PsiComment): Boolean {
         val document = comment.containingFile.viewProvider.document ?: return false
         val currentLine = document.getLineNumber(comment.textOffset)
         
-        // 检查前面的行，寻找最近的行尾注释
-        var checkLine = currentLine - 1
-        while (checkLine >= 0) {
-            val lineStart = document.getLineStartOffset(checkLine)
-            val lineEnd = document.getLineEndOffset(checkLine)
-            val lineText = document.text.substring(lineStart, lineEnd)
-            
-            // 如果是空行，说明不连续
-            if (lineText.trim().isEmpty()) {
-                return false
-            }
-            
-            // 检查这一行是否包含行尾注释
-            val commentIndex = lineText.indexOf("--")
-            if (commentIndex >= 0) {
-                // 检查注释前是否有代码
-                val codeBeforeComment = lineText.substring(0, commentIndex).trim()
-                if (codeBeforeComment.isNotEmpty()) {
-                    // 找到了前一个行尾注释，检查是否紧邻
-                    return (currentLine - checkLine) == 1
-                }
-            }
-            
-            // 如果这一行有代码但没有注释，继续向上查找
-            checkLine--
-            
-            // 只检查相邻的几行，避免过度查找
-            if (currentLine - checkLine > 3) {
-                break
-            }
+        // 检查前一行
+        if (currentLine <= 0) return false
+        
+        val prevLine = currentLine - 1
+        val lineStart = document.getLineStartOffset(prevLine)
+        val lineEnd = document.getLineEndOffset(prevLine)
+        val lineText = document.text.substring(lineStart, lineEnd)
+        
+        // 如果前一行是空行，不连续
+        if (lineText.trim().isEmpty()) {
+            return false
+        }
+        
+        // 检查前一行是否包含行尾注释
+        val commentIndex = lineText.indexOf("--")
+        if (commentIndex >= 0) {
+            // 检查注释前是否有代码
+            val codeBeforeComment = lineText.substring(0, commentIndex).trim()
+            return codeBeforeComment.isNotEmpty()
         }
         
         return false

@@ -79,6 +79,9 @@ class LuaFormattingModelBuilder : FormattingModelBuilder {
                 .after(LPAREN).none() // no spaces after (
                 .before(RPAREN).none() // no spaces before )
                 .before(SEMI).spaces(0)
+                // 注释相关的间距规则
+                .before(SHORT_COMMENT).spaces(if (luaCodeStyleSettings.SPACE_BEFORE_LINE_COMMENT) 2 else 1)
+                .before(BLOCK_COMMENT).spaces(1)
     }
 
     override fun getRangeAffectingIndent(psiFile: PsiFile, i: Int, astNode: ASTNode): TextRange? {

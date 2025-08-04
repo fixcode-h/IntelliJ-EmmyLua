@@ -224,6 +224,12 @@
             <category>Lua</category>
             <className>com.tang.intellij.lua.codeInsight.intention.ComputeConstantValueIntention</className>
         </intentionAction>
+        <intentionAction>
+            <language>Lua</language>
+            <category>Lua</category>
+            <className>com.tang.intellij.lua.codeInsight.intention.ExtractMethodIntention</className>
+            <descriptionDirectoryName>ExtractMethodIntention</descriptionDirectoryName>
+        </intentionAction>
 
         <lang.inspectionSuppressor language="Lua" implementationClass="com.tang.intellij.lua.codeInsight.inspection.LuaSuppressManager"/>
 
@@ -364,6 +370,8 @@
                 id="lua.copyReference.copyRequirePath">
             <add-to-group group-id="CopyReferencePopupGroup"/>
         </action>
+
+
 
     </actions>
 
