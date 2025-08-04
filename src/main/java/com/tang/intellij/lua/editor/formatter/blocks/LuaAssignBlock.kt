@@ -33,14 +33,18 @@ class LuaAssignBlock(psi: PsiElement, wrap: Wrap?, alignment: Alignment?, indent
 
     private val _assignAlign = Alignment.createAlignment(true)
 
-    private val assignAlign:Alignment? get() {
+    internal val assignAlign:Alignment? get() {
         val alignmentOption = LuaCodeStyleSettings.VariableAlignmentOption.fromValue(ctx.luaSettings.VARIABLE_ALIGNMENT_OPTION)
         
         when (alignmentOption) {
             LuaCodeStyleSettings.VariableAlignmentOption.DO_NOT_ALIGN -> return null
             LuaCodeStyleSettings.VariableAlignmentOption.ALIGN_ALL -> {
                 val prev = getPrevSkipComment()
-                return if (prev is LuaAssignBlock) prev.assignAlign else _assignAlign
+                return when (prev) {
+                    is LuaAssignBlock -> prev.assignAlign
+                    is LuaRequireBlock -> prev.assignAlign
+                    else -> _assignAlign
+                }
             }
             LuaCodeStyleSettings.VariableAlignmentOption.ALIGN_CONTIGUOUS_BLOCKS -> {
                 return getContiguousBlockAlignment()
@@ -55,10 +59,14 @@ class LuaAssignBlock(psi: PsiElement, wrap: Wrap?, alignment: Alignment?, indent
      */
     private fun getContiguousBlockAlignment(): Alignment? {
         val prev = getPrevSkipComment()
-        if (prev is LuaAssignBlock) {
+        if (prev is LuaAssignBlock || prev is LuaRequireBlock) {
             // Check if there are empty lines between current and previous assignment
             if (isContiguousWithPrevious()) {
-                return prev.assignAlign
+                return when (prev) {
+                    is LuaAssignBlock -> prev.assignAlign
+                    is LuaRequireBlock -> prev.assignAlign
+                    else -> _assignAlign
+                }
             }
         }
         return _assignAlign

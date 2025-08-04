@@ -32,11 +32,17 @@ class LuaTableFormatBlock(psi: PsiElement,
                          ctx: LuaFormatContext) : LuaScriptBlock(psi, wrap, alignment, indent, ctx) {
 
     private var tableAlignment: Alignment? = null
+    private val assignAlign: Alignment = Alignment.createAlignment(true)
 
     override fun buildChild(child: PsiElement, indent: Indent?): LuaScriptBlock {
         val childIndent = indent ?: getChildIndent(child)
         val childAlignment = getChildAlignment(child)
         val childWrap = getChildWrap(child)
+        
+        // 如果是表字段，需要特殊处理以支持等号对齐
+        if (child is LuaTableField) {
+            return LuaTableFieldFormatBlock(assignAlign, child, childWrap, childAlignment, childIndent, ctx)
+        }
         
         return createBlock(child, childIndent, childAlignment, childWrap)
     }
@@ -92,5 +98,26 @@ class LuaTableFormatBlock(psi: PsiElement,
         }
 
         return super.getSpacing(child1, child2)
+    }
+}
+
+/**
+ * 表格字段格式化块
+ * 专门处理表格字段的等号对齐
+ */
+class LuaTableFieldFormatBlock(private val assignAlign: Alignment, 
+                              psi: LuaTableField, 
+                              wrap: Wrap?, 
+                              alignment: Alignment?, 
+                              indent: Indent, 
+                              ctx: LuaFormatContext) : LuaScriptBlock(psi, wrap, alignment, indent, ctx) {
+
+    override fun buildChild(child: PsiElement, indent: Indent?): LuaScriptBlock {
+        if (ctx.luaSettings.ALIGN_TABLE_FIELD_ASSIGN) {
+            if (child.node.elementType == LuaTypes.ASSIGN) {
+                return createBlock(child, Indent.getNoneIndent(), assignAlign)
+            }
+        }
+        return super.buildChild(child, indent)
     }
 }

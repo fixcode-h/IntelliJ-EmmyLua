@@ -19,17 +19,79 @@ package com.tang.intellij.lua.editor.formatter.blocks
 import com.intellij.formatting.*
 import com.intellij.psi.PsiElement
 import com.tang.intellij.lua.editor.formatter.LuaFormatContext
+import com.tang.intellij.lua.editor.formatter.LuaCodeStyleSettings
 import com.tang.intellij.lua.psi.*
 
 /**
  * require语句管理块
  * 改善项目结构，提供require语句的格式化和组织功能
+ * 支持等号对齐功能
  */
 class LuaRequireBlock(psi: PsiElement,
                      wrap: Wrap?,
                      alignment: Alignment?,
                      indent: Indent,
                      ctx: LuaFormatContext) : LuaScriptBlock(psi, wrap, alignment, indent, ctx) {
+
+    private val _assignAlign = Alignment.createAlignment(true)
+
+    internal val assignAlign: Alignment? get() {
+        val alignmentOption = LuaCodeStyleSettings.VariableAlignmentOption.fromValue(ctx.luaSettings.VARIABLE_ALIGNMENT_OPTION)
+        
+        when (alignmentOption) {
+            LuaCodeStyleSettings.VariableAlignmentOption.DO_NOT_ALIGN -> return null
+            LuaCodeStyleSettings.VariableAlignmentOption.ALIGN_ALL -> {
+                // 查找前面的require语句或赋值语句
+                val prev = getPrevSkipComment()
+                return when (prev) {
+                    is LuaRequireBlock -> prev.assignAlign
+                    is LuaAssignBlock -> prev.assignAlign
+                    else -> _assignAlign
+                }
+            }
+            LuaCodeStyleSettings.VariableAlignmentOption.ALIGN_CONTIGUOUS_BLOCKS -> {
+                return getContiguousBlockAlignment()
+            }
+        }
+    }
+
+    /**
+     * Get alignment for contiguous blocks mode.
+     * Only align with previous assignment if they are in the same contiguous block
+     * (no empty lines between them).
+     */
+    private fun getContiguousBlockAlignment(): Alignment? {
+        val prev = getPrevSkipComment()
+        if (prev is LuaRequireBlock || prev is LuaAssignBlock) {
+            // Check if there are empty lines between current and previous assignment
+            if (isContiguousWithPrevious()) {
+                return when (prev) {
+                    is LuaRequireBlock -> prev.assignAlign
+                    is LuaAssignBlock -> prev.assignAlign
+                    else -> _assignAlign
+                }
+            }
+        }
+        return _assignAlign
+    }
+
+    /**
+     * Check if current block is contiguous with previous block
+     */
+    private fun isContiguousWithPrevious(): Boolean {
+        val prev = getPrevSkipComment() ?: return false
+        
+        // Get the text between current and previous block
+        val prevEnd = prev.psi.textRange.endOffset
+        val currentStart = psi.textRange.startOffset
+        val textBetween = psi.containingFile.text.substring(prevEnd, currentStart)
+        
+        // Count line breaks
+        val lineBreaks = textBetween.count { it == '\n' }
+        
+        // If there's more than one line break, they're not contiguous
+        return lineBreaks <= 1
+    }
 
     override fun getSpacing(child1: Block?, child2: Block): Spacing? {
         if (child1 is LuaScriptBlock && child2 is LuaScriptBlock) {
@@ -127,6 +189,13 @@ class LuaRequireBlock(psi: PsiElement,
         val childIndent = when {
             isRequireStatement(child) -> Indent.getNoneIndent()
             else -> indent ?: Indent.getNoneIndent()
+        }
+        
+        // 应用等号对齐
+        val alignmentOption = LuaCodeStyleSettings.VariableAlignmentOption.fromValue(ctx.luaSettings.VARIABLE_ALIGNMENT_OPTION)
+        if (alignmentOption != LuaCodeStyleSettings.VariableAlignmentOption.DO_NOT_ALIGN && 
+            child.node.elementType == LuaTypes.ASSIGN) {
+            return createBlock(child, Indent.getContinuationIndent(), assignAlign)
         }
         
         return createBlock(child, childIndent)
