@@ -19,6 +19,7 @@ package com.tang.intellij.lua.editor.formatter;
 import com.intellij.psi.codeStyle.CodeStyleSettings;
 import com.intellij.psi.codeStyle.CustomCodeStyleSettings;
 import com.tang.intellij.lua.lang.LuaLanguage;
+import com.tang.intellij.lua.LuaBundle;
 
 /**
  * LuaCodeStyleSettings
@@ -62,9 +63,9 @@ public class LuaCodeStyleSettings extends CustomCodeStyleSettings {
      * Variable alignment options
      */
     public enum VariableAlignmentOption {
-        DO_NOT_ALIGN(0, "Do not align"),
-        ALIGN_ALL(1, "Align variables in columns"),
-        ALIGN_CONTIGUOUS_BLOCKS(2, "Align variables in contiguous blocks");
+        DO_NOT_ALIGN(0, LuaBundle.message("codestyle.variable.alignment.do_not_align")),
+        ALIGN_ALL(1, LuaBundle.message("codestyle.variable.alignment.align_all")),
+        ALIGN_CONTIGUOUS_BLOCKS(2, LuaBundle.message("codestyle.variable.alignment.align_contiguous"));
 
         private final int value;
         private final String description;

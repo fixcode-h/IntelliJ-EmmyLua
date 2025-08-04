@@ -6,7 +6,7 @@ local http = require("socket.http")
 -- Variable declarations
 local inlineEmmy = { name = "Emmy", age = 7, longLongProperty = 123 }
 local emmy = {
-    name = "Emmy",
+name = "Emmy",
     age = 7,
     longLongProperty = 123
 }

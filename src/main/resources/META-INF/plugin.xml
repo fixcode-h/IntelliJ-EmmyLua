@@ -20,6 +20,7 @@
     <version>1.0.0</version>
     <vendor email="fixcode@example.com">FixCode</vendor>
     <category>Custom Languages</category>
+    <resource-bundle>LuaBundle</resource-bundle>
     <description><![CDATA[
     Enhanced version of EmmyLua with custom modifications for Lua programming language support.<br>
     <p>This is a customized version of EmmyLua with additional features and improvements.</p>
@@ -27,7 +28,6 @@
     <ul>
         <li>LuaPanda Debug</li>
     </ul>
-    <p>中国朋友可以加QQ�?9850775交流及反馈BUG</p>
     ]]></description>
 
     <change-notes><![CDATA[

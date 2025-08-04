@@ -51,14 +51,14 @@ class LuaLanguageCodeStyleSettingsProvider : LanguageCodeStyleSettingsProvider()
             SettingsType.SPACING_SETTINGS -> {
                 // Table spacing
                 consumer.showCustomOption(LuaCodeStyleSettings::class.java, "SPACE_AFTER_TABLE_FIELD_SEP", LuaBundle.message("codestyle.spacing.table.around_assign"), LuaBundle.message("codestyle.spacing.table"))
-                consumer.showCustomOption(LuaCodeStyleSettings::class.java, "SPACE_AROUND_BINARY_OPERATOR", "Around binary operator", CodeStyleSettingsCustomizableOptions.getInstance().SPACES_OTHER)
-                consumer.showCustomOption(LuaCodeStyleSettings::class.java, "SPACE_INSIDE_INLINE_TABLE", "Inside inline table", LuaBundle.message("codestyle.spacing.table"))
-                consumer.showCustomOption(LuaCodeStyleSettings::class.java, "SPACE_BETWEEN_TABLE_FIELDS", "Between table fields", LuaBundle.message("codestyle.spacing.table"))
+                consumer.showCustomOption(LuaCodeStyleSettings::class.java, "SPACE_AROUND_BINARY_OPERATOR", LuaBundle.message("codestyle.spacing.binary_operator"), CodeStyleSettingsCustomizableOptions.getInstance().SPACES_OTHER)
+                consumer.showCustomOption(LuaCodeStyleSettings::class.java, "SPACE_INSIDE_INLINE_TABLE", LuaBundle.message("codestyle.spacing.table.inside_inline"), LuaBundle.message("codestyle.spacing.table"))
+                consumer.showCustomOption(LuaCodeStyleSettings::class.java, "SPACE_BETWEEN_TABLE_FIELDS", LuaBundle.message("codestyle.spacing.table.between_fields"), LuaBundle.message("codestyle.spacing.table"))
                 consumer.showCustomOption(LuaCodeStyleSettings::class.java, "SPACE_AFTER_COMMA_IN_TABLE", LuaBundle.message("codestyle.spacing.table.around_comma"), LuaBundle.message("codestyle.spacing.table"))
                 
                 // Function call spacing
                 consumer.showCustomOption(LuaCodeStyleSettings::class.java, "SPACE_BEFORE_FUNCTION_CALL_PARENTHESES", LuaBundle.message("codestyle.spacing.function_call.around_parentheses"), LuaBundle.message("codestyle.spacing.function_call"))
-                consumer.showCustomOption(LuaCodeStyleSettings::class.java, "SPACE_WITHIN_FUNCTION_CALL_PARENTHESES", "Within function call parentheses", LuaBundle.message("codestyle.spacing.function_call"))
+                consumer.showCustomOption(LuaCodeStyleSettings::class.java, "SPACE_WITHIN_FUNCTION_CALL_PARENTHESES", LuaBundle.message("codestyle.spacing.function_call.within_parentheses"), LuaBundle.message("codestyle.spacing.function_call"))
                 consumer.showCustomOption(LuaCodeStyleSettings::class.java, "SPACE_AFTER_COMMA_IN_FUNCTION_CALLS", LuaBundle.message("codestyle.spacing.function_call.around_comma"), LuaBundle.message("codestyle.spacing.function_call"))
                 
                 // Comment spacing
@@ -133,8 +133,8 @@ class LuaLanguageCodeStyleSettingsProvider : LanguageCodeStyleSettingsProvider()
                 )
                 consumer.showCustomOption(LuaCodeStyleSettings::class.java,
                         "VARIABLE_ALIGNMENT_OPTION",
-                        "Variable alignment",
-                        "Variable declarations",
+                        LuaBundle.message("codestyle.wrapping.variable.alignment"),
+                        LuaBundle.message("codestyle.wrapping.variable"),
                         variableAlignmentOptions,
                         variableAlignmentValues)
             }
