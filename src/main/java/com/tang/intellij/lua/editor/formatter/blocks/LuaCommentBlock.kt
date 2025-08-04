@@ -17,9 +17,12 @@
 package com.tang.intellij.lua.editor.formatter.blocks
 
 import com.intellij.formatting.*
+import com.intellij.lang.ASTNode
 import com.intellij.psi.PsiComment
 import com.intellij.psi.PsiElement
+import com.intellij.psi.impl.source.tree.LeafPsiElement
 import com.tang.intellij.lua.editor.formatter.LuaFormatContext
+import com.intellij.openapi.util.TextRange
 
 /**
  * 注释对齐块
@@ -32,6 +35,11 @@ class LuaCommentBlock(psi: PsiElement,
                      ctx: LuaFormatContext) : LuaScriptBlock(psi, wrap, alignment, indent, ctx) {
 
     override fun getSpacing(child1: Block?, child2: Block): Spacing? {
+        // 处理注释符号块和内容块之间的间距
+        if (child1 is CommentSymbolBlock && child2 is CommentContentBlock) {
+            return Spacing.createSpacing(1, 1, 0, false, 0)
+        }
+        
         if (child1 is LuaScriptBlock && child2 is LuaScriptBlock) {
             val psi1 = child1.psi
             val psi2 = child2.psi
@@ -63,13 +71,36 @@ class LuaCommentBlock(psi: PsiElement,
         return comment.text.startsWith("--") && !comment.text.startsWith("--[[")
     }
 
+    override fun isLeaf(): Boolean {
+        // 如果有注释内容对齐，需要创建子块
+        return commentContentAlignment == null
+    }
+
+    override fun buildChildren(): List<Block> {
+        if (commentContentAlignment != null && psi is PsiComment && isLineComment(psi)) {
+            // 创建注释符号和内容的子块
+            val blocks = mutableListOf<Block>()
+            
+            // 注释符号块
+            val symbolBlock = CommentSymbolBlock(psi, ctx)
+            blocks.add(symbolBlock)
+            
+            // 注释内容块  
+            val contentBlock = CommentContentBlock(psi, commentContentAlignment, ctx)
+            blocks.add(contentBlock)
+            
+            return blocks
+        }
+        return super.buildChildren()
+    }
+
     override fun buildChild(child: PsiElement, indent: Indent?): LuaScriptBlock {
         val childIndent = when {
             child is PsiComment && isBlockComment(child) -> Indent.getNormalIndent()
             else -> indent ?: Indent.getNoneIndent()
         }
         
-        return createBlock(child, childIndent)
+        return createBlock(child, childIndent, null)
     }
 
     private fun isBlockComment(comment: PsiComment): Boolean {
@@ -83,6 +114,15 @@ class LuaCommentBlock(psi: PsiElement,
         return psi is PsiComment && ctx.luaSettings.ALIGN_LINE_COMMENTS
     }
 
+    private var commentContentAlignment: Alignment? = null
+
+    /**
+     * 设置注释内容对齐
+     */
+    fun setCommentContentAlignment(alignment: Alignment?) {
+        this.commentContentAlignment = alignment
+    }
+
     /**
      * 获取注释的对齐位置
      */
@@ -90,5 +130,59 @@ class LuaCommentBlock(psi: PsiElement,
         return if (shouldAlignComment()) {
             Alignment.createAlignment(true)
         } else null
+    }
+
+    /**
+     * 获取注释内容对齐
+     */
+    fun getCommentContentAlignment(): Alignment? {
+        return commentContentAlignment
+    }
+}
+
+/**
+ * 注释符号块（处理 "--" 部分）
+ */
+class CommentSymbolBlock(
+    comment: PsiElement,
+    ctx: LuaFormatContext
+) : LuaScriptBlock(comment, null, null, Indent.getNoneIndent(), ctx) {
+
+    override fun isLeaf(): Boolean = true
+
+    override fun getTextRange(): com.intellij.openapi.util.TextRange {
+        val commentText = psi.text
+        val symbolEnd = if (commentText.startsWith("---")) 3 else 2
+        return com.intellij.openapi.util.TextRange(
+            psi.textRange.startOffset,
+            psi.textRange.startOffset + symbolEnd
+        )
+    }
+}
+
+/**
+ * 注释内容块（处理注释文本部分）
+ */
+class CommentContentBlock(
+    comment: PsiElement,
+    contentAlignment: Alignment?,
+    ctx: LuaFormatContext
+) : LuaScriptBlock(comment, null, contentAlignment, Indent.getNoneIndent(), ctx) {
+
+    override fun isLeaf(): Boolean = true
+
+    override fun getTextRange(): com.intellij.openapi.util.TextRange {
+        val commentText = psi.text
+        val symbolEnd = if (commentText.startsWith("---")) 3 else 2
+        
+        // 跳过符号后的空格
+        var contentStart = psi.textRange.startOffset + symbolEnd
+        val fileText = psi.containingFile.text
+        while (contentStart < psi.textRange.endOffset && 
+               fileText[contentStart] == ' ') {
+            contentStart++
+        }
+        
+        return com.intellij.openapi.util.TextRange(contentStart, psi.textRange.endOffset)
     }
 }
