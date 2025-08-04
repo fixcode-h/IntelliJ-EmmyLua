@@ -54,7 +54,6 @@ public class LuaCodeStyleSettings extends CustomCodeStyleSettings {
     public boolean ALIGN_LOOP_CONDITIONS = false;
 
     // 函数调用设置
-    public boolean ALIGN_FUNCTION_CALL_ARGUMENTS = false;
     public boolean SPACE_BEFORE_FUNCTION_CALL_PARENTHESES = false;
     public boolean SPACE_WITHIN_FUNCTION_CALL_PARENTHESES = false;
     public boolean SPACE_AFTER_COMMA_IN_FUNCTION_CALLS = true;

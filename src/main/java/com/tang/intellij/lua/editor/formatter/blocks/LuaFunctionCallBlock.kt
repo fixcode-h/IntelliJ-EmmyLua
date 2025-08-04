@@ -53,7 +53,7 @@ class LuaFunctionCallBlock(psi: PsiElement,
     }
 
     private fun getFunctionCallChildAlignment(child: PsiElement): Alignment? {
-        if (isFunctionArguments(child) && ctx.luaSettings.ALIGN_FUNCTION_CALL_ARGUMENTS) {
+        if (isFunctionArguments(child) && ctx.settings.ALIGN_MULTILINE_PARAMETERS_IN_CALLS) {
             if (argumentAlignment == null) {
                 argumentAlignment = Alignment.createAlignment(true)
             }
@@ -155,7 +155,7 @@ class LuaFunctionArgsBlock(psi: PsiElement,
     }
 
     private fun getArgumentChildAlignment(child: PsiElement): Alignment? {
-        if (isArgument(child) && ctx.luaSettings.ALIGN_FUNCTION_CALL_ARGUMENTS) {
+        if (isArgument(child) && ctx.settings.ALIGN_MULTILINE_PARAMETERS_IN_CALLS) {
             if (parameterAlignment == null) {
                 parameterAlignment = Alignment.createAlignment(true)
             }

@@ -114,11 +114,7 @@ class LuaLanguageCodeStyleSettingsProvider : LanguageCodeStyleSettingsProvider()
                         LuaBundle.message("codestyle.wrapping.loop.align_body"),
                         LuaBundle.message("codestyle.wrapping.loop"))
 
-                // Function call alignment
-                consumer.showCustomOption(LuaCodeStyleSettings::class.java,
-                        "ALIGN_FUNCTION_CALL_ARGUMENTS",
-                        LuaBundle.message("codestyle.wrapping.function_call.align_parameters"),
-                        LuaBundle.message("codestyle.wrapping.function_call"))
+
 
                 // Custom variable alignment option
                 val variableAlignmentOptions = arrayOf(

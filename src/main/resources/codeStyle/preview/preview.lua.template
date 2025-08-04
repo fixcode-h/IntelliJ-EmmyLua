@@ -1,92 +1,132 @@
--- Require statements formatting
+-- Require statements formatting (BLANK_LINES_AFTER_REQUIRE_BLOCK)
 local json = require("json")
 local utils = require("utils.common")
 local http = require("socket.http")
 
--- Variable declarations
-local inlineEmmy = { name = "Emmy", age = 7, longLongProperty = 123 }
-local emmy = {
-name = "Emmy",
-    age = 7,
-    longLongProperty = 123
+-- Variable declarations with different alignment options (VARIABLE_ALIGNMENT_OPTION)
+local shortVar = 1
+local veryLongVariableName = 2
+local x = 3
+local anotherLongName = 4
+
+-- Variable declarations with assignment operators (SPACE_AROUND_ASSIGNMENT_OPERATORS)
+local a=1
+local b = 2
+local c= 3
+
+-- Multiple variable declarations (SPACE_BEFORE_COMMA, SPACE_AFTER_COMMA)
+local x,y,z=1,2,3
+local p, q, r = 4, 5, 6
+
+-- Binary operators spacing (SPACE_AROUND_BINARY_OPERATOR)
+local result1=a+b*c
+local result2 = a + b * c
+local result3=a..b
+local result4 = a .. b
+
+-- Table declarations - inline tables (SPACE_INSIDE_INLINE_TABLE)
+local inlineTable1={name="Emmy",age=7}
+local inlineTable2 = { name = "Emmy", age = 7 }
+
+-- Table field assignment spacing (SPACE_AFTER_TABLE_FIELD_SEP)
+local tableAssign1 = {name="Emmy", age=7}
+local tableAssign2 = {name = "Emmy", age = 7}
+
+-- Table field spacing (SPACE_BETWEEN_TABLE_FIELDS, SPACE_AFTER_COMMA_IN_TABLE)
+local compactTable={field1=1,field2=2,field3=3}
+local spacedTable = {field1 = 1, field2 = 2, field3 = 3}
+
+-- Table declarations - multiline tables (ALIGN_TABLE_FIELDS, ALIGN_TABLE_FIELD_ASSIGN, WRAP_TABLE_FIELDS)
+local multilineTable1 = {
+name="Emmy",
+age=7,
+longLongProperty=123,
+x=1
 }
-local a = 1
-local b, c = 2, "3"
-local var = 1 -- a short comment
 
-local a = 1
-local b, c = 2, "3"
-local var = 1 -- a short comment
+local multilineTable2 = {
+    name = "Emmy",
+    age = 7,
+    longLongProperty = 123,
+    x = 1
+}
 
--- Function definitions with blank lines
---- doc comment
+-- Function definitions with blank lines (BLANK_LINES_BEFORE_FUNCTION, BLANK_LINES_AFTER_FUNCTION)
+--- Documentation comment
 --- @param par1 Par1Type @some strings
-function var:testFun(par1, par2, par3, par4, par5)
-   print('hello')
-   return self.len + 2
+--- @param par2 Par2Type
+function var:testFun(par1,par2,par3,par4,par5)
+    print('hello')
+    return self.len+2
 end
-
 function globalFun()
-   return "string" .. var
+    return "string"..var
 end
 
--- Function calls with different argument formatting
-var:testFun('par1Value', 'par2Value', 'par3Value', 'par4Value', 'par5Value')
-local result = math.max(1, 2, 3, 4, 5)
-print("Result:", result)
+-- Function calls with different argument formatting (SPACE_BEFORE_FUNCTION_CALL_PARENTHESES, SPACE_WITHIN_FUNCTION_CALL_PARENTHESES, SPACE_AFTER_COMMA_IN_FUNCTION_CALLS)
+var:testFun('par1','par2','par3','par4','par5')
+var:testFun ( 'par1', 'par2', 'par3', 'par4', 'par5' )
+local result=math.max(1,2,3,4,5)
+local result2 = math.max( 1, 2, 3, 4, 5 )
 
--- Control structures
-if true then 
-    return 123 
+-- Function parameters wrapping (METHOD_PARAMETERS_WRAP, ALIGN_MULTILINE_PARAMETERS)
+function longParameterFunction(param1,param2,param3,param4,param5,param6)
+    return param1 + param2
 end
 
-if true then 
-    print("123") 
-    return 123 
+function alignedParameterFunction(param1,
+                                  param2,
+                                  param3,
+                                  param4,
+                                  param5,
+                                  param6)
+    return param1 + param2
 end
 
--- Loop structures
-for i = 1, 10 do
-    print(i)
+-- Function call parameters wrapping (CALL_PARAMETERS_WRAP, ALIGN_MULTILINE_PARAMETERS_IN_CALLS)
+local callResult1=someFunction('arg1','arg2','arg3','arg4','arg5','arg6')
+local callResult2 = someFunction('arg1',
+                                 'arg2',
+                                 'arg3',
+                                 'arg4',
+                                 'arg5',
+                                 'arg6')
+
+-- Control structures (KEEP_SIMPLE_BLOCKS_IN_ONE_LINE)
+if true then return 123 end
+if true then
+    print("123")
+    return 123
 end
 
-for k, v in pairs(emmy) do
-    print(k, v)
+-- Loop structures (ALIGN_LOOP_CONDITIONS)
+for i=1,10 do
+print(i)
 end
 
-while var > 0 do
-    var = var - 1
+for k,v in pairs(emmy) do
+print(k,v)
+end
+
+while var>0 do
+var=var-1
 end
 
 repeat
-    var = var + 1
-until var > 10
+var=var+1
+until var>10
 
--- Class-like table definition
-local MyClass = {
-    name = "MyClass",
-    version = "1.0",
-    
-    new = function(self, name)
-        local obj = {}
-        setmetatable(obj, self)
-        self.__index = self
-        obj.name = name
-        return obj
-    end,
-    
-    getName = function(self)
-        return self.name
-    end,
-    
-    setName = function(self, name)
-        self.name = name
-    end
-}
+-- Comments formatting (ALIGN_LINE_COMMENTS, SPACE_BEFORE_LINE_COMMENT)
+local var1=1--comment1
+local var2=2 -- comment2
+local var3=3   --comment3
+local var4=4    -- comment4
 
--- Comments formatting
--- Single line comment
---[[ 
+-- Different comment styles
+--Single line comment without space
+-- Single line comment with space
+
+--[[
 Multi-line comment
 with multiple lines
 ]]
@@ -96,7 +136,26 @@ with multiple lines
 --- @field name string
 local TestClass = {}
 
--- Assignment statements
-local x, y, z = 1, 2, 3
-emmy.name = "New Emmy"
-emmy["age"] = 8
+-- Complex nested structures
+local complexTable = {
+    config={
+        debug=true,
+        level=5
+    },
+    handlers={
+        onSuccess=function(data)
+            print("Success:",data)
+        end,
+        onError=function(err)
+            print("Error:",err)
+        end
+    }
+}
+
+-- String concatenation and operations
+local message="Hello".." ".."World"
+local formatted = string.format("Value: %d, Name: %s", 42, "test")
+
+-- Array-like tables
+local array1={1,2,3,4,5}
+local array2 = { 1, 2, 3, 4, 5 }
