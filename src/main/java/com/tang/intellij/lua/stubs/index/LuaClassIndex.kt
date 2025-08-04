@@ -20,6 +20,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.psi.search.GlobalSearchScope
 import com.intellij.psi.search.ProjectAndLibrariesScope
 import com.intellij.psi.stubs.StringStubIndexExtension
+import com.intellij.psi.stubs.StubIndex
 import com.intellij.util.Processor
 import com.intellij.util.containers.ContainerUtil
 import com.tang.intellij.lua.comment.psi.LuaDocTagClass
@@ -57,7 +58,7 @@ class LuaClassIndex : StringStubIndexExtension<LuaDocTagClass>() {
         }
 
         fun process(key: String, project: Project, scope: GlobalSearchScope, processor: Processor<LuaDocTagClass>): Boolean {
-            val collection = instance.get(key, project, scope)
+            val collection = StubIndex.getElements(StubKeys.CLASS, key, project, scope, LuaDocTagClass::class.java)
             return ContainerUtil.process(collection, processor)
         }
 

@@ -301,7 +301,7 @@ private fun getType(context: SearchContext, def: PsiElement): ITy {
 
 private fun isGlobal(nameExpr: LuaNameExpr):Boolean {
     val minx = nameExpr as LuaNameExprMixin
-    val gs = minx.greenStub
+    val gs = minx.stub
     return gs?.isGlobal ?: (resolveLocal(nameExpr, null) == null)
 }
 

@@ -185,16 +185,17 @@ project(":") {
     task("bunch") {
         doLast {
             val rev = getRev()
+            // 注释掉危险的git操作，避免代码丢失
             // reset
-            exec {
-                executable = "git"
-                args("reset", "HEAD", "--hard")
-            }
+            // exec {
+            //     executable = "git"
+            //     args("reset", "HEAD", "--hard")
+            // }
             // clean untracked files
-            exec {
-                executable = "git"
-                args("clean", "-d", "-f")
-            }
+            // exec {
+            //     executable = "git"
+            //     args("clean", "-d", "-f")
+            // }
             // switch
             exec {
                 executable = if (isWin) "bunch/bin/bunch.bat" else "bunch/bin/bunch"

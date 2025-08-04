@@ -38,7 +38,7 @@ class LuaCallHierarchyBrowser(element: PsiElement) : CallHierarchyBrowserBase(el
     }
 
     override fun getComparator(): Comparator<NodeDescriptor<*>>? {
-        return AlphaComparator.INSTANCE
+        return Comparator.comparing { it.toString() }
     }
 
     override fun getElementFromDescriptor(descriptor: HierarchyNodeDescriptor): PsiElement? {

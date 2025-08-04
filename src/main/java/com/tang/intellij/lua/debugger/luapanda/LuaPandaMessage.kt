@@ -16,8 +16,9 @@
 
 package com.tang.intellij.lua.debugger.luapanda
 
-import com.google.gson.JsonObject
 import com.google.gson.JsonElement
+import com.google.gson.JsonObject
+import com.tang.intellij.lua.LuaBundle
 
 data class LuaPandaMessage(
     val cmd: String,
@@ -105,8 +106,8 @@ object LuaPandaCommands {
 }
 
 enum class LuaPandaTransportType(val desc: String) {
-    TCP_CLIENT("TCP客户端"),
-    TCP_SERVER("TCP服务器");
+    TCP_CLIENT(LuaBundle.message("debugger.transport.tcp_client")),
+    TCP_SERVER(LuaBundle.message("debugger.transport.tcp_server"));
 
     override fun toString(): String {
         return desc

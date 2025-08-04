@@ -43,7 +43,7 @@ open class LuaPsiFile(fileViewProvider: FileViewProvider) : PsiFileBase(fileView
     }
 
     val uid: String get() {
-        val stub = greenStub
+        val stub = stub
         if (stub is LuaFileStub)
             return stub.uid
         val file = originalFile

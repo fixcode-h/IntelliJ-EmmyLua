@@ -16,6 +16,7 @@
 
 package com.tang.intellij.lua.psi.search
 
+import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.project.DumbService
 import com.intellij.util.Processor
 import com.intellij.util.QueryExecutor
@@ -53,10 +54,8 @@ class LuaClassInheritorsSearchExecutor : QueryExecutor<LuaDocTagClass, LuaClassI
     }
 
     override fun execute(searchParameters: LuaClassInheritorsSearch.SearchParameters, processor: Processor<in LuaDocTagClass>): Boolean {
-        var ref = true
-        DumbService.getInstance(searchParameters.project).runReadActionInSmartMode {
-            ref = processInheritors(searchParameters, searchParameters.typeName, mutableSetOf(), processor)
+        return ReadAction.compute<Boolean, RuntimeException> {
+            processInheritors(searchParameters, searchParameters.typeName, mutableSetOf(), processor)
         }
-        return ref
     }
 }

@@ -35,6 +35,7 @@ import com.tang.intellij.lua.ty.TyParameter
 class LuaClassMemberIndex : IntStubIndexExtension<LuaClassMember>() {
     override fun getKey() = StubKeys.CLASS_MEMBER
 
+    @Deprecated("This method is deprecated in the parent class")
     override fun get(s: Int, project: Project, scope: GlobalSearchScope): Collection<LuaClassMember> =
             StubIndex.getElements(StubKeys.CLASS_MEMBER, s, project, scope, LuaClassMember::class.java)
 
@@ -44,7 +45,7 @@ class LuaClassMemberIndex : IntStubIndexExtension<LuaClassMember>() {
         private fun process(key: String, context: SearchContext, processor: Processor<LuaClassMember>): Boolean {
             if (context.isDumb)
                 return false
-            val all = instance.get(key.hashCode(), context.project, context.scope)
+            val all = StubIndex.getElements(StubKeys.CLASS_MEMBER, key.hashCode(), context.project, context.scope, LuaClassMember::class.java)
             return ContainerUtil.process(all, processor)
         }
 

@@ -22,6 +22,7 @@ import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.FormBuilder
+import com.tang.intellij.lua.LuaBundle
 import java.awt.BorderLayout
 import javax.swing.JComponent
 import javax.swing.JPanel
@@ -33,20 +34,20 @@ class LuaPandaSettingsEditor : SettingsEditor<LuaPandaDebugConfiguration>() {
     private val transportTypeCombo = ComboBox(arrayOf(LuaPandaTransportType.TCP_SERVER, LuaPandaTransportType.TCP_CLIENT))
     private val hostField = JBTextField()
     private val portSpinner = JSpinner(SpinnerNumberModel(8818, 1, 65535, 1))
-    private val stopOnEntryCheckBox = JBCheckBox("入口处停止")
-    private val useCHookCheckBox = JBCheckBox("使用C Hook")
+    private val stopOnEntryCheckBox = JBCheckBox(LuaBundle.message("debugger.stop_on_entry"))
+    private val useCHookCheckBox = JBCheckBox(LuaBundle.message("debugger.use_c_hook"))
     private val logLevelSpinner = JSpinner(SpinnerNumberModel(1, 0, 3, 1))
 
     override fun createEditor(): JComponent {
         val panel = JPanel(BorderLayout())
         
         val formBuilder = FormBuilder.createFormBuilder()
-            .addLabeledComponent(JBLabel("传输类型:"), transportTypeCombo)
-            .addLabeledComponent(JBLabel("主机:"), hostField)
-            .addLabeledComponent(JBLabel("端口:"), portSpinner)
+            .addLabeledComponent(JBLabel(LuaBundle.message("debugger.transport_type")), transportTypeCombo)
+            .addLabeledComponent(JBLabel(LuaBundle.message("debugger.host")), hostField)
+            .addLabeledComponent(JBLabel(LuaBundle.message("debugger.port")), portSpinner)
             .addComponent(stopOnEntryCheckBox)
             .addComponent(useCHookCheckBox)
-            .addLabeledComponent(JBLabel("日志级别:"), logLevelSpinner)
+            .addLabeledComponent(JBLabel(LuaBundle.message("debugger.log_level")), logLevelSpinner)
         
         panel.add(formBuilder.panel, BorderLayout.NORTH)
         

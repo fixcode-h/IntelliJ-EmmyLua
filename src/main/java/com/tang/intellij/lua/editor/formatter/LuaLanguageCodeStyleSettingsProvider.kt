@@ -22,6 +22,7 @@ import com.intellij.application.options.SmartIndentOptionsEditor
 import com.intellij.psi.codeStyle.CodeStyleSettingsCustomizable
 import com.intellij.psi.codeStyle.CodeStyleSettingsCustomizableOptions
 import com.intellij.psi.codeStyle.LanguageCodeStyleSettingsProvider
+import com.tang.intellij.lua.LuaBundle
 import com.tang.intellij.lua.lang.LuaLanguage
 
 /**
@@ -48,12 +49,32 @@ class LuaLanguageCodeStyleSettingsProvider : LanguageCodeStyleSettingsProvider()
     override fun customizeSettings(consumer: CodeStyleSettingsCustomizable, settingsType: SettingsType) {
         when (settingsType) {
             SettingsType.SPACING_SETTINGS -> {
-                consumer.showCustomOption(LuaCodeStyleSettings::class.java, "SPACE_AFTER_TABLE_FIELD_SEP", "After field sep", CodeStyleSettingsCustomizableOptions.getInstance().SPACES_OTHER)
-                consumer.showCustomOption(LuaCodeStyleSettings::class.java, "SPACE_AROUND_BINARY_OPERATOR", "Around binary operator", CodeStyleSettingsCustomizableOptions.getInstance().SPACES_OTHER)
-                consumer.showCustomOption(LuaCodeStyleSettings::class.java, "SPACE_INSIDE_INLINE_TABLE", "Inside inline table", CodeStyleSettingsCustomizableOptions.getInstance().SPACES_OTHER)
+                // Table spacing
+                consumer.showCustomOption(LuaCodeStyleSettings::class.java, "SPACE_AFTER_TABLE_FIELD_SEP", LuaBundle.message("codestyle.spacing.table.around_assign"), LuaBundle.message("codestyle.spacing.table"))
+                consumer.showCustomOption(LuaCodeStyleSettings::class.java, "SPACE_AROUND_BINARY_OPERATOR", LuaBundle.message("codestyle.spacing.binary_operator"), CodeStyleSettingsCustomizableOptions.getInstance().SPACES_OTHER)
+                consumer.showCustomOption(LuaCodeStyleSettings::class.java, "SPACE_INSIDE_INLINE_TABLE", LuaBundle.message("codestyle.spacing.table.inside_inline"), LuaBundle.message("codestyle.spacing.table"))
+                consumer.showCustomOption(LuaCodeStyleSettings::class.java, "SPACE_BETWEEN_TABLE_FIELDS", LuaBundle.message("codestyle.spacing.table.between_fields"), LuaBundle.message("codestyle.spacing.table"))
+                consumer.showCustomOption(LuaCodeStyleSettings::class.java, "SPACE_AFTER_COMMA_IN_TABLE", LuaBundle.message("codestyle.spacing.table.around_comma"), LuaBundle.message("codestyle.spacing.table"))
+                
+                // Function call spacing
+                consumer.showCustomOption(LuaCodeStyleSettings::class.java, "SPACE_BEFORE_FUNCTION_CALL_PARENTHESES", LuaBundle.message("codestyle.spacing.function_call.around_parentheses"), LuaBundle.message("codestyle.spacing.function_call"))
+                consumer.showCustomOption(LuaCodeStyleSettings::class.java, "SPACE_WITHIN_FUNCTION_CALL_PARENTHESES", LuaBundle.message("codestyle.spacing.function_call.within_parentheses"), LuaBundle.message("codestyle.spacing.function_call"))
+                consumer.showCustomOption(LuaCodeStyleSettings::class.java, "SPACE_AFTER_COMMA_IN_FUNCTION_CALLS", LuaBundle.message("codestyle.spacing.function_call.around_comma"), LuaBundle.message("codestyle.spacing.function_call"))
+                
+                // Comment spacing
+                consumer.showCustomOption(LuaCodeStyleSettings::class.java, "SPACE_BEFORE_LINE_COMMENT", LuaBundle.message("codestyle.spacing.comment.before_line"), LuaBundle.message("codestyle.spacing.comment"))
+                
                 consumer.showStandardOptions("SPACE_AROUND_ASSIGNMENT_OPERATORS",
                         "SPACE_BEFORE_COMMA",
                         "SPACE_AFTER_COMMA")
+            }
+            SettingsType.BLANK_LINES_SETTINGS -> {
+                // Require statements
+                consumer.showCustomOption(LuaCodeStyleSettings::class.java, "BLANK_LINES_AFTER_REQUIRE_BLOCK", LuaBundle.message("codestyle.blank_lines.require.after"), LuaBundle.message("codestyle.blank_lines.require"))
+                
+                // Functions
+                consumer.showCustomOption(LuaCodeStyleSettings::class.java, "BLANK_LINES_BEFORE_FUNCTION", LuaBundle.message("codestyle.blank_lines.function.before"), LuaBundle.message("codestyle.blank_lines.function"))
+                consumer.showCustomOption(LuaCodeStyleSettings::class.java, "BLANK_LINES_AFTER_FUNCTION", LuaBundle.message("codestyle.blank_lines.function.after"), LuaBundle.message("codestyle.blank_lines.function"))
             }
             SettingsType.WRAPPING_AND_BRACES_SETTINGS -> {
                 consumer.showStandardOptions(
@@ -64,16 +85,58 @@ class LuaLanguageCodeStyleSettingsProvider : LanguageCodeStyleSettingsProvider()
                         "ALIGN_MULTILINE_PARAMETERS_IN_CALLS",
 
                         // keep when reformatting
-                        "KEEP_SIMPLE_BLOCKS_IN_ONE_LINE",
-
-                        //align group declarations
-                        "ALIGN_CONSECUTIVE_VARIABLE_DECLARATIONS"
+                        "KEEP_SIMPLE_BLOCKS_IN_ONE_LINE"
                 )
 
+                // Table alignment and wrapping
                 consumer.showCustomOption(LuaCodeStyleSettings::class.java,
                         "ALIGN_TABLE_FIELD_ASSIGN",
-                        "Align table field assign",
-                        "Table")
+                        LuaBundle.message("codestyle.wrapping.table.align_assign"),
+                        LuaBundle.message("codestyle.wrapping.table"))
+                consumer.showCustomOption(LuaCodeStyleSettings::class.java,
+                        "ALIGN_TABLE_FIELDS",
+                        LuaBundle.message("codestyle.wrapping.table.align_fields"),
+                        LuaBundle.message("codestyle.wrapping.table"))
+                consumer.showCustomOption(LuaCodeStyleSettings::class.java,
+                        "WRAP_TABLE_FIELDS",
+                        LuaBundle.message("codestyle.wrapping.table.wrap_after_comma"),
+                        LuaBundle.message("codestyle.wrapping.table"))
+
+                // Comment alignment
+                consumer.showCustomOption(LuaCodeStyleSettings::class.java,
+                        "ALIGN_LINE_COMMENTS",
+                        LuaBundle.message("codestyle.wrapping.comment.align_line"),
+                        LuaBundle.message("codestyle.wrapping.comment"))
+
+                // Loop statement alignment
+                consumer.showCustomOption(LuaCodeStyleSettings::class.java,
+                        "ALIGN_LOOP_CONDITIONS",
+                        LuaBundle.message("codestyle.wrapping.loop.align_body"),
+                        LuaBundle.message("codestyle.wrapping.loop"))
+
+                // Function call alignment
+                consumer.showCustomOption(LuaCodeStyleSettings::class.java,
+                        "ALIGN_FUNCTION_CALL_ARGUMENTS",
+                        LuaBundle.message("codestyle.wrapping.function_call.align_parameters"),
+                        LuaBundle.message("codestyle.wrapping.function_call"))
+
+                // Custom variable alignment option
+                val variableAlignmentOptions = arrayOf(
+                    LuaCodeStyleSettings.VariableAlignmentOption.DO_NOT_ALIGN.description,
+                    LuaCodeStyleSettings.VariableAlignmentOption.ALIGN_ALL.description,
+                    LuaCodeStyleSettings.VariableAlignmentOption.ALIGN_CONTIGUOUS_BLOCKS.description
+                )
+                val variableAlignmentValues = intArrayOf(
+                    LuaCodeStyleSettings.VariableAlignmentOption.DO_NOT_ALIGN.value,
+                    LuaCodeStyleSettings.VariableAlignmentOption.ALIGN_ALL.value,
+                    LuaCodeStyleSettings.VariableAlignmentOption.ALIGN_CONTIGUOUS_BLOCKS.value
+                )
+                consumer.showCustomOption(LuaCodeStyleSettings::class.java,
+                        "VARIABLE_ALIGNMENT_OPTION",
+                        LuaBundle.message("codestyle.wrapping.variable.alignment"),
+                        LuaBundle.message("codestyle.wrapping.variable"),
+                        variableAlignmentOptions,
+                        variableAlignmentValues)
             }
             else -> {
             }
