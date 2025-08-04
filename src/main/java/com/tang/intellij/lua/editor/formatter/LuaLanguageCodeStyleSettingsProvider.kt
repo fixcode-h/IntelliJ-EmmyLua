@@ -91,7 +91,7 @@ class LuaLanguageCodeStyleSettingsProvider : LanguageCodeStyleSettingsProvider()
                 // Table alignment and wrapping
                 consumer.showCustomOption(LuaCodeStyleSettings::class.java,
                         "ALIGN_TABLE_FIELD_ASSIGN",
-                        LuaBundle.message("codestyle.wrapping.table.align_fields"),
+                        LuaBundle.message("codestyle.wrapping.table.align_assign"),
                         LuaBundle.message("codestyle.wrapping.table"))
                 consumer.showCustomOption(LuaCodeStyleSettings::class.java,
                         "ALIGN_TABLE_FIELDS",
