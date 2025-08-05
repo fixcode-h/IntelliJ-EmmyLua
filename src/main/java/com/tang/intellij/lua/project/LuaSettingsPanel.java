@@ -17,11 +17,16 @@
 package com.tang.intellij.lua.project;
 
 import com.intellij.codeInsight.daemon.DaemonCodeAnalyzer;
+import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.fileChooser.FileChooser;
+import com.intellij.openapi.fileChooser.FileChooserDescriptor;
 import com.intellij.openapi.options.Configurable;
 import com.intellij.openapi.options.SearchableConfigurable;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.project.ProjectManager;
+import com.intellij.openapi.ui.Messages;
 import com.intellij.openapi.util.text.StringUtil;
+import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.util.ArrayUtil;
 import com.intellij.util.FileContentUtil;
 import com.tang.intellij.lua.lang.LuaLanguageLevel;
@@ -43,7 +48,8 @@ import java.util.SortedMap;
  */
 public class LuaSettingsPanel implements SearchableConfigurable, Configurable.NoScroll {
     private final LuaSettings settings;
-    private JPanel myPanel;
+    private JScrollPane myPanel;
+    private JPanel contentPanel;
     private JTextField constructorNames;
     private JCheckBox strictDoc;
     private JCheckBox smartCloseEnd;
@@ -55,10 +61,14 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
     private JCheckBox enableGenericCheckBox;
     private JCheckBox captureOutputDebugString;
     private JCheckBox captureStd;
-    private JComboBox<String> defaultCharset;
+    private JComboBox<String> charsetComboBox;
     private JComboBox<LuaLanguageLevel> languageLevel;
     private JTextField requireFunctionNames;
     private JTextField tooLargerFileThreshold;
+    private JTextField ueProjectPathField;
+    private JButton browseUEProjectButton;
+    private JButton autoDetectUEProjectButton;
+    private JCheckBox enableUEIntelliSenseCheckBox;
 
     public LuaSettingsPanel() {
         this.settings = LuaSettings.Companion.getInstance();
@@ -80,13 +90,59 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
 
         SortedMap<String, Charset> charsetSortedMap = Charset.availableCharsets();
         ComboBoxModel<String> outputCharsetModel = new DefaultComboBoxModel<>(ArrayUtil.toStringArray(charsetSortedMap.keySet()));
-        defaultCharset.setModel(outputCharsetModel);
-        defaultCharset.setSelectedItem(settings.getAttachDebugDefaultCharsetName());
+        charsetComboBox.setModel(outputCharsetModel);
+        charsetComboBox.setSelectedItem(settings.getAttachDebugDefaultCharsetName());
 
         //language level
         ComboBoxModel<LuaLanguageLevel> lanLevelModel = new DefaultComboBoxModel<>(LuaLanguageLevel.values());
         languageLevel.setModel(lanLevelModel);
         lanLevelModel.setSelectedItem(settings.getLanguageLevel());
+
+        //UE project settings
+        ueProjectPathField.setText(settings.getUeProjectPath());
+        enableUEIntelliSenseCheckBox.setSelected(settings.getEnableUEIntelliSense());
+
+        //browse button action
+        browseUEProjectButton.addActionListener(e -> {
+            FileChooserDescriptor descriptor = new FileChooserDescriptor(true, false, false, false, false, false)
+                    .withFileFilter(file -> file.getName().endsWith(".uproject"));
+            descriptor.setTitle("Select UE Project File");
+            descriptor.setDescription("Choose the .uproject file for your Unreal Engine project");
+            
+            VirtualFile selectedFile = FileChooser.chooseFile(descriptor, null, null);
+            if (selectedFile != null) {
+                ueProjectPathField.setText(selectedFile.getPath());
+            }
+        });
+
+        //auto detect button action
+        autoDetectUEProjectButton.addActionListener(e -> {
+            // 在后台线程中执行自动检测，避免阻塞UI
+            ApplicationManager.getApplication().executeOnPooledThread(() -> {
+                String detectedPath = settings.autoDetectUProjectPath();
+                
+                // 在UI线程中更新界面
+                ApplicationManager.getApplication().invokeLater(() -> {
+                    if (detectedPath != null) {
+                        ueProjectPathField.setText(detectedPath);
+                        // 显示成功消息
+                        Messages.showInfoMessage(
+                            "已自动检测到 .uproject 文件：\n" + detectedPath,
+                            "自动检测成功"
+                        );
+                    } else {
+                        // 显示未找到消息
+                        Messages.showWarningDialog(
+                            "未能在当前项目及其父目录中找到 .uproject 文件。\n" +
+                            "请确保：\n" +
+                            "1. 当前项目类型已设置为 'Unreal Engine'\n" +
+                            "2. 项目目录或其父目录包含 .uproject 文件",
+                            "自动检测失败"
+                        );
+                    }
+                });
+            });
+        });
     }
 
     @NotNull
@@ -121,8 +177,10 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
                 settings.getEnableGeneric() != enableGenericCheckBox.isSelected() ||
                 settings.getAttachDebugCaptureOutput() != captureOutputDebugString.isSelected() ||
                 settings.getAttachDebugCaptureStd() != captureStd.isSelected() ||
-                settings.getAttachDebugDefaultCharsetName() != defaultCharset.getSelectedItem() ||
+                settings.getAttachDebugDefaultCharsetName() != charsetComboBox.getSelectedItem() ||
                 settings.getLanguageLevel() != languageLevel.getSelectedItem() ||
+                !StringUtil.equals(settings.getUeProjectPath(), ueProjectPathField.getText()) ||
+                settings.getEnableUEIntelliSense() != enableUEIntelliSenseCheckBox.isSelected() ||
                 !Arrays.equals(settings.getAdditionalSourcesRoot(), additionalRoots.getRoots(), String::compareTo);
     }
 
@@ -143,7 +201,12 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
         settings.setEnableGeneric(enableGenericCheckBox.isSelected());
         settings.setAttachDebugCaptureOutput(captureOutputDebugString.isSelected());
         settings.setAttachDebugCaptureStd(captureStd.isSelected());
-        settings.setAttachDebugDefaultCharsetName((String) Objects.requireNonNull(defaultCharset.getSelectedItem()));
+        settings.setAttachDebugDefaultCharsetName((String) Objects.requireNonNull(charsetComboBox.getSelectedItem()));
+        
+        //UE project settings
+        settings.setUeProjectPath(ueProjectPathField.getText());
+        settings.setEnableUEIntelliSense(enableUEIntelliSenseCheckBox.isSelected());
+        
         LuaLanguageLevel selectedLevel = (LuaLanguageLevel) Objects.requireNonNull(languageLevel.getSelectedItem());
         if (selectedLevel != settings.getLanguageLevel()) {
             settings.setLanguageLevel(selectedLevel);
@@ -155,6 +218,29 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
                 DaemonCodeAnalyzer.getInstance(project).restart();
             }
         }
+    }
+
+    @Override
+    public void reset() {
+        constructorNames.setText(settings.getConstructorNamesString());
+        strictDoc.setSelected(settings.isStrictDoc());
+        smartCloseEnd.setSelected(settings.isSmartCloseEnd());
+        showWordsInFile.setSelected(settings.isShowWordsInFile());
+        enforceTypeSafety.setSelected(settings.isEnforceTypeSafety());
+        nilStrict.setSelected(settings.isNilStrict());
+        recognizeGlobalNameAsCheckBox.setSelected(settings.isRecognizeGlobalNameAsType());
+        additionalRoots.setRoots(settings.getAdditionalSourcesRoot());
+        enableGenericCheckBox.setSelected(settings.getEnableGeneric());
+        requireFunctionNames.setText(settings.getRequireLikeFunctionNamesString());
+        tooLargerFileThreshold.setText(String.valueOf(settings.getTooLargerFileThreshold()));
+        captureStd.setSelected(settings.getAttachDebugCaptureStd());
+        captureOutputDebugString.setSelected(settings.getAttachDebugCaptureOutput());
+        charsetComboBox.setSelectedItem(settings.getAttachDebugDefaultCharsetName());
+        languageLevel.setSelectedItem(settings.getLanguageLevel());
+        
+        // Reset UE project fields
+        ueProjectPathField.setText(settings.getUeProjectPath());
+        enableUEIntelliSenseCheckBox.setSelected(settings.getEnableUEIntelliSense());
     }
 
     private int getTooLargerFileThreshold() {
