@@ -20,9 +20,14 @@ import com.intellij.execution.ui.ConsoleViewContentType
 import com.intellij.ide.plugins.PluginManagerCore
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.Logger
+import com.intellij.openapi.editor.ScrollType
 import com.intellij.openapi.extensions.PluginId
+import com.intellij.openapi.fileEditor.FileEditorManager
+import com.intellij.openapi.fileEditor.TextEditor
 import com.intellij.openapi.util.Key
 import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.ui.ColorUtil
+import com.intellij.ui.JBColor
 import com.intellij.xdebugger.XDebugSession
 import com.intellij.xdebugger.XDebuggerManager
 import com.intellij.xdebugger.XDebuggerUtil
@@ -32,6 +37,7 @@ import com.intellij.xdebugger.breakpoints.XBreakpointProperties
 import com.intellij.xdebugger.breakpoints.XLineBreakpoint
 import com.intellij.xdebugger.evaluation.XDebuggerEditorsProvider
 import com.intellij.xdebugger.frame.XSuspendContext
+import com.intellij.xdebugger.ui.DebuggerColors
 import com.tang.intellij.lua.debugger.*
 import com.google.gson.Gson
 
@@ -303,7 +309,27 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
                     // 单步调试或其他情况
                     session.positionReached(suspendContext)
                 }
+                
+                // 确保执行点高亮显示
                 session.showExecutionPoint()
+                
+                // 强制刷新编辑器以确保高亮显示
+                if (sourcePosition != null) {
+                    ApplicationManager.getApplication().invokeLater {
+                        val fileEditorManager = FileEditorManager.getInstance(session.project)
+                        val editor = fileEditorManager.openFile(sourcePosition.file, true, true)
+                        if (editor.isNotEmpty()) {
+                            val textEditor = editor[0] as? TextEditor
+                            textEditor?.editor?.let { editorInstance ->
+                                // 确保光标移动到正确位置
+                                val offset = editorInstance.document.getLineStartOffset(sourcePosition.line)
+                                editorInstance.caretModel.moveToOffset(offset)
+                                // 滚动到可见区域
+                                editorInstance.scrollingModel.scrollToCaret(ScrollType.CENTER)
+                            }
+                        }
+                    }
+                }
             }
         } else {
             logger.warn("Received empty stack frames")
