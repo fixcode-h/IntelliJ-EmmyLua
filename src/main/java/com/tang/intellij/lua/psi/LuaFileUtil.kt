@@ -38,7 +38,7 @@ object LuaFileUtil {
 
     private val pluginVirtualDirectory: VirtualFile?
         get() {
-            val descriptor = PluginManagerCore.getPlugin(PluginId.getId("com.tang"))
+            val descriptor = PluginManagerCore.getPlugin(PluginId.getId("com.fixcode.emmylua.enhanced"))
             if (descriptor != null) {
                 return VirtualFileManager.getInstance().findFileByNioPath(descriptor.pluginPath)
             }
