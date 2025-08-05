@@ -35,35 +35,6 @@ class LuaCommentBlock(psi: PsiElement,
                      ctx: LuaFormatContext) : LuaScriptBlock(psi, wrap, alignment, indent, ctx) {
 
     override fun getSpacing(child1: Block?, child2: Block): Spacing? {
-        // 处理注释符号块和内容块之间的间距
-        if (child1 is CommentSymbolBlock && child2 is CommentContentBlock) {
-            return Spacing.createSpacing(1, 1, 0, false, 0)
-        }
-        
-        if (child1 is LuaScriptBlock && child2 is LuaScriptBlock) {
-            val psi1 = child1.psi
-            val psi2 = child2.psi
-
-            // 行尾注释的处理
-            if (psi2 is PsiComment && isLineComment(psi2)) {
-                return if (ctx.luaSettings.SPACE_BEFORE_LINE_COMMENT) {
-                    Spacing.createSpacing(2, Int.MAX_VALUE, 0, false, 0)
-                } else {
-                    Spacing.createSpacing(1, 1, 0, false, 0)
-                }
-            }
-
-            // 块注释的处理
-            if (psi1 is PsiComment && psi2 is PsiComment) {
-                return Spacing.createSpacing(0, 0, 1, true, 1)
-            }
-
-            // 注释后的代码
-            if (psi1 is PsiComment && !isLineComment(psi1)) {
-                return Spacing.createSpacing(0, 0, 1, true, 1)
-            }
-        }
-
         return super.getSpacing(child1, child2)
     }
 
@@ -72,26 +43,13 @@ class LuaCommentBlock(psi: PsiElement,
     }
 
     override fun isLeaf(): Boolean {
-        // 如果有注释内容对齐，需要创建子块
-        return commentContentAlignment == null
+        // 注释块通常是叶子节点，不需要创建子块
+        return true
     }
 
     override fun buildChildren(): List<Block> {
-        if (commentContentAlignment != null && psi is PsiComment && isLineComment(psi)) {
-            // 创建注释符号和内容的子块
-            val blocks = mutableListOf<Block>()
-            
-            // 注释符号块
-            val symbolBlock = CommentSymbolBlock(psi, ctx)
-            blocks.add(symbolBlock)
-            
-            // 注释内容块  
-            val contentBlock = CommentContentBlock(psi, commentContentAlignment, ctx)
-            blocks.add(contentBlock)
-            
-            return blocks
-        }
-        return super.buildChildren()
+        // 简化实现，不创建子块
+        return emptyList()
     }
 
     override fun buildChild(child: PsiElement, indent: Indent?): LuaScriptBlock {
@@ -136,7 +94,14 @@ class LuaCommentBlock(psi: PsiElement,
      * 获取注释内容对齐
      */
     fun getCommentContentAlignment(): Alignment? {
-        return commentContentAlignment
+        if (psi is PsiComment && shouldAlignComment()) {
+            // 确保上下文中有注释内容对齐
+            if (ctx.commentContentAlignment == null) {
+                ctx.commentContentAlignment = Alignment.createAlignment(true)
+            }
+            return ctx.commentContentAlignment
+        }
+        return null
     }
 }
 

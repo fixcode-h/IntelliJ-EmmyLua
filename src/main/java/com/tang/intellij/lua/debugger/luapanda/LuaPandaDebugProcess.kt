@@ -125,7 +125,7 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
         // 获取插件目录下的libpdebug库路径
         val pluginPath = try {
             val pluginDescriptor = PluginManagerCore.getPlugin(
-                PluginId.getId("com.tang")
+                PluginId.getId("com.fixcode.emmylua.enhanced")
             )
             
             if (pluginDescriptor != null) {

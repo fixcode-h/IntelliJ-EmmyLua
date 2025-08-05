@@ -25,5 +25,6 @@ class LuaFormatContext(val settings: CommonCodeStyleSettings, val luaSettings: L
     var eqAlignment: Alignment? = null
     var commentAlignment: Alignment? = null
     var commentContentAlignment: Alignment? = null
+    var currentCommentBlockKey: String? = null
     var lastBlock: LuaScriptBlock? = null
 }
