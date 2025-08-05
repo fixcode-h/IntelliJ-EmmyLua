@@ -32,6 +32,7 @@ import com.intellij.xdebugger.frame.XExecutionStack
 import com.intellij.ui.ColoredTextContainer
 import com.intellij.ui.SimpleTextAttributes
 import com.tang.intellij.lua.debugger.LuaDebuggerEditorsProvider
+import com.tang.intellij.lua.psi.LuaFileUtil
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import javax.swing.Icon
@@ -89,11 +90,43 @@ class LuaPandaStackFrame(
     override fun getSourcePosition(): XSourcePosition? {
         // 优先使用oPath（完整路径），如果没有则使用file字段
         val filePath = stack.oPath ?: stack.file
-        val file = LocalFileSystem.getInstance().findFileByPath(filePath)
         val lineNumber = stack.getLineNumber()
-        return if (file != null && lineNumber > 0) {
+        
+        if (lineNumber <= 0) return null
+        
+        // 首先尝试使用LocalFileSystem查找文件（适用于绝对路径）
+        var file = LocalFileSystem.getInstance().findFileByPath(filePath)
+        
+        // 如果LocalFileSystem找不到文件，尝试使用LuaFileUtil.findFile
+        if (file == null) {
+            val project = debugProcess.session.project
+            file = LuaFileUtil.findFile(project, filePath)
+        }
+        
+        // 如果还是找不到，尝试处理相对路径
+        if (file == null && !filePath.startsWith("/") && !filePath.contains(":")) {
+            val project = debugProcess.session.project
+            val projectBasePath = project.basePath
+            if (projectBasePath != null) {
+                val absolutePath = "$projectBasePath/$filePath"
+                file = LocalFileSystem.getInstance().findFileByPath(absolutePath)
+            }
+        }
+        
+        // 如果仍然找不到，尝试只使用文件名在项目中搜索
+        if (file == null) {
+            val fileName = java.io.File(filePath).name
+            val project = debugProcess.session.project
+            file = LuaFileUtil.findFile(project, fileName.substringBeforeLast('.'))
+        }
+        
+        return if (file != null) {
             XDebuggerUtil.getInstance().createPosition(file, lineNumber - 1) // Convert to 0-based
-        } else null
+        } else {
+            // 如果找不到文件，记录日志以便调试
+            println("LuaPanda: 无法找到源文件: $filePath (oPath: ${stack.oPath}, file: ${stack.file})")
+            null
+        }
     }
 
     override fun computeChildren(node: XCompositeNode) {
