@@ -56,16 +56,13 @@ class ExtractMethodIntention : IntentionAction {
 
         val startOffset = selectionModel.selectionStart
         val endOffset = selectionModel.selectionEnd
-        val startElement = file.findElementAt(startOffset) ?: return
-        val endElement = file.findElementAt(endOffset - 1) ?: return
 
         val operation = LuaExtractMethodOperation(
-            project, editor, file, startElement, endElement, startOffset, endOffset
+            project, editor, file, startOffset, endOffset
         )
 
-        if (operation.isValidSelection()) {
-            operation.performExtraction()
-        }
+        // 直接执行提取操作
+        operation.perform()
     }
 
     override fun startInWriteAction(): Boolean {
