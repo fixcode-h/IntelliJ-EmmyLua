@@ -39,6 +39,7 @@ import com.intellij.xdebugger.evaluation.XDebuggerEditorsProvider
 import com.intellij.xdebugger.frame.XSuspendContext
 import com.intellij.xdebugger.ui.DebuggerColors
 import com.tang.intellij.lua.debugger.*
+import com.tang.intellij.lua.psi.LuaFileUtil
 import com.google.gson.Gson
 
 class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
@@ -266,24 +267,52 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
         }
     }
 
+    private fun createSourcePosition(stack: LuaPandaStack): XSourcePosition? {
+        val filePath = stack.oPath ?: stack.file
+        val lineNumber = stack.getLineNumber()
+        
+        if (lineNumber <= 0) return null
+        
+        // 首先尝试使用LocalFileSystem查找文件（适用于绝对路径）
+        var file = LocalFileSystem.getInstance().findFileByPath(filePath)
+        
+        // 如果LocalFileSystem找不到文件，尝试使用LuaFileUtil.findFile
+        if (file == null) {
+            file = LuaFileUtil.findFile(session.project, filePath)
+        }
+        
+        // 如果还是找不到，尝试处理相对路径
+        if (file == null && !filePath.startsWith("/") && !filePath.contains(":")) {
+            val projectBasePath = session.project.basePath
+            if (projectBasePath != null) {
+                val absolutePath = "$projectBasePath/$filePath"
+                file = LocalFileSystem.getInstance().findFileByPath(absolutePath)
+            }
+        }
+        
+        // 如果仍然找不到，尝试只使用文件名在项目中搜索
+        if (file == null) {
+            val fileName = java.io.File(filePath).name
+            file = LuaFileUtil.findFile(session.project, fileName.substringBeforeLast('.'))
+        }
+        
+        return if (file != null) {
+            XDebuggerUtil.getInstance().createPosition(file, lineNumber - 1) // Convert to 0-based
+        } else {
+            // 如果找不到文件，记录日志以便调试
+            logWithLevel("无法找到源文件: $filePath (oPath: ${stack.oPath}, file: ${stack.file})", LogLevel.DEBUG)
+            null
+        }
+    }
+
     private fun onBreak(stacks: List<LuaPandaStack>) {
         if (stacks.isNotEmpty()) {
             val suspendContext = LuaPandaSuspendContext(this, stacks)
             val topStack = stacks[0]
             
             ApplicationManager.getApplication().invokeLater {
-                // 检查是否是断点命中
-                val sourcePosition = topStack.oPath?.let { path ->
-                    val file = LocalFileSystem.getInstance().findFileByPath(path)
-                    if (file != null) {
-                        XDebuggerUtil.getInstance().createPosition(file, topStack.getLineNumber() - 1)
-                    } else null
-                } ?: topStack.file.let { path ->
-                    val file = LocalFileSystem.getInstance().findFileByPath(path)
-                    if (file != null) {
-                        XDebuggerUtil.getInstance().createPosition(file, topStack.getLineNumber() - 1)
-                    } else null
-                }
+                // 检查是否是断点命中 - 使用改进的文件查找逻辑
+                val sourcePosition = createSourcePosition(topStack)
                 
                 // 设置顶部帧，确保堆栈窗口正确选中当前执行位置
                 val executionStack = suspendContext.activeExecutionStack
