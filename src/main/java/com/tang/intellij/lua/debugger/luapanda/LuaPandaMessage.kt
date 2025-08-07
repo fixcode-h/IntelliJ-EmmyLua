@@ -80,13 +80,13 @@ data class LuaPandaInitInfo(
     val isNeedB64EncodeStr: String = "false",
     val TempFilePath: String,
     val pathCaseSensitivity: String = "true",
-    val osType: String,
+    val OSType: String,  // 修正字段名，与VSCode插件保持一致
     val clibPath: String = "",
     val adapterVersion: String = "1.0.0",
     val autoPathMode: String = "false",
     val distinguishSameNameFile: String = "false",
     val truncatedOPath: String = "",
-    val developmentMode: String = "false"
+    val DevelopmentMode: String = "false"  // 修正字段名，与VSCode插件保持一致
 )
 
 object LuaPandaCommands {

@@ -189,67 +189,141 @@ class LuaPandaTcpClientTransporter(private val host: String, private val port: I
     private var writer: PrintWriter? = null
     private var reader: BufferedReader? = null
     private var isRunning = false
+    private var connectThread: Thread? = null
+    private var isConnected = false
 
     override fun start() {
-        logInfo("TCP客户端连接 $host:$port", LogLevel.CONNECTION) // 连接状态日志
-        Thread {
-            try {
-                socket = Socket(host, port)
-                writer = PrintWriter(socket!!.getOutputStream(), true)
-                reader = BufferedReader(InputStreamReader(socket!!.getInputStream()))
-                isRunning = true
-                
-                notifyConnect(true)
-                
-                // 开始接收消息
-                while (isRunning && !socket!!.isClosed) {
-                    try {
-                        val line = reader?.readLine()
-                        if (line != null) {
-                            try {
-                                // 去掉协议分隔符 |*| 再解析JSON
-                                val jsonString = line.removeSuffix("|*|")
-                                // 将JSON字符串中的换行符转义以避免控制台空行
-                                val displayJson = jsonString.replace("\n", "\\n").replace("\r", "\\r")
-                                logInfo("接收协议: $displayJson", LogLevel.DEBUG) // 调试日志
-                                val message = Gson().fromJson(jsonString, LuaPandaMessage::class.java)
-                                handleReceivedMessage(message)
-                            } catch (e: Exception) {
-                                logError("消息解析失败: ${e.message}", LogLevel.ERROR) // 错误日志
+        logInfo("TCP客户端开始连接 $host:$port", LogLevel.CONNECTION)
+        isRunning = true
+        connectThread = Thread {
+            var retryCount = 0
+            val maxRetries = 30 // 最多重试30次（30秒）
+            
+            while (isRunning && !isConnected && retryCount < maxRetries) {
+                try {
+                    logInfo("尝试连接 $host:$port (第${retryCount + 1}次)", LogLevel.CONNECTION)
+                    
+                    // 创建Socket并设置连接超时
+                    socket = Socket()
+                    socket!!.connect(java.net.InetSocketAddress(host, port), 1000) // 1秒连接超时
+                    socket!!.soTimeout = 5000 // 5秒读取超时
+                    
+                    writer = PrintWriter(socket!!.getOutputStream(), true)
+                    reader = BufferedReader(InputStreamReader(socket!!.getInputStream()))
+                    isConnected = true
+                    
+                    logInfo("TCP客户端连接成功", LogLevel.CONNECTION)
+                    // 添加短暂延迟确保连接稳定，然后通知调试进程
+                    Thread.sleep(100)
+                    notifyConnect(true)
+                    
+                    // 开始接收消息
+                    while (isRunning && !socket!!.isClosed && isConnected) {
+                        try {
+                            val line = reader?.readLine()
+                            if (line != null) {
+                                try {
+                                    // 去掉协议分隔符 |*| 再解析JSON
+                                    val jsonString = line.removeSuffix("|*|")
+                                    // 将JSON字符串中的换行符转义以避免控制台空行
+                                    val displayJson = jsonString.replace("\n", "\\n").replace("\r", "\\r")
+                                    logInfo("接收协议: $displayJson", LogLevel.DEBUG)
+                                    val message = Gson().fromJson(jsonString, LuaPandaMessage::class.java)
+                                    handleReceivedMessage(message)
+                                } catch (e: Exception) {
+                                    logError("消息解析失败: ${e.message}", LogLevel.ERROR)
+                                }
+                            } else {
+                                // readLine返回null表示连接已断开
+                                logInfo("检测到连接断开（readLine返回null）", LogLevel.CONNECTION)
+                                break
                             }
-                        } else {
-                            // readLine返回null表示连接已断开
-                            logInfo("检测到连接断开（readLine返回null）", LogLevel.CONNECTION)
+                        } catch (e: java.net.SocketTimeoutException) {
+                            // 读取超时，继续循环
+                            continue
+                        } catch (e: Exception) {
+                            // 读取异常也表示连接断开
+                            logInfo("检测到连接断开（读取异常）: ${e.message}", LogLevel.CONNECTION)
                             break
                         }
-                    } catch (e: Exception) {
-                        // 读取异常也表示连接断开
-                        logInfo("检测到连接断开（读取异常）: ${e.message}", LogLevel.CONNECTION)
-                        break
+                    }
+                    
+                    // 连接断开后的清理和通知
+                    if (isRunning && isConnected) {
+                        logInfo("连接意外断开，通知调试进程", LogLevel.CONNECTION)
+                        isConnected = false
+                        notifyDisconnect()
+                    }
+                    break // 成功连接后退出重试循环
+                    
+                } catch (e: java.net.ConnectException) {
+                    // 连接被拒绝，等待重试
+                    retryCount++
+                    if (retryCount < maxRetries) {
+                        logInfo("连接被拒绝，1秒后重试 (${retryCount}/${maxRetries})", LogLevel.CONNECTION)
+                        try {
+                            Thread.sleep(1000)
+                        } catch (ie: InterruptedException) {
+                            break
+                        }
+                    } else {
+                        logError("连接失败，已达到最大重试次数", LogLevel.CONNECTION)
+                        notifyConnect(false)
+                    }
+                } catch (e: java.net.SocketTimeoutException) {
+                    // 连接超时，等待重试
+                    retryCount++
+                    if (retryCount < maxRetries) {
+                        logInfo("连接超时，1秒后重试 (${retryCount}/${maxRetries})", LogLevel.CONNECTION)
+                        try {
+                            Thread.sleep(1000)
+                        } catch (ie: InterruptedException) {
+                            break
+                        }
+                    } else {
+                        logError("连接超时，已达到最大重试次数", LogLevel.CONNECTION)
+                        notifyConnect(false)
+                    }
+                } catch (e: Exception) {
+                    logError("TCP客户端连接异常: ${e.message}", LogLevel.CONNECTION)
+                    retryCount++
+                    if (retryCount < maxRetries) {
+                        logInfo("1秒后重试 (${retryCount}/${maxRetries})", LogLevel.CONNECTION)
+                        try {
+                            Thread.sleep(1000)
+                        } catch (ie: InterruptedException) {
+                            break
+                        }
+                    } else {
+                        logError("连接失败，已达到最大重试次数", LogLevel.CONNECTION)
+                        notifyConnect(false)
                     }
                 }
                 
-                // 连接断开后的清理和通知
-                if (isRunning) {
-                    logInfo("连接意外断开，通知调试进程", LogLevel.CONNECTION)
-                    isRunning = false
-                    notifyDisconnect()
+                // 清理当前连接尝试
+                try {
+                    socket?.close()
+                } catch (e: Exception) {
+                    // 忽略关闭异常
                 }
-            } catch (e: Exception) {
-                logError("TCP客户端连接失败: ${e.message}", LogLevel.CONNECTION) // 连接错误
-                notifyConnect(false)
+                socket = null
+                writer = null
+                reader = null
             }
-        }.start()
+        }
+        connectThread?.start()
     }
 
     override fun stop() {
         isRunning = false
+        isConnected = false
         try {
             writer?.close()
             reader?.close()
             socket?.close()
+            connectThread?.interrupt()
         } catch (e: Exception) {
-            logError("TCP客户端关闭异常: ${e.message}", LogLevel.CONNECTION) // 连接状态日志
+            logError("TCP客户端关闭异常: ${e.message}", LogLevel.CONNECTION)
         }
     }
 
