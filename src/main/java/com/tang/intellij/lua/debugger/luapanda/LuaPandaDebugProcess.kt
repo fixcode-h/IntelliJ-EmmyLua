@@ -40,7 +40,9 @@ import com.intellij.xdebugger.frame.XSuspendContext
 import com.intellij.xdebugger.ui.DebuggerColors
 import com.tang.intellij.lua.debugger.*
 import com.tang.intellij.lua.psi.LuaFileUtil
+import com.tang.intellij.lua.LuaBundle
 import com.google.gson.Gson
+import java.util.concurrent.atomic.AtomicBoolean
 
 class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
     private val configuration = session.runProfile as LuaPandaDebugConfiguration
@@ -49,6 +51,8 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
     private var idCounter = 0
     internal var transporter: LuaPandaTransporter? = null
     private val logger = Logger.getInstance(LuaPandaDebugProcess::class.java)
+    private var isInitialized = false
+    private val isClientMode = configuration.transportType == LuaPandaTransportType.TCP_CLIENT
 
     companion object {
         private val ID = Key.create<Int>("luapanda.breakpoint")
@@ -90,9 +94,16 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
         }
         logWithLevel("设置传输器: $transportInfo", LogLevel.DEBUG)
         
+        startTransporter()
+    }
+    
+    private fun startTransporter() {
+        // 停止现有传输器
+        transporter?.stop()
+        
         transporter = when (configuration.transportType) {
             LuaPandaTransportType.TCP_CLIENT -> {
-                LuaPandaTcpClientTransporter(configuration.host, configuration.port, this)
+                LuaPandaTcpClientTransporter(configuration.host, configuration.port, configuration.autoReconnect, this)
             }
             LuaPandaTransportType.TCP_SERVER -> {
                 LuaPandaTcpServerTransporter(configuration.port, this)
@@ -129,6 +140,81 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
     }
 
     private fun onConnect() {
+        logWithLevel("连接建立，等待连接稳定后发送初始化消息...", LogLevel.CONNECTION)
+        
+        // 延迟发送初始化消息，确保连接稳定
+        ApplicationManager.getApplication().executeOnPooledThread {
+            try {
+                Thread.sleep(1000) // 增加延迟到1000ms，给Lua端更多准备时间
+                ApplicationManager.getApplication().invokeLater {
+                    if (transporter != null && !session.isStopped) {
+                        sendInitializationMessageWithRetry(1)
+                    }
+                }
+            } catch (e: InterruptedException) {
+                logWithLevel("初始化消息发送被中断", LogLevel.DEBUG)
+            }
+        }
+    }
+    
+    private fun sendInitializationMessageWithRetry(attempt: Int) {
+        if (attempt > 3) {
+            logWithLevel("初始化消息发送失败，已达到最大重试次数", LogLevel.ERROR, contentType = ConsoleViewContentType.ERROR_OUTPUT)
+            return
+        }
+        
+        logWithLevel("发送初始化消息 (尝试 $attempt/3)...", LogLevel.CONNECTION)
+        
+        try {
+            sendInitializationMessage()
+        } catch (e: Exception) {
+            logWithLevel("初始化消息发送失败: ${e.javaClass.simpleName} - ${e.message}, 将在1秒后重试", LogLevel.DEBUG)
+            
+            // 如果是连接相关的异常，记录更详细的信息
+            when (e) {
+                is java.net.SocketException -> {
+                    logWithLevel("Socket异常，可能是连接已断开: ${e.message}", LogLevel.ERROR, contentType = ConsoleViewContentType.ERROR_OUTPUT)
+                }
+                is java.io.IOException -> {
+                    logWithLevel("IO异常，可能是网络问题: ${e.message}", LogLevel.ERROR, contentType = ConsoleViewContentType.ERROR_OUTPUT)
+                }
+                else -> {
+                    logWithLevel("未知异常: ${e.message}", LogLevel.DEBUG)
+                }
+            }
+            
+            // 如果发送失败，延迟后重试
+            ApplicationManager.getApplication().executeOnPooledThread {
+                try {
+                    Thread.sleep(1000)
+                    ApplicationManager.getApplication().invokeLater {
+                        if (transporter != null && !session.isStopped) {
+                            sendInitializationMessageWithRetry(attempt + 1)
+                        }
+                    }
+                } catch (e: InterruptedException) {
+                    logWithLevel("重试被中断", LogLevel.DEBUG)
+                }
+            }
+        }
+    }
+    
+    private fun sendInitializationMessage() {
+        // 检查连接状态
+        if (transporter == null || session.isStopped) {
+            logWithLevel("传输器不可用或会话已停止，跳过初始化消息发送", LogLevel.DEBUG)
+            return
+        }
+        
+        // 额外验证连接状态，确保连接真正稳定
+        try {
+            // 给连接一个小的额外延迟，确保Lua端完全准备好
+            Thread.sleep(200)
+        } catch (e: InterruptedException) {
+            logWithLevel("连接验证被中断", LogLevel.DEBUG)
+            return
+        }
+        
         // 获取插件目录下的libpdebug库路径
         val pluginPath = try {
             val pluginDescriptor = PluginManagerCore.getPlugin(
@@ -151,65 +237,101 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
             ""
         }
         
-        // 发送初始化消息，包含完整的初始化参数
+        // 发送初始化消息，包含完整的初始化参数（字段名与VSCode插件保持一致）
         val initInfo = LuaPandaInitInfo(
             stopOnEntry = configuration.stopOnEntry.toString(),
             useCHook = configuration.useCHook.toString(),
             logLevel = configuration.logLevel.toString(),
             luaFileExtension = "lua",
             cwd = session.project.basePath ?: System.getProperty("user.dir"),
-            isNeedB64EncodeStr = "false",
+            isNeedB64EncodeStr = "true",
             TempFilePath = session.project.basePath ?: System.getProperty("user.dir"),
             pathCaseSensitivity = "true",
-            osType = System.getProperty("os.name"),
+            OSType = System.getProperty("os.name"),  // 修正字段名
             clibPath = pluginPath,
             adapterVersion = "1.0.0",
             autoPathMode = "false",
             distinguishSameNameFile = "false",
             truncatedOPath = "",
-            developmentMode = "false"
+            DevelopmentMode = "false"  // 修正字段名
         )
         
-        val initMessage = LuaPandaMessage(LuaPandaCommands.INIT_SUCCESS, Gson().toJsonTree(initInfo).asJsonObject, "")
+        logWithLevel("发送初始化消息...", LogLevel.CONNECTION)
         
-        // 使用commandToDebugger发送initSuccess消息并处理回调
-        transporter?.commandToDebugger(LuaPandaCommands.INIT_SUCCESS, initInfo, { response ->
-            // 处理initSuccess的回调响应
-            response.getInfoAsObject()?.let { info ->
-                val useHookLib = info.get("UseHookLib")?.asString ?: "0"
-                val useLoadstring = info.get("UseLoadstring")?.asString ?: "0"
-                val isNeedB64EncodeStr = info.get("isNeedB64EncodeStr")?.asString ?: "false"
-                
-                logWithLevel("初始化完成 - HookLib:$useHookLib, Loadstring:$useLoadstring, B64:$isNeedB64EncodeStr", LogLevel.DEBUG)
-                logger.info("LuaPanda initialized - UseHookLib: $useHookLib, UseLoadstring: $useLoadstring, B64Encode: $isNeedB64EncodeStr")
-            }
-            
-            // 发送现有断点
-            val breakpoints = XDebuggerManager.getInstance(session.project)
-                .breakpointManager
-                .getBreakpoints(LuaLineBreakpointType::class.java)
-            if (breakpoints.isNotEmpty()) {
-                logWithLevel("发送现有断点: ${breakpoints.size}个", LogLevel.DEBUG)
-                breakpoints.forEach { breakpoint ->
-                    breakpoint.sourcePosition?.let { position ->
-                        registerBreakpoint(position, breakpoint)
+        try {
+            // 使用commandToDebugger发送initSuccess消息并处理回调
+            transporter?.commandToDebugger(LuaPandaCommands.INIT_SUCCESS, initInfo, { response ->
+                // 处理initSuccess的回调响应
+                response.getInfoAsObject()?.let { info ->
+                    val useHookLib = info.get("UseHookLib")?.asString ?: "0"
+                    val useLoadstring = info.get("UseLoadstring")?.asString ?: "0"
+                    val isNeedB64EncodeStr = info.get("isNeedB64EncodeStr")?.asString ?: "false"
+                    
+                    logWithLevel("初始化完成 - HookLib:$useHookLib, Loadstring:$useLoadstring, B64:$isNeedB64EncodeStr", LogLevel.DEBUG)
+                    logger.info("LuaPanda initialized - UseHookLib: $useHookLib, UseLoadstring: $useLoadstring, B64Encode: $isNeedB64EncodeStr")
+                    
+                    // 标记初始化完成
+                    isInitialized = true
+                    
+                    // 初始化成功后再发送现有断点
+                    val breakpoints = XDebuggerManager.getInstance(session.project)
+                        .breakpointManager
+                        .getBreakpoints(LuaLineBreakpointType::class.java)
+                    if (breakpoints.isNotEmpty()) {
+                        logWithLevel("发送现有断点: ${breakpoints.size}个", LogLevel.DEBUG)
+                        breakpoints.forEach { breakpoint ->
+                            breakpoint.sourcePosition?.let { position ->
+                                registerBreakpoint(position, breakpoint)
+                            }
+                        }
+                    } else {
+                        logWithLevel("没有现有断点需要发送", LogLevel.DEBUG)
                     }
                 }
-            }
-        })
+            })
+            
+            logWithLevel("初始化消息已发送，等待Lua端响应...", LogLevel.CONNECTION)
+            
+        } catch (e: Exception) {
+            logWithLevel("发送初始化消息时出错: ${e.message}", LogLevel.ERROR, contentType = ConsoleViewContentType.ERROR_OUTPUT)
+            throw e // 重新抛出异常，让重试机制处理
+        }
     }
 
     private fun onDisconnect() {
-        logWithLevel("连接断开，停止调试会话", LogLevel.CONNECTION)
+        logWithLevel("连接断开", LogLevel.CONNECTION)
+        isInitialized = false
         
-        // 确保在UI线程中停止调试会话
+        // TCP 服务器模式下会自动重连，所以不停止调试会话
+        // 只记录断开连接的日志，等待重新连接
+        logWithLevel("客户端断开连接，等待重新连接...", LogLevel.CONNECTION)
+    }
+    
+    private fun stopDebugSessionWithoutStopRun() {
         ApplicationManager.getApplication().invokeLater {
             try {
-                // 先停止传输器
+                // 停止传输器
                 transporter?.stop()
                 transporter = null
                 
-                // 然后停止调试会话
+                // 停止调试会话
+                session?.stop()
+                logWithLevel("调试会话已停止", LogLevel.CONNECTION)
+            } catch (e: Exception) {
+                logWithLevel("停止调试会话时出错: ${e.message}", LogLevel.ERROR, contentType = ConsoleViewContentType.ERROR_OUTPUT)
+                logger.error("Error stopping debug session", e)
+            }
+        }
+    }
+    
+    private fun stopDebugSession() {
+        ApplicationManager.getApplication().invokeLater {
+            try {
+                // 停止传输器
+                transporter?.stop()
+                transporter = null
+                
+                // 停止调试会话
                 session?.stop()
                 logWithLevel("调试会话已停止", LogLevel.CONNECTION)
             } catch (e: Exception) {
@@ -386,8 +508,13 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
         
         breakpoints[newId] = luaPandaBreakpoint
         
-        // 断点设置是状态通知协议，不需要回调
-        transporter?.commandToDebugger(LuaPandaCommands.SET_BREAKPOINT, luaPandaBreakpoint)
+        // 只有在初始化完成后才发送断点
+        if (isInitialized) {
+            logWithLevel("发送断点到调试器: ${sourcePosition.file.name}:${breakpoint.line + 1}", LogLevel.DEBUG)
+            transporter?.commandToDebugger(LuaPandaCommands.SET_BREAKPOINT, luaPandaBreakpoint)
+        } else {
+            logWithLevel("调试器未初始化，断点将在初始化完成后发送", LogLevel.DEBUG)
+        }
     }
 
     override fun unregisterBreakpoint(sourcePosition: XSourcePosition, breakpoint: XLineBreakpoint<*>) {
@@ -438,20 +565,34 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
         // 发送STOP_RUN命令并等待Lua端回调确认
         if (transporter != null) {
             try {
+                // 标记停止确认状态
+                val stopConfirmed = AtomicBoolean(false)
+                
                 // 使用带回调的commandToDebugger，等待Lua端确认
                 transporter?.commandToDebugger(LuaPandaCommands.STOP_RUN, null, { response ->
                     logWithLevel("收到停止确认，关闭连接", LogLevel.CONNECTION)
+                    stopConfirmed.set(true)
                     // 收到Lua端回调后再停止传输器并清理资源
                     transporter?.stop()
                     transporter = null
                 })
-                // 设置超时机制，如果3秒内没有收到回调，强制停止
+                
+                // 设置超时机制，如果指定时间内没有收到回调，强制停止
                 Thread {
-                    Thread.sleep(3000)
-                    if (transporter != null) {
-                        logWithLevel("停止确认超时，强制关闭连接", LogLevel.CONNECTION)
-                        transporter?.stop()
-                        transporter = null
+                    try {
+                        val timeoutMs = (configuration.stopConfirmTimeout * 1000).toLong()
+                        logWithLevel("等待停止确认，超时时间: ${configuration.stopConfirmTimeout}秒", LogLevel.CONNECTION)
+                        Thread.sleep(timeoutMs)
+                        
+                        // 检查是否已经收到确认
+                        if (!stopConfirmed.get() && transporter != null) {
+                            logWithLevel("停止确认超时，强制关闭连接", LogLevel.CONNECTION)
+                            transporter?.stop()
+                            transporter = null
+                        }
+                    } catch (e: InterruptedException) {
+                        logWithLevel("停止确认等待被中断", LogLevel.DEBUG)
+                        Thread.currentThread().interrupt()
                     }
                 }.start()
                 

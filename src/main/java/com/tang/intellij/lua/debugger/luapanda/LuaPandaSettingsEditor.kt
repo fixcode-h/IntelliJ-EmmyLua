@@ -36,7 +36,9 @@ class LuaPandaSettingsEditor : SettingsEditor<LuaPandaDebugConfiguration>() {
     private val portSpinner = JSpinner(SpinnerNumberModel(8818, 1, 65535, 1))
     private val stopOnEntryCheckBox = JBCheckBox(LuaBundle.message("debugger.stop_on_entry"))
     private val useCHookCheckBox = JBCheckBox(LuaBundle.message("debugger.use_c_hook"))
+    private val autoReconnectCheckBox = JBCheckBox(LuaBundle.message("debugger.auto_reconnect"))
     private val logLevelSpinner = JSpinner(SpinnerNumberModel(1, 0, 3, 1))
+    private val stopConfirmTimeoutSpinner = JSpinner(SpinnerNumberModel(3, 1, 60, 1))
 
     override fun createEditor(): JComponent {
         val panel = JPanel(BorderLayout())
@@ -47,7 +49,9 @@ class LuaPandaSettingsEditor : SettingsEditor<LuaPandaDebugConfiguration>() {
             .addLabeledComponent(JBLabel(LuaBundle.message("debugger.port")), portSpinner)
             .addComponent(stopOnEntryCheckBox)
             .addComponent(useCHookCheckBox)
+            .addComponent(autoReconnectCheckBox)
             .addLabeledComponent(JBLabel(LuaBundle.message("debugger.log_level")), logLevelSpinner)
+            .addLabeledComponent(JBLabel(LuaBundle.message("debugger.stop_confirm_timeout")), stopConfirmTimeoutSpinner)
         
         panel.add(formBuilder.panel, BorderLayout.NORTH)
         
@@ -66,7 +70,9 @@ class LuaPandaSettingsEditor : SettingsEditor<LuaPandaDebugConfiguration>() {
         portSpinner.value = configuration.port
         stopOnEntryCheckBox.isSelected = configuration.stopOnEntry
         useCHookCheckBox.isSelected = configuration.useCHook
+        autoReconnectCheckBox.isSelected = configuration.autoReconnect
         logLevelSpinner.value = configuration.logLevel
+        stopConfirmTimeoutSpinner.value = configuration.stopConfirmTimeout
         
         // 更新主机字段状态
         val isClient = configuration.transportType == LuaPandaTransportType.TCP_CLIENT
@@ -79,6 +85,8 @@ class LuaPandaSettingsEditor : SettingsEditor<LuaPandaDebugConfiguration>() {
         configuration.port = portSpinner.value as Int
         configuration.stopOnEntry = stopOnEntryCheckBox.isSelected
         configuration.useCHook = useCHookCheckBox.isSelected
+        configuration.autoReconnect = autoReconnectCheckBox.isSelected
         configuration.logLevel = logLevelSpinner.value as Int
+        configuration.stopConfirmTimeout = stopConfirmTimeoutSpinner.value as Int
     }
 }
