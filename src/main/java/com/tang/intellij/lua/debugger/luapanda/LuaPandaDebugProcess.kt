@@ -359,15 +359,10 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
                 // 优先从stack字段获取堆栈信息（新格式），如果没有则从info字段获取（旧格式）
                 val stacks = if (message.stack != null) {
                     message.stack
-                } else if (message.getInfoAsObject() !null) {仍
-运行              if (!transporter.isRunning()) {
-                      Gson().fmes已停止运行ge.getInfoAsObject(), Array<LuaP    return falseandaStack>::cl}
-            
-            asst(连接状态
-             if (!transsorter.esCon ected()) {
-                logWithLevel("传输器显示未连接状态", Lo{Level.DEBUG)
-                return false
-            }          logWithLevel("警告：消息中没有找到堆栈信息", LogLevel.DEBUG, contentType = ConsoleViewContentType.ERROR_OUTPUT)
+                } else if (message.getInfoAsObject() != null) {
+                    Gson().fromJson(message.getInfoAsObject(), Array<LuaPandaStack>::class.java).toList()
+                } else {
+                    logWithLevel("警告：消息中没有找到堆栈信息", LogLevel.DEBUG, contentType = ConsoleViewContentType.ERROR_OUTPUT)
                     emptyList()
                 }
                 
