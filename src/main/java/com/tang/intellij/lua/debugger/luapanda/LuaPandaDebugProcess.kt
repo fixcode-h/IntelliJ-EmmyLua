@@ -40,6 +40,7 @@ import com.intellij.xdebugger.frame.XSuspendContext
 import com.intellij.xdebugger.ui.DebuggerColors
 import com.tang.intellij.lua.debugger.*
 import com.tang.intellij.lua.psi.LuaFileUtil
+import com.tang.intellij.lua.LuaBundle
 import com.google.gson.Gson
 
 class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
@@ -445,9 +446,9 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
                     transporter?.stop()
                     transporter = null
                 })
-                // 设置超时机制，如果3秒内没有收到回调，强制停止
+                // 设置超时机制，如果指定时间内没有收到回调，强制停止
                 Thread {
-                    Thread.sleep(3000)
+                    Thread.sleep((configuration.stopConfirmTimeout * 1000).toLong())
                     if (transporter != null) {
                         logWithLevel("停止确认超时，强制关闭连接", LogLevel.CONNECTION)
                         transporter?.stop()

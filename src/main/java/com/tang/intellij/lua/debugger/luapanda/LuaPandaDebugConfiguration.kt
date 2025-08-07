@@ -43,6 +43,7 @@ class LuaPandaDebugConfiguration(
     var stopOnEntry: Boolean = false
     var useCHook: Boolean = true
     var logLevel: Int = 1
+    var stopConfirmTimeout: Int = 1
 
     init {
         this.name = name
@@ -82,6 +83,7 @@ class LuaPandaDebugConfiguration(
         stopOnEntry = element.getAttributeValue("stopOnEntry")?.toBoolean() ?: false
         useCHook = element.getAttributeValue("useCHook")?.toBoolean() ?: true
         logLevel = element.getAttributeValue("logLevel")?.toIntOrNull() ?: 1
+        stopConfirmTimeout = element.getAttributeValue("stopConfirmTimeout")?.toIntOrNull() ?: 1
     }
 
     @Throws(WriteExternalException::class)
@@ -93,5 +95,6 @@ class LuaPandaDebugConfiguration(
         element.setAttribute("stopOnEntry", stopOnEntry.toString())
         element.setAttribute("useCHook", useCHook.toString())
         element.setAttribute("logLevel", logLevel.toString())
+        element.setAttribute("stopConfirmTimeout", stopConfirmTimeout.toString())
     }
 }
