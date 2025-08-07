@@ -16,7 +16,6 @@
 
 package com.tang.intellij.lua.debugger
 
-import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.editor.Document
 import com.intellij.openapi.project.IndexNotReadyException
 import com.intellij.openapi.project.Project
@@ -35,16 +34,9 @@ import com.tang.intellij.lua.psi.*
 abstract class LuaDebuggerEvaluator : XDebuggerEvaluator() {
     override fun getExpressionRangeAtOffset(project: Project, document: Document, offset: Int, sideEffectsAllowed: Boolean): TextRange? {
         var currentRange: TextRange? = null
-        
-        val runnable = lambda@ {
+        PsiDocumentManager.getInstance(project).commitAndRunReadAction {
             try {
-                // 确保文档已提交
-                val psiDocumentManager = PsiDocumentManager.getInstance(project)
-                if (psiDocumentManager.isUncommited(document)) {
-                    psiDocumentManager.commitDocument(document)
-                }
-                
-                val file = psiDocumentManager.getPsiFile(document) ?: return@lambda
+                val file = PsiDocumentManager.getInstance(project).getPsiFile(document) ?: return@commitAndRunReadAction
                 if (currentRange == null) {
                     val ele = file.findElementAt(offset)
                     if (ele != null && ele.node.elementType == LuaTypes.ID) {
@@ -70,16 +62,6 @@ abstract class LuaDebuggerEvaluator : XDebuggerEvaluator() {
             } catch (ignored: IndexNotReadyException) {
             }
         }
-        
-        // 检查是否已经在ReadAction中
-        if (ApplicationManager.getApplication().isReadAccessAllowed) {
-            // 已经在ReadAction中，直接执行
-            runnable()
-        } else {
-            // 不在ReadAction中，使用ReadAction包装
-            ApplicationManager.getApplication().runReadAction(runnable)
-        }
-        
         return currentRange
     }
 
