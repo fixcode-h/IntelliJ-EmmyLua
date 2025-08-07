@@ -417,7 +417,7 @@ class LuaPandaTcpServerTransporter(private val port: Int, logger: DebugLogger? =
                 // 重连循环：服务器会持续等待客户端连接
                 while (isRunning) {
                     try {
-                        logInfo("等待客户端连接...", LogLevel.CONNECTION)
+                        logInfo("等待客户端连接...", LogLevel.DEBUG)
                         clientSocket = serverSocket!!.accept()
                         logInfo("客户端已连接: ${clientSocket!!.remoteSocketAddress}", LogLevel.CONNECTION)
                         
@@ -506,7 +506,7 @@ class LuaPandaTcpServerTransporter(private val port: Int, logger: DebugLogger? =
     }
 
     override fun stop() {
-        logInfo("TCP服务器开始停止流程", LogLevel.CONNECTION)
+        logInfo("TCP服务器开始停止流程", LogLevel.DEBUG)
         
         // 1. 首先标记停止状态
         isRunning = false
@@ -521,28 +521,28 @@ class LuaPandaTcpServerTransporter(private val port: Int, logger: DebugLogger? =
         // 3. 按顺序关闭资源：writer -> reader -> clientSocket -> serverSocket
         try {
             writer?.close()
-            logInfo("Writer已关闭", LogLevel.CONNECTION)
+            logInfo("Writer已关闭", LogLevel.DEBUG)
         } catch (e: Exception) {
             logInfo("关闭Writer异常: ${e.message}", LogLevel.CONNECTION)
         }
         
         try {
             reader?.close()
-            logInfo("Reader已关闭", LogLevel.CONNECTION)
+            logInfo("Reader已关闭", LogLevel.DEBUG)
         } catch (e: Exception) {
             logInfo("关闭Reader异常: ${e.message}", LogLevel.CONNECTION)
         }
         
         try {
             clientSocket?.close()
-            logInfo("客户端Socket已关闭", LogLevel.CONNECTION)
+            logInfo("客户端Socket已关闭", LogLevel.DEBUG)
         } catch (e: Exception) {
             logInfo("关闭客户端Socket异常: ${e.message}", LogLevel.CONNECTION)
         }
         
         try {
             serverSocket?.close()
-            logInfo("服务器Socket已关闭", LogLevel.CONNECTION)
+            logInfo("服务器Socket已关闭", LogLevel.DEBUG)
         } catch (e: Exception) {
             logInfo("关闭服务器Socket异常: ${e.message}", LogLevel.CONNECTION)
         }
