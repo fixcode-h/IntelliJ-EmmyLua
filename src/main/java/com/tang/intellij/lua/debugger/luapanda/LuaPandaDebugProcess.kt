@@ -302,36 +302,24 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
         logWithLevel("连接断开", LogLevel.CONNECTION)
         isInitialized = false
         
+        // TCP 服务器模式下会自动重连，所以不停止调试会话
+        // 只记录断开连接的日志，等待重新连接
+        logWithLevel("客户端断开连接，等待重新连接...", LogLevel.CONNECTION)
+    }
+    
+    private fun stopDebugSessionWithoutStopRun() {
         ApplicationManager.getApplication().invokeLater {
             try {
-                // 停止当前传输器
+                // 停止传输器
                 transporter?.stop()
                 transporter = null
                 
-                // 检查是否启用了自动重连
-                if (configuration.autoReconnect && !session.isStopped) {
-                    logWithLevel("自动重连已启用，重新启动传输器等待Lua程序重连...", LogLevel.CONNECTION)
-                    
-                    // 重新启动传输器
-                    try {
-                        startTransporter()
-                        logWithLevel("传输器重启成功，等待Lua程序重连...", LogLevel.CONNECTION)
-                    } catch (e: Exception) {
-                        logWithLevel("重启传输器失败: ${e.message}", LogLevel.ERROR, contentType = ConsoleViewContentType.ERROR_OUTPUT)
-                        // 如果无法重启传输器，则停止调试会话
-                        stopDebugSession()
-                    }
-                } else {
-                    if (!configuration.autoReconnect) {
-                        logWithLevel("自动重连已禁用，停止调试会话", LogLevel.CONNECTION)
-                    } else {
-                        logWithLevel("调试会话已停止，无需重连", LogLevel.CONNECTION)
-                    }
-                    stopDebugSession()
-                }
+                // 停止调试会话
+                session?.stop()
+                logWithLevel("调试会话已停止", LogLevel.CONNECTION)
             } catch (e: Exception) {
-                logWithLevel("断开连接处理时出错: ${e.message}", LogLevel.ERROR, contentType = ConsoleViewContentType.ERROR_OUTPUT)
-                stopDebugSession()
+                logWithLevel("停止调试会话时出错: ${e.message}", LogLevel.ERROR, contentType = ConsoleViewContentType.ERROR_OUTPUT)
+                logger.error("Error stopping debug session", e)
             }
         }
     }
