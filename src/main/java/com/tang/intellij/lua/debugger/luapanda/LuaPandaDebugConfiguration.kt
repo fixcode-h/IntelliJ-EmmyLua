@@ -43,7 +43,7 @@ class LuaPandaDebugConfiguration(
     var stopOnEntry: Boolean = false
     var useCHook: Boolean = true
     var logLevel: Int = 1
-    var stopConfirmTimeout: Int = 1
+    var stopConfirmTimeout: Int = 3
     var autoReconnect: Boolean = true  // 自动重连配置，默认开启
 
     init {
@@ -84,7 +84,7 @@ class LuaPandaDebugConfiguration(
         stopOnEntry = element.getAttributeValue("stopOnEntry")?.toBoolean() ?: false
         useCHook = element.getAttributeValue("useCHook")?.toBoolean() ?: true
         logLevel = element.getAttributeValue("logLevel")?.toIntOrNull() ?: 1
-        stopConfirmTimeout = element.getAttributeValue("stopConfirmTimeout")?.toIntOrNull() ?: 1
+        stopConfirmTimeout = element.getAttributeValue("stopConfirmTimeout")?.toIntOrNull() ?: 3
         autoReconnect = element.getAttributeValue("autoReconnect")?.toBoolean() ?: true
     }
 

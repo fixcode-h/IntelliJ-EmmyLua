@@ -42,6 +42,7 @@ import com.tang.intellij.lua.debugger.*
 import com.tang.intellij.lua.psi.LuaFileUtil
 import com.tang.intellij.lua.LuaBundle
 import com.google.gson.Gson
+import java.util.concurrent.atomic.AtomicBoolean
 
 class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
     private val configuration = session.runProfile as LuaPandaDebugConfiguration
@@ -102,7 +103,7 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
         
         transporter = when (configuration.transportType) {
             LuaPandaTransportType.TCP_CLIENT -> {
-                LuaPandaTcpClientTransporter(configuration.host, configuration.port, this)
+                LuaPandaTcpClientTransporter(configuration.host, configuration.port, configuration.autoReconnect, this)
             }
             LuaPandaTransportType.TCP_SERVER -> {
                 LuaPandaTcpServerTransporter(configuration.port, this)
@@ -144,7 +145,7 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
         // 延迟发送初始化消息，确保连接稳定
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
-                Thread.sleep(500) // 增加延迟到500ms，给Lua端更多准备时间
+                Thread.sleep(1000) // 增加延迟到1000ms，给Lua端更多准备时间
                 ApplicationManager.getApplication().invokeLater {
                     if (transporter != null && !session.isStopped) {
                         sendInitializationMessageWithRetry(1)
@@ -167,7 +168,20 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
         try {
             sendInitializationMessage()
         } catch (e: Exception) {
-            logWithLevel("初始化消息发送失败: ${e.message}, 将在1秒后重试", LogLevel.DEBUG)
+            logWithLevel("初始化消息发送失败: ${e.javaClass.simpleName} - ${e.message}, 将在1秒后重试", LogLevel.DEBUG)
+            
+            // 如果是连接相关的异常，记录更详细的信息
+            when (e) {
+                is java.net.SocketException -> {
+                    logWithLevel("Socket异常，可能是连接已断开: ${e.message}", LogLevel.ERROR, contentType = ConsoleViewContentType.ERROR_OUTPUT)
+                }
+                is java.io.IOException -> {
+                    logWithLevel("IO异常，可能是网络问题: ${e.message}", LogLevel.ERROR, contentType = ConsoleViewContentType.ERROR_OUTPUT)
+                }
+                else -> {
+                    logWithLevel("未知异常: ${e.message}", LogLevel.DEBUG)
+                }
+            }
             
             // 如果发送失败，延迟后重试
             ApplicationManager.getApplication().executeOnPooledThread {
@@ -189,6 +203,15 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
         // 检查连接状态
         if (transporter == null || session.isStopped) {
             logWithLevel("传输器不可用或会话已停止，跳过初始化消息发送", LogLevel.DEBUG)
+            return
+        }
+        
+        // 额外验证连接状态，确保连接真正稳定
+        try {
+            // 给连接一个小的额外延迟，确保Lua端完全准备好
+            Thread.sleep(200)
+        } catch (e: InterruptedException) {
+            logWithLevel("连接验证被中断", LogLevel.DEBUG)
             return
         }
         
@@ -336,10 +359,15 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
                 // 优先从stack字段获取堆栈信息（新格式），如果没有则从info字段获取（旧格式）
                 val stacks = if (message.stack != null) {
                     message.stack
-                } else if (message.getInfoAsObject() != null) {
-                    Gson().fromJson(message.getInfoAsObject(), Array<LuaPandaStack>::class.java).toList()
-                } else {
-                    logWithLevel("警告：消息中没有找到堆栈信息", LogLevel.DEBUG, contentType = ConsoleViewContentType.ERROR_OUTPUT)
+                } else if (message.getInfoAsObject() !null) {仍
+运行              if (!transporter.isRunning()) {
+                      Gson().fmes已停止运行ge.getInfoAsObject(), Array<LuaP    return falseandaStack>::cl}
+            
+            asst(连接状态
+             if (!transsorter.esCon ected()) {
+                logWithLevel("传输器显示未连接状态", Lo{Level.DEBUG)
+                return false
+            }          logWithLevel("警告：消息中没有找到堆栈信息", LogLevel.DEBUG, contentType = ConsoleViewContentType.ERROR_OUTPUT)
                     emptyList()
                 }
                 
@@ -554,20 +582,34 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
         // 发送STOP_RUN命令并等待Lua端回调确认
         if (transporter != null) {
             try {
+                // 标记停止确认状态
+                val stopConfirmed = AtomicBoolean(false)
+                
                 // 使用带回调的commandToDebugger，等待Lua端确认
                 transporter?.commandToDebugger(LuaPandaCommands.STOP_RUN, null, { response ->
                     logWithLevel("收到停止确认，关闭连接", LogLevel.CONNECTION)
+                    stopConfirmed.set(true)
                     // 收到Lua端回调后再停止传输器并清理资源
                     transporter?.stop()
                     transporter = null
                 })
+                
                 // 设置超时机制，如果指定时间内没有收到回调，强制停止
                 Thread {
-                    Thread.sleep((configuration.stopConfirmTimeout * 1000).toLong())
-                    if (transporter != null) {
-                        logWithLevel("停止确认超时，强制关闭连接", LogLevel.CONNECTION)
-                        transporter?.stop()
-                        transporter = null
+                    try {
+                        val timeoutMs = (configuration.stopConfirmTimeout * 1000).toLong()
+                        logWithLevel("等待停止确认，超时时间: ${configuration.stopConfirmTimeout}秒", LogLevel.CONNECTION)
+                        Thread.sleep(timeoutMs)
+                        
+                        // 检查是否已经收到确认
+                        if (!stopConfirmed.get() && transporter != null) {
+                            logWithLevel("停止确认超时，强制关闭连接", LogLevel.CONNECTION)
+                            transporter?.stop()
+                            transporter = null
+                        }
+                    } catch (e: InterruptedException) {
+                        logWithLevel("停止确认等待被中断", LogLevel.DEBUG)
+                        Thread.currentThread().interrupt()
                     }
                 }.start()
                 

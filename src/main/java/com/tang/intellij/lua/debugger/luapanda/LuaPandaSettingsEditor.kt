@@ -38,7 +38,7 @@ class LuaPandaSettingsEditor : SettingsEditor<LuaPandaDebugConfiguration>() {
     private val useCHookCheckBox = JBCheckBox(LuaBundle.message("debugger.use_c_hook"))
     private val autoReconnectCheckBox = JBCheckBox(LuaBundle.message("debugger.auto_reconnect"))
     private val logLevelSpinner = JSpinner(SpinnerNumberModel(1, 0, 3, 1))
-    private val stopConfirmTimeoutSpinner = JSpinner(SpinnerNumberModel(1, 1, 60, 1))
+    private val stopConfirmTimeoutSpinner = JSpinner(SpinnerNumberModel(3, 1, 60, 1))
 
     override fun createEditor(): JComponent {
         val panel = JPanel(BorderLayout())
