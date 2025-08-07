@@ -140,7 +140,7 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
     }
 
     private fun onConnect() {
-        logWithLevel("连接建立，等待连接稳定后发送初始化消息...", LogLevel.CONNECTION)
+        logWithLevel("连接建立，等待连接稳定后发送初始化消息...", LogLevel.DEBUG)
         
         // 延迟发送初始化消息，确保连接稳定
         ApplicationManager.getApplication().executeOnPooledThread {
@@ -163,7 +163,7 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
             return
         }
         
-        logWithLevel("发送初始化消息 (尝试 $attempt/3)...", LogLevel.CONNECTION)
+        logWithLevel("发送初始化消息 (尝试 $attempt/3)...", LogLevel.DEBUG)
         
         try {
             sendInitializationMessage()
@@ -256,12 +256,14 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
             DevelopmentMode = "false"  // 修正字段名
         )
         
-        logWithLevel("发送初始化消息...", LogLevel.CONNECTION)
+        logWithLevel("发送初始化消息...", LogLevel.DEBUG)
         
         try {
             // 使用commandToDebugger发送initSuccess消息并处理回调
             transporter?.commandToDebugger(LuaPandaCommands.INIT_SUCCESS, initInfo, { response ->
                 // 处理initSuccess的回调响应
+                logWithLevel("收到Lua端初始化响应，调试器初始化成功！", LogLevel.CONNECTION)
+                
                 response.getInfoAsObject()?.let { info ->
                     val useHookLib = info.get("UseHookLib")?.asString ?: "0"
                     val useLoadstring = info.get("UseLoadstring")?.asString ?: "0"
@@ -290,7 +292,7 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
                 }
             })
             
-            logWithLevel("初始化消息已发送，等待Lua端响应...", LogLevel.CONNECTION)
+            logWithLevel("初始化消息已发送，等待Lua端响应...", LogLevel.DEBUG)
             
         } catch (e: Exception) {
             logWithLevel("发送初始化消息时出错: ${e.message}", LogLevel.ERROR, contentType = ConsoleViewContentType.ERROR_OUTPUT)
