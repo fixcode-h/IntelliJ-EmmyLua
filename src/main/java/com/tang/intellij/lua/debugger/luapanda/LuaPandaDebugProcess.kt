@@ -44,7 +44,14 @@ import com.tang.intellij.lua.LuaBundle
 import com.google.gson.Gson
 import java.util.concurrent.atomic.AtomicBoolean
 
+/**
+ * LuaPanda调试进程
+ * 负责管理调试会话、传输器连接、断点管理和调试控制
+ */
 class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
+    
+    // ========== 属性定义 ==========
+    
     private val configuration = session.runProfile as LuaPandaDebugConfiguration
     private val editorsProvider = LuaDebuggerEditorsProvider()
     private val breakpoints = mutableMapOf<Int, LuaPandaBreakpoint>()
@@ -52,28 +59,14 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
     internal var transporter: LuaPandaTransporter? = null
     private val logger = Logger.getInstance(LuaPandaDebugProcess::class.java)
     private var isInitialized = false
+    private var isStopping = false // 标记是否正在主动停止
     private val isClientMode = configuration.transportType == LuaPandaTransportType.TCP_CLIENT
 
     companion object {
         private val ID = Key.create<Int>("luapanda.breakpoint")
     }
     
-    /**
-     * 根据日志级别控制日志输出
-     * @param message 日志消息
-     * @param level 日志级别
-     * @param contentType 内容类型
-     */
-    private fun logWithLevel(
-        message: String, 
-        level: LogLevel = LogLevel.CONNECTION,
-        contentType: ConsoleViewContentType = ConsoleViewContentType.SYSTEM_OUTPUT
-    ) {
-        // 连接日志始终打印，或者日志级别大于等于配置的级别时才打印
-        if (level.value >= configuration.logLevel) {
-            println(message, LogConsoleType.NORMAL, contentType)
-        }
-    }
+    // ========== 生命周期管理 ==========
     
     override fun sessionInitialized() {
         super.sessionInitialized()
@@ -83,17 +76,43 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
         }
     }
 
+    override fun getEditorsProvider(): XDebuggerEditorsProvider {
+        return editorsProvider
+    }
+
+    override fun stop() {
+        logWithLevel("停止调试", LogLevel.DEBUG)
+        isStopping = true // 标记正在主动停止
+        
+        if (transporter != null) {
+            try {
+                val stopConfirmed = AtomicBoolean(false)
+                
+                // 发送停止命令，等待确认
+                sendCommandWithResponse(LuaPandaCommands.STOP_RUN, null)
+                
+                // 设置超时机制
+                setupStopTimeout(stopConfirmed)
+                
+            } catch (e: Exception) {
+                logWithLevel("发送停止命令时出错: ${e.message}", LogLevel.ERROR, contentType = ConsoleViewContentType.ERROR_OUTPUT)
+                e.printStackTrace()
+                stopTransporter()
+            }
+        } else {
+            logWithLevel("transporter为null，无法发送stopRun命令", LogLevel.DEBUG)
+            stopTransporter()
+        }
+    }
+    
+    // ========== 传输器管理 ==========
+    
     private fun setupTransporter() {
         val transportInfo = when (configuration.transportType) {
-            LuaPandaTransportType.TCP_CLIENT -> {
-                "TCP客户端 ${configuration.host}:${configuration.port}"
-            }
-            LuaPandaTransportType.TCP_SERVER -> {
-                "TCP服务器 端口:${configuration.port}"
-            }
+            LuaPandaTransportType.TCP_CLIENT -> "TCP客户端 ${configuration.host}:${configuration.port}"
+            LuaPandaTransportType.TCP_SERVER -> "TCP服务器 端口:${configuration.port}"
         }
         logWithLevel("设置传输器: $transportInfo", LogLevel.DEBUG)
-        
         startTransporter()
     }
     
@@ -110,7 +129,18 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
             }
         }
         
-        // 设置传输器的日志级别
+        setupTransporterHandlers()
+        
+        try {
+            transporter?.start()
+        } catch (e: Exception) {
+            logWithLevel("传输器启动失败: ${e.message}", LogLevel.CONNECTION, contentType = ConsoleViewContentType.ERROR_OUTPUT)
+            logger.error("Failed to start transporter", e)
+            onDisconnect()
+        }
+    }
+    
+    private fun setupTransporterHandlers() {
         transporter?.setLogLevel(configuration.logLevel)
         
         transporter?.setMessageHandler { message ->
@@ -125,27 +155,41 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
                 onDisconnect()
             }
         }
-        
-        try {
-            transporter?.start()
-        } catch (e: Exception) {
-            logWithLevel("传输器启动失败: ${e.message}", LogLevel.CONNECTION, contentType = ConsoleViewContentType.ERROR_OUTPUT)
-            logger.error("Failed to start transporter", e)
-            onDisconnect()
-        }
     }
-
-    override fun getEditorsProvider(): XDebuggerEditorsProvider {
-        return editorsProvider
+    
+    private fun stopTransporter() {
+        transporter?.stop()
+        transporter = null
+        isStopping = false // 重置停止标志
     }
-
+    
+    private fun setupStopTimeout(stopConfirmed: AtomicBoolean) {
+        Thread {
+            try {
+                val timeoutMs = (configuration.stopConfirmTimeout * 1000).toLong()
+                logWithLevel("等待停止确认，超时时间: ${configuration.stopConfirmTimeout}秒", LogLevel.CONNECTION)
+                Thread.sleep(timeoutMs)
+                
+                if (!stopConfirmed.get() && transporter != null) {
+                    logWithLevel("停止确认超时，强制关闭连接", LogLevel.CONNECTION)
+                    stopTransporter()
+                }
+            } catch (e: InterruptedException) {
+                logWithLevel("停止确认等待被中断", LogLevel.DEBUG)
+                Thread.currentThread().interrupt()
+            }
+        }.start()
+    }
+    
+    // ========== 连接管理 ==========
+    
     private fun onConnect() {
         logWithLevel("连接建立，等待连接稳定后发送初始化消息...", LogLevel.DEBUG)
         
         // 延迟发送初始化消息，确保连接稳定
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
-                Thread.sleep(1000) // 增加延迟到1000ms，给Lua端更多准备时间
+                Thread.sleep(1000) // 给Lua端更多准备时间
                 ApplicationManager.getApplication().invokeLater {
                     if (transporter != null && !session.isStopped) {
                         sendInitializationMessageWithRetry(1)
@@ -156,6 +200,20 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
             }
         }
     }
+
+    private fun onDisconnect() {
+        logWithLevel("连接断开", LogLevel.CONNECTION)
+        isInitialized = false
+        
+        // 只有在非主动停止的情况下才显示重连消息
+        if (!isStopping) {
+            logWithLevel("客户端断开连接，等待重新连接...", LogLevel.CONNECTION)
+        } else {
+            logWithLevel("调试会话已停止", LogLevel.CONNECTION)
+        }
+    }
+    
+    // ========== 初始化管理 ==========
     
     private fun sendInitializationMessageWithRetry(attempt: Int) {
         if (attempt > 3) {
@@ -168,33 +226,36 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
         try {
             sendInitializationMessage()
         } catch (e: Exception) {
-            logWithLevel("初始化消息发送失败: ${e.javaClass.simpleName} - ${e.message}, 将在1秒后重试", LogLevel.DEBUG)
-            
-            // 如果是连接相关的异常，记录更详细的信息
-            when (e) {
-                is java.net.SocketException -> {
-                    logWithLevel("Socket异常，可能是连接已断开: ${e.message}", LogLevel.ERROR, contentType = ConsoleViewContentType.ERROR_OUTPUT)
-                }
-                is java.io.IOException -> {
-                    logWithLevel("IO异常，可能是网络问题: ${e.message}", LogLevel.ERROR, contentType = ConsoleViewContentType.ERROR_OUTPUT)
-                }
-                else -> {
-                    logWithLevel("未知异常: ${e.message}", LogLevel.DEBUG)
-                }
+            handleInitializationError(e, attempt)
+        }
+    }
+    
+    private fun handleInitializationError(e: Exception, attempt: Int) {
+        logWithLevel("初始化消息发送失败: ${e.javaClass.simpleName} - ${e.message}, 将在1秒后重试", LogLevel.DEBUG)
+        
+        when (e) {
+            is java.net.SocketException -> {
+                logWithLevel("Socket异常，可能是连接已断开: ${e.message}", LogLevel.ERROR, contentType = ConsoleViewContentType.ERROR_OUTPUT)
             }
-            
-            // 如果发送失败，延迟后重试
-            ApplicationManager.getApplication().executeOnPooledThread {
-                try {
-                    Thread.sleep(1000)
-                    ApplicationManager.getApplication().invokeLater {
-                        if (transporter != null && !session.isStopped) {
-                            sendInitializationMessageWithRetry(attempt + 1)
-                        }
+            is java.io.IOException -> {
+                logWithLevel("IO异常，可能是网络问题: ${e.message}", LogLevel.ERROR, contentType = ConsoleViewContentType.ERROR_OUTPUT)
+            }
+            else -> {
+                logWithLevel("未知异常: ${e.message}", LogLevel.DEBUG)
+            }
+        }
+        
+        // 延迟后重试
+        ApplicationManager.getApplication().executeOnPooledThread {
+            try {
+                Thread.sleep(1000)
+                ApplicationManager.getApplication().invokeLater {
+                    if (transporter != null && !session.isStopped) {
+                        sendInitializationMessageWithRetry(attempt + 1)
                     }
-                } catch (e: InterruptedException) {
-                    logWithLevel("重试被中断", LogLevel.DEBUG)
                 }
+            } catch (e: InterruptedException) {
+                logWithLevel("重试被中断", LogLevel.DEBUG)
             }
         }
     }
@@ -205,18 +266,24 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
             logWithLevel("传输器不可用或会话已停止，跳过初始化消息发送", LogLevel.DEBUG)
             return
         }
+
+        val pluginPath = getPluginPath()
+        val initInfo = createInitInfo(pluginPath)
         
-        // 额外验证连接状态，确保连接真正稳定
+        logWithLevel("发送初始化消息...", LogLevel.DEBUG)
+        
         try {
-            // 给连接一个小的额外延迟，确保Lua端完全准备好
-            Thread.sleep(200)
-        } catch (e: InterruptedException) {
-            logWithLevel("连接验证被中断", LogLevel.DEBUG)
-            return
+            sendCommandWithResponse(LuaPandaCommands.INIT_SUCCESS, initInfo)
+            logWithLevel("初始化消息已发送，等待Lua端响应...", LogLevel.DEBUG)
+            
+        } catch (e: Exception) {
+            logWithLevel("发送初始化消息时出错: ${e.message}", LogLevel.ERROR, contentType = ConsoleViewContentType.ERROR_OUTPUT)
+            throw e
         }
-        
-        // 获取插件目录下的libpdebug库路径
-        val pluginPath = try {
+    }
+    
+    private fun getPluginPath(): String {
+        return try {
             val pluginDescriptor = PluginManagerCore.getPlugin(
                 PluginId.getId("com.fixcode.emmylua.enhanced")
             )
@@ -236,9 +303,10 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
             e.printStackTrace()
             ""
         }
-        
-        // 发送初始化消息，包含完整的初始化参数（字段名与VSCode插件保持一致）
-        val initInfo = LuaPandaInitInfo(
+    }
+    
+    private fun createInitInfo(pluginPath: String): LuaPandaInitInfo {
+        return LuaPandaInitInfo(
             stopOnEntry = configuration.stopOnEntry.toString(),
             useCHook = configuration.useCHook.toString(),
             logLevel = configuration.logLevel.toString(),
@@ -247,146 +315,295 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
             isNeedB64EncodeStr = "true",
             TempFilePath = session.project.basePath ?: System.getProperty("user.dir"),
             pathCaseSensitivity = "true",
-            OSType = System.getProperty("os.name"),  // 修正字段名
+            OSType = System.getProperty("os.name"),
             clibPath = pluginPath,
             adapterVersion = "1.0.0",
             autoPathMode = "false",
             distinguishSameNameFile = "false",
             truncatedOPath = "",
-            DevelopmentMode = "false"  // 修正字段名
+            DevelopmentMode = "false"
         )
+    }
+    
+    private fun handleInitializationResponse(response: LuaPandaMessage) {
+        logWithLevel("收到Lua端初始化响应，调试器初始化成功！", LogLevel.CONNECTION)
         
-        logWithLevel("发送初始化消息...", LogLevel.DEBUG)
+        response.getInfoAsObject()?.let { info ->
+            val useHookLib = info.get("UseHookLib")?.asString ?: "0"
+            val useLoadstring = info.get("UseLoadstring")?.asString ?: "0"
+            val isNeedB64EncodeStr = info.get("isNeedB64EncodeStr")?.asString ?: "false"
+            
+            logWithLevel("初始化完成 - HookLib:$useHookLib, Loadstring:$useLoadstring, B64:$isNeedB64EncodeStr", LogLevel.DEBUG)
+            logger.info("LuaPanda initialized - UseHookLib: $useHookLib, UseLoadstring: $useLoadstring, B64Encode: $isNeedB64EncodeStr")
+            
+            isInitialized = true
+            sendExistingBreakpoints()
+        }
+    }
+    
+    private fun sendExistingBreakpoints() {
+        val breakpoints = XDebuggerManager.getInstance(session.project)
+            .breakpointManager
+            .getBreakpoints(LuaLineBreakpointType::class.java)
         
-        try {
-            // 使用commandToDebugger发送initSuccess消息并处理回调
-            transporter?.commandToDebugger(LuaPandaCommands.INIT_SUCCESS, initInfo, { response ->
-                // 处理initSuccess的回调响应
-                logWithLevel("收到Lua端初始化响应，调试器初始化成功！", LogLevel.CONNECTION)
-                
-                response.getInfoAsObject()?.let { info ->
-                    val useHookLib = info.get("UseHookLib")?.asString ?: "0"
-                    val useLoadstring = info.get("UseLoadstring")?.asString ?: "0"
-                    val isNeedB64EncodeStr = info.get("isNeedB64EncodeStr")?.asString ?: "false"
-                    
-                    logWithLevel("初始化完成 - HookLib:$useHookLib, Loadstring:$useLoadstring, B64:$isNeedB64EncodeStr", LogLevel.DEBUG)
-                    logger.info("LuaPanda initialized - UseHookLib: $useHookLib, UseLoadstring: $useLoadstring, B64Encode: $isNeedB64EncodeStr")
-                    
-                    // 标记初始化完成
-                    isInitialized = true
-                    
-                    // 初始化成功后再发送现有断点
-                    val breakpoints = XDebuggerManager.getInstance(session.project)
-                        .breakpointManager
-                        .getBreakpoints(LuaLineBreakpointType::class.java)
-                    if (breakpoints.isNotEmpty()) {
-                        logWithLevel("发送现有断点: ${breakpoints.size}个", LogLevel.DEBUG)
-                        breakpoints.forEach { breakpoint ->
-                            breakpoint.sourcePosition?.let { position ->
-                                registerBreakpoint(position, breakpoint)
-                            }
-                        }
-                    } else {
-                        logWithLevel("没有现有断点需要发送", LogLevel.DEBUG)
-                    }
+        if (breakpoints.isNotEmpty()) {
+            logWithLevel("发送现有断点: ${breakpoints.size}个", LogLevel.DEBUG)
+            breakpoints.forEach { breakpoint ->
+                val sourcePosition = breakpoint.sourcePosition
+                if (sourcePosition != null) {
+                    val filePath = sourcePosition.file.canonicalPath ?: sourcePosition.file.path
+                    val breakpointInfo = BreakpointInfo(
+                        verified = true,
+                        type = 2,
+                        line = breakpoint.line + 1
+                    )
+                    val luaPandaBreakpoint = LuaPandaBreakpoint(
+                        path = filePath,
+                        bks = listOf(breakpointInfo)
+                    )
+                    sendCommandNoResponse(LuaPandaCommands.SET_BREAKPOINT, luaPandaBreakpoint)
                 }
-            })
-            
-            logWithLevel("初始化消息已发送，等待Lua端响应...", LogLevel.DEBUG)
-            
-        } catch (e: Exception) {
-            logWithLevel("发送初始化消息时出错: ${e.message}", LogLevel.ERROR, contentType = ConsoleViewContentType.ERROR_OUTPUT)
-            throw e // 重新抛出异常，让重试机制处理
-        }
-    }
-
-    private fun onDisconnect() {
-        logWithLevel("连接断开", LogLevel.CONNECTION)
-        isInitialized = false
-        
-        // TCP 服务器模式下会自动重连，所以不停止调试会话
-        // 只记录断开连接的日志，等待重新连接
-        logWithLevel("客户端断开连接，等待重新连接...", LogLevel.CONNECTION)
-    }
-    
-    private fun stopDebugSessionWithoutStopRun() {
-        ApplicationManager.getApplication().invokeLater {
-            try {
-                // 停止传输器
-                transporter?.stop()
-                transporter = null
-                
-                // 停止调试会话
-                session?.stop()
-                logWithLevel("调试会话已停止", LogLevel.CONNECTION)
-            } catch (e: Exception) {
-                logWithLevel("停止调试会话时出错: ${e.message}", LogLevel.ERROR, contentType = ConsoleViewContentType.ERROR_OUTPUT)
-                logger.error("Error stopping debug session", e)
             }
+        } else {
+            logWithLevel("没有现有断点需要发送", LogLevel.DEBUG)
         }
     }
     
-    private fun stopDebugSession() {
-        ApplicationManager.getApplication().invokeLater {
-            try {
-                // 停止传输器
-                transporter?.stop()
-                transporter = null
-                
-                // 停止调试会话
-                session?.stop()
-                logWithLevel("调试会话已停止", LogLevel.CONNECTION)
-            } catch (e: Exception) {
-                logWithLevel("停止调试会话时出错: ${e.message}", LogLevel.ERROR, contentType = ConsoleViewContentType.ERROR_OUTPUT)
-                logger.error("Error stopping debug session", e)
-            }
-        }
-    }
-
+    // ========== 消息处理 ==========
+    
     private fun handleMessage(message: LuaPandaMessage) {
         when (message.cmd) {
-            LuaPandaCommands.STOP_ON_BREAKPOINT, LuaPandaCommands.STOP_ON_ENTRY, LuaPandaCommands.STEP_OVER, LuaPandaCommands.STEP_IN, LuaPandaCommands.STEP_OUT -> {
-                // 优先从stack字段获取堆栈信息（新格式），如果没有则从info字段获取（旧格式）
-                val stacks = if (message.stack != null) {
-                    message.stack
-                } else if (message.getInfoAsObject() != null) {
-                    Gson().fromJson(message.getInfoAsObject(), Array<LuaPandaStack>::class.java).toList()
-                } else {
-                    logWithLevel("警告：消息中没有找到堆栈信息", LogLevel.DEBUG, contentType = ConsoleViewContentType.ERROR_OUTPUT)
-                    emptyList()
-                }
-                
-                if (stacks.isNotEmpty()) {
-                    val actionType = when (message.cmd) {
-                        LuaPandaCommands.STEP_OVER -> "单步跳过到"
-                        LuaPandaCommands.STEP_IN -> "单步进入到"
-                        LuaPandaCommands.STEP_OUT -> "单步跳出到"
-                        else -> "断点命中"
-                    }
-                    logWithLevel("$actionType: ${stacks[0].file}:${stacks[0].line} (${stacks.size}个堆栈帧)", LogLevel.DEBUG)
-                }
-                onBreak(stacks)
+            LuaPandaCommands.STOP_ON_BREAKPOINT, 
+            LuaPandaCommands.STOP_ON_ENTRY, 
+            LuaPandaCommands.STEP_OVER, 
+            LuaPandaCommands.STEP_IN, 
+            LuaPandaCommands.STEP_OUT -> {
+                handleBreakMessage(message)
             }
             LuaPandaCommands.STOP_RUN -> {
-                // 处理Lua程序主动发送的停止运行命令
-                logWithLevel("收到Lua程序停止运行命令", LogLevel.CONNECTION)
-                ApplicationManager.getApplication().invokeLater {
-                    try {
-                        // 停止调试会话
-                        session?.stop()
-                        logWithLevel("调试会话已停止", LogLevel.CONNECTION)
-                    } catch (e: Exception) {
-                        logWithLevel("停止调试会话时出错: ${e.message}", LogLevel.ERROR, contentType = ConsoleViewContentType.ERROR_OUTPUT)
-                        logger.error("Error stopping debug session on STOP_RUN", e)
-                    }
-                }
+                handleStopRunMessage()
             }
             LuaPandaCommands.OUTPUT -> {
-                val outputText = message.getInfoAsObject()?.get("content")?.asString ?: ""
-                logWithLevel(outputText, LogLevel.DEBUG)
+                handleOutputMessage(message)
             }
             else -> {
                 logger.info("Unknown message: ${message.cmd}")
+            }
+        }
+    }
+    
+    private fun handleBreakMessage(message: LuaPandaMessage) {
+        val stacks = extractStacksFromMessage(message)
+        
+        if (stacks.isNotEmpty()) {
+            val actionType = when (message.cmd) {
+                LuaPandaCommands.STEP_OVER -> "单步跳过到"
+                LuaPandaCommands.STEP_IN -> "单步进入到"
+                LuaPandaCommands.STEP_OUT -> "单步跳出到"
+                else -> "断点命中"
+            }
+            logWithLevel("$actionType: ${stacks[0].file}:${stacks[0].line} (${stacks.size}个堆栈帧)", LogLevel.DEBUG)
+        }
+        onBreak(stacks)
+    }
+    
+    private fun extractStacksFromMessage(message: LuaPandaMessage): List<LuaPandaStack> {
+        return if (message.stack != null) {
+            message.stack
+        } else if (message.getInfoAsObject() != null) {
+            Gson().fromJson(message.getInfoAsObject(), Array<LuaPandaStack>::class.java).toList()
+        } else {
+            logWithLevel("警告：消息中没有找到堆栈信息", LogLevel.DEBUG, contentType = ConsoleViewContentType.ERROR_OUTPUT)
+            emptyList()
+        }
+    }
+    
+    private fun handleStopRunMessage() {
+        logWithLevel("收到Lua程序停止运行命令", LogLevel.CONNECTION)
+        ApplicationManager.getApplication().invokeLater {
+            try {
+                session?.stop()
+                logWithLevel("调试会话已停止", LogLevel.CONNECTION)
+            } catch (e: Exception) {
+                logWithLevel("停止调试会话时出错: ${e.message}", LogLevel.ERROR, contentType = ConsoleViewContentType.ERROR_OUTPUT)
+                logger.error("Error stopping debug session on STOP_RUN", e)
+            }
+        }
+    }
+    
+    private fun handleOutputMessage(message: LuaPandaMessage) {
+        val outputText = message.getInfoAsObject()?.get("content")?.asString ?: ""
+        logWithLevel(outputText, LogLevel.DEBUG)
+    }
+    
+    // ========== 断点管理 ==========
+    
+    override fun registerBreakpoint(sourcePosition: XSourcePosition, breakpoint: XLineBreakpoint<*>) {
+        val filePath = sourcePosition.file.canonicalPath ?: sourcePosition.file.path
+        val newId = idCounter++
+        
+        breakpoint.putUserData(ID, newId)
+        logWithLevel("设置断点: ${sourcePosition.file.name}:${breakpoint.line + 1}", LogLevel.DEBUG)
+        
+        val breakpointInfo = BreakpointInfo(
+            verified = true,
+            type = 2,
+            line = breakpoint.line + 1
+        )
+        
+        val luaPandaBreakpoint = LuaPandaBreakpoint(
+            path = filePath,
+            bks = listOf(breakpointInfo)
+        )
+        
+        breakpoints[newId] = luaPandaBreakpoint
+        
+        if (isInitialized) {
+            logWithLevel("发送断点到调试器: ${sourcePosition.file.name}:${breakpoint.line + 1}", LogLevel.DEBUG)
+            sendCommandNoResponse(LuaPandaCommands.SET_BREAKPOINT, luaPandaBreakpoint)
+        } else {
+            logWithLevel("调试器未初始化，断点将在初始化完成后发送", LogLevel.DEBUG)
+        }
+    }
+
+    override fun unregisterBreakpoint(sourcePosition: XSourcePosition, breakpoint: XLineBreakpoint<*>) {
+        val id = breakpoint.getUserData(ID)
+        val luaPandaBreakpoint = breakpoints[id]
+        
+        if (luaPandaBreakpoint != null) {
+            logWithLevel("移除断点: ${sourcePosition.file.name}:${breakpoint.line + 1}", LogLevel.DEBUG)
+            breakpoints.remove(id)
+            
+            val emptyBreakpoint = LuaPandaBreakpoint(
+                path = luaPandaBreakpoint.path,
+                bks = emptyList()
+            )
+            sendCommandNoResponse(LuaPandaCommands.SET_BREAKPOINT, emptyBreakpoint)
+        }
+    }
+
+    override fun getBreakpointHandlers(): Array<XBreakpointHandler<*>> {
+        return arrayOf(object : XBreakpointHandler<XLineBreakpoint<XBreakpointProperties<*>>>(LuaLineBreakpointType::class.java) {
+            override fun registerBreakpoint(breakpoint: XLineBreakpoint<XBreakpointProperties<*>>) {
+                val sourcePosition = breakpoint.sourcePosition
+                if (sourcePosition != null) {
+                    this@LuaPandaDebugProcess.registerBreakpoint(sourcePosition, breakpoint)
+                }
+            }
+
+            override fun unregisterBreakpoint(breakpoint: XLineBreakpoint<XBreakpointProperties<*>>, temporary: Boolean) {
+                val sourcePosition = breakpoint.sourcePosition
+                if (sourcePosition != null) {
+                    this@LuaPandaDebugProcess.unregisterBreakpoint(sourcePosition, breakpoint)
+                }
+            }
+        })
+    }
+    
+    // ========== 调试控制 ==========
+    
+    override fun startPausing() {
+        sendCommandNoResponse(LuaPandaCommands.STOP_ON_BREAKPOINT)
+    }
+
+    override fun runToPosition(position: XSourcePosition, context: XSuspendContext?) {
+        val filePath = position.file.canonicalPath ?: position.file.path
+        val tempBreakpointInfo = BreakpointInfo(
+            verified = true,
+            type = 2,
+            line = position.line + 1
+        )
+        val tempBreakpoint = LuaPandaBreakpoint(
+            path = filePath,
+            bks = listOf(tempBreakpointInfo)
+        )
+        sendCommandNoResponse(LuaPandaCommands.SET_BREAKPOINT, tempBreakpoint)
+    }
+
+    override fun run() {
+        logWithLevel("继续运行", LogLevel.DEBUG)
+        sendCommandNoResponse(LuaPandaCommands.CONTINUE)
+    }
+
+    override fun startStepOver(context: XSuspendContext?) {
+        logWithLevel("单步跳过", LogLevel.DEBUG)
+        sendCommandWithResponse(LuaPandaCommands.STEP_OVER, null)
+    }
+
+    override fun startStepInto(context: XSuspendContext?) {
+        logWithLevel("单步进入", LogLevel.DEBUG)
+        sendCommandWithResponse(LuaPandaCommands.STEP_IN, null)
+    }
+
+    override fun startStepOut(context: XSuspendContext?) {
+        logWithLevel("单步跳出", LogLevel.DEBUG)
+        sendCommandWithResponse(LuaPandaCommands.STEP_OUT, null)
+    }
+    
+    // ========== 断点处理 ==========
+    
+    private fun onBreak(stacks: List<LuaPandaStack>) {
+        if (stacks.isNotEmpty()) {
+            val suspendContext = LuaPandaSuspendContext(this, stacks)
+            val topStack = stacks[0]
+            
+            ApplicationManager.getApplication().invokeLater {
+                val sourcePosition = createSourcePosition(topStack)
+                
+                setupExecutionStack(suspendContext, sourcePosition)
+                handleBreakpointHit(sourcePosition, suspendContext)
+                showExecutionPoint(sourcePosition)
+            }
+        } else {
+            logger.warn("Received empty stack frames")
+        }
+    }
+    
+    private fun setupExecutionStack(suspendContext: LuaPandaSuspendContext, sourcePosition: XSourcePosition?) {
+        val executionStack = suspendContext.activeExecutionStack
+        if (executionStack is LuaPandaExecutionStack && sourcePosition != null) {
+            val topFrame = executionStack.topFrame
+            if (topFrame != null) {
+                executionStack.setTopFrame(topFrame)
+            }
+        }
+    }
+    
+    private fun handleBreakpointHit(sourcePosition: XSourcePosition?, suspendContext: LuaPandaSuspendContext) {
+        val breakpoint = findBreakpointAtPosition(sourcePosition)
+        
+        if (breakpoint != null) {
+            session.breakpointReached(breakpoint, null, suspendContext)
+        } else {
+            session.positionReached(suspendContext)
+        }
+        
+        session.showExecutionPoint()
+    }
+    
+    private fun findBreakpointAtPosition(sourcePosition: XSourcePosition?): XLineBreakpoint<*>? {
+        return sourcePosition?.let { position ->
+            val breakpointManager = XDebuggerManager.getInstance(session.project).breakpointManager
+            val breakpoints = breakpointManager.getBreakpoints(LuaLineBreakpointType::class.java)
+            breakpoints.find { bp ->
+                bp.sourcePosition?.file == position.file && bp.sourcePosition?.line == position.line
+            }
+        }
+    }
+    
+    private fun showExecutionPoint(sourcePosition: XSourcePosition?) {
+        if (sourcePosition != null) {
+            ApplicationManager.getApplication().invokeLater {
+                val fileEditorManager = FileEditorManager.getInstance(session.project)
+                val editor = fileEditorManager.openFile(sourcePosition.file, true, true)
+                if (editor.isNotEmpty()) {
+                    val textEditor = editor[0] as? TextEditor
+                    textEditor?.editor?.let { editorInstance ->
+                        val offset = editorInstance.document.getLineStartOffset(sourcePosition.line)
+                        editorInstance.caretModel.moveToOffset(offset)
+                        editorInstance.scrollingModel.scrollToCaret(ScrollType.CENTER)
+                    }
+                }
             }
         }
     }
@@ -397,6 +614,17 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
         
         if (lineNumber <= 0) return null
         
+        val file = findSourceFile(filePath)
+        
+        return if (file != null) {
+            XDebuggerUtil.getInstance().createPosition(file, lineNumber - 1)
+        } else {
+            logWithLevel("无法找到源文件: $filePath (oPath: ${stack.oPath}, file: ${stack.file})", LogLevel.DEBUG)
+            null
+        }
+    }
+    
+    private fun findSourceFile(filePath: String): com.intellij.openapi.vfs.VirtualFile? {
         // 首先尝试使用LocalFileSystem查找文件（适用于绝对路径）
         var file = LocalFileSystem.getInstance().findFileByPath(filePath)
         
@@ -420,240 +648,68 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
             file = LuaFileUtil.findFile(session.project, fileName.substringBeforeLast('.'))
         }
         
-        return if (file != null) {
-            XDebuggerUtil.getInstance().createPosition(file, lineNumber - 1) // Convert to 0-based
-        } else {
-            // 如果找不到文件，记录日志以便调试
-            logWithLevel("无法找到源文件: $filePath (oPath: ${stack.oPath}, file: ${stack.file})", LogLevel.DEBUG)
-            null
+        return file
+    }
+    
+    // ========== 工具方法 ==========
+    
+    /**
+     * 根据日志级别控制日志输出
+     */
+    private fun logWithLevel(
+        message: String, 
+        level: LogLevel = LogLevel.CONNECTION,
+        contentType: ConsoleViewContentType = ConsoleViewContentType.SYSTEM_OUTPUT
+    ) {
+        if (level.value >= configuration.logLevel) {
+            println(message, LogConsoleType.NORMAL, contentType)
         }
     }
 
-    private fun onBreak(stacks: List<LuaPandaStack>) {
-        if (stacks.isNotEmpty()) {
-            val suspendContext = LuaPandaSuspendContext(this, stacks)
-            val topStack = stacks[0]
-            
-            ApplicationManager.getApplication().invokeLater {
-                // 检查是否是断点命中 - 使用改进的文件查找逻辑
-                val sourcePosition = createSourcePosition(topStack)
-                
-                // 设置顶部帧，确保堆栈窗口正确选中当前执行位置
-                val executionStack = suspendContext.activeExecutionStack
-                if (executionStack is LuaPandaExecutionStack && sourcePosition != null) {
-                    val topFrame = executionStack.topFrame
-                    if (topFrame != null) {
-                        executionStack.setTopFrame(topFrame)
-                    }
-                }
-                
-                val breakpoint = sourcePosition?.let { position ->
-                    val breakpointManager = XDebuggerManager.getInstance(session.project).breakpointManager
-                    val breakpoints = breakpointManager.getBreakpoints(LuaLineBreakpointType::class.java)
-                    breakpoints.find { bp ->
-                        bp.sourcePosition?.file == position.file && bp.sourcePosition?.line == position.line
-                    }
-                }
-                
-                if (breakpoint != null) {
-                    // 断点命中
-                    session.breakpointReached(breakpoint, null, suspendContext)
-                } else {
-                    // 单步调试或其他情况
-                    session.positionReached(suspendContext)
-                }
-                
-                // 确保执行点高亮显示
-                session.showExecutionPoint()
-                
-                // 强制刷新编辑器以确保高亮显示
-                if (sourcePosition != null) {
-                    ApplicationManager.getApplication().invokeLater {
-                        val fileEditorManager = FileEditorManager.getInstance(session.project)
-                        val editor = fileEditorManager.openFile(sourcePosition.file, true, true)
-                        if (editor.isNotEmpty()) {
-                            val textEditor = editor[0] as? TextEditor
-                            textEditor?.editor?.let { editorInstance ->
-                                // 确保光标移动到正确位置
-                                val offset = editorInstance.document.getLineStartOffset(sourcePosition.line)
-                                editorInstance.caretModel.moveToOffset(offset)
-                                // 滚动到可见区域
-                                editorInstance.scrollingModel.scrollToCaret(ScrollType.CENTER)
-                            }
-                        }
-                    }
-                }
+    /**
+     * 发送需要响应的命令（统一处理回调）
+     */
+    private fun sendCommandWithResponse(command: String, data: Any?) {
+        transporter?.commandToDebugger(command, data, { response ->
+            handleCommandResponse(command, response)
+        })
+    }
+    
+    /**
+     * 发送不需要响应的命令
+     */
+    private fun sendCommandNoResponse(command: String, data: Any? = null) {
+        transporter?.commandToDebugger(command, data)
+    }
+    
+    /**
+     * 统一处理命令响应
+     */
+    private fun handleCommandResponse(command: String, response: LuaPandaMessage) {
+        when (command) {
+            LuaPandaCommands.INIT_SUCCESS -> {
+                handleInitializationResponse(response)
             }
-        } else {
-            logger.warn("Received empty stack frames")
-        }
-    }
-
-    override fun registerBreakpoint(sourcePosition: XSourcePosition, breakpoint: XLineBreakpoint<*>) {
-        val filePath = sourcePosition.file.canonicalPath ?: sourcePosition.file.path
-        
-        val newId = idCounter++
-        breakpoint.putUserData(ID, newId)
-        
-        logWithLevel("设置断点: ${sourcePosition.file.name}:${breakpoint.line + 1}", LogLevel.DEBUG)
-        
-        val breakpointInfo = BreakpointInfo(
-            verified = true,
-            type = 2,
-            line = breakpoint.line + 1 // Convert to 1-based
-        )
-        
-        val luaPandaBreakpoint = LuaPandaBreakpoint(
-            path = filePath,
-            bks = listOf(breakpointInfo)
-        )
-        
-        breakpoints[newId] = luaPandaBreakpoint
-        
-        // 只有在初始化完成后才发送断点
-        if (isInitialized) {
-            logWithLevel("发送断点到调试器: ${sourcePosition.file.name}:${breakpoint.line + 1}", LogLevel.DEBUG)
-            transporter?.commandToDebugger(LuaPandaCommands.SET_BREAKPOINT, luaPandaBreakpoint)
-        } else {
-            logWithLevel("调试器未初始化，断点将在初始化完成后发送", LogLevel.DEBUG)
-        }
-    }
-
-    override fun unregisterBreakpoint(sourcePosition: XSourcePosition, breakpoint: XLineBreakpoint<*>) {
-        val id = breakpoint.getUserData(ID)
-        val luaPandaBreakpoint = breakpoints[id]
-        if (luaPandaBreakpoint != null) {
-            logWithLevel("移除断点: ${sourcePosition.file.name}:${breakpoint.line + 1}", LogLevel.DEBUG)
-            breakpoints.remove(id)
-            // 发送空的断点列表来移除断点
-            val emptyBreakpoint = LuaPandaBreakpoint(
-                path = luaPandaBreakpoint.path,
-                bks = emptyList()
-            )
-            // 断点移除是状态通知协议，不需要回调
-            transporter?.commandToDebugger(LuaPandaCommands.SET_BREAKPOINT, emptyBreakpoint)
-        }
-    }
-
-    override fun startPausing() {
-        // 暂停是状态通知协议，不需要回调
-        transporter?.commandToDebugger(LuaPandaCommands.STOP_ON_BREAKPOINT)
-    }
-
-    override fun runToPosition(position: XSourcePosition, context: XSuspendContext?) {
-        val filePath = position.file.canonicalPath ?: position.file.path
-        val tempBreakpointInfo = BreakpointInfo(
-            verified = true,
-            type = 2,
-            line = position.line + 1
-        )
-        val tempBreakpoint = LuaPandaBreakpoint(
-            path = filePath,
-            bks = listOf(tempBreakpointInfo)
-        )
-        // 运行到指定位置是状态通知协议，不需要回调
-        transporter?.commandToDebugger(LuaPandaCommands.SET_BREAKPOINT, tempBreakpoint)
-    }
-
-    override fun run() {
-        logWithLevel("继续运行", LogLevel.DEBUG)
-        // 继续运行是状态通知协议，不需要回调
-        transporter?.commandToDebugger(LuaPandaCommands.CONTINUE)
-    }
-
-    override fun stop() {
-        logWithLevel("停止调试", LogLevel.DEBUG)
-        
-        // 发送STOP_RUN命令并等待Lua端回调确认
-        if (transporter != null) {
-            try {
-                // 标记停止确认状态
-                val stopConfirmed = AtomicBoolean(false)
-                
-                // 使用带回调的commandToDebugger，等待Lua端确认
-                transporter?.commandToDebugger(LuaPandaCommands.STOP_RUN, null, { response ->
-                    logWithLevel("收到停止确认，关闭连接", LogLevel.CONNECTION)
-                    stopConfirmed.set(true)
-                    // 收到Lua端回调后再停止传输器并清理资源
-                    transporter?.stop()
-                    transporter = null
-                })
-                
-                // 设置超时机制，如果指定时间内没有收到回调，强制停止
-                Thread {
-                    try {
-                        val timeoutMs = (configuration.stopConfirmTimeout * 1000).toLong()
-                        logWithLevel("等待停止确认，超时时间: ${configuration.stopConfirmTimeout}秒", LogLevel.CONNECTION)
-                        Thread.sleep(timeoutMs)
-                        
-                        // 检查是否已经收到确认
-                        if (!stopConfirmed.get() && transporter != null) {
-                            logWithLevel("停止确认超时，强制关闭连接", LogLevel.CONNECTION)
-                            transporter?.stop()
-                            transporter = null
-                        }
-                    } catch (e: InterruptedException) {
-                        logWithLevel("停止确认等待被中断", LogLevel.DEBUG)
-                        Thread.currentThread().interrupt()
-                    }
-                }.start()
-                
-            } catch (e: Exception) {
-                logWithLevel("发送停止命令时出错: ${e.message}", LogLevel.ERROR, contentType = ConsoleViewContentType.ERROR_OUTPUT)
-                e.printStackTrace()
-                // 发送失败时直接停止
-                transporter?.stop()
-                transporter = null
+            LuaPandaCommands.STOP_RUN -> {
+                logWithLevel("收到停止确认，关闭连接", LogLevel.CONNECTION)
+                stopTransporter()
             }
-        } else {
-            logWithLevel("transporter为null，无法发送stopRun命令", LogLevel.DEBUG)
+            LuaPandaCommands.STEP_OVER,
+            LuaPandaCommands.STEP_IN,
+            LuaPandaCommands.STEP_OUT -> {
+                logWithLevel("收到单步调试响应: $command", LogLevel.DEBUG)
+                // 单步调试的响应通常会通过handleMessage中的断点消息处理
+            }
+            else -> {
+                logWithLevel("收到未知命令响应: $command", LogLevel.DEBUG)
+            }
         }
     }
 
-    override fun startStepOver(context: XSuspendContext?) {
-        logWithLevel("单步跳过", LogLevel.DEBUG)
-        // 单步跳过是响应协议，需要回调
-        transporter?.commandToDebugger(LuaPandaCommands.STEP_OVER, null, { response ->
-            // 处理单步跳过的回调响应
-        })
-    }
-
-    override fun startStepInto(context: XSuspendContext?) {
-        logWithLevel("单步进入", LogLevel.DEBUG)
-        // 单步进入是响应协议，需要回调
-        transporter?.commandToDebugger(LuaPandaCommands.STEP_IN, null, { response ->
-            // 处理单步进入的回调响应
-        })
-    }
-
-    override fun startStepOut(context: XSuspendContext?) {
-        logWithLevel("单步跳出", LogLevel.DEBUG)
-        // 单步跳出是响应协议，需要回调
-        transporter?.commandToDebugger(LuaPandaCommands.STEP_OUT, null, { response ->
-            // 处理单步跳出的回调响应
-        })
-    }
-
-    // 支持回调的sendMessage方法
-    fun sendMessage(message: LuaPandaMessage, callback: ((LuaPandaMessage?) -> Unit)) {
+    /**
+     * 支持回调的sendMessage方法（保持向后兼容）
+     */
+    fun sendMessage(message: LuaPandaMessage, callback: (LuaPandaMessage?) -> Unit) {
         transporter?.sendMessage(message, callback)
-    }
-
-    override fun getBreakpointHandlers(): Array<XBreakpointHandler<*>> {
-        return arrayOf(object : XBreakpointHandler<XLineBreakpoint<XBreakpointProperties<*>>>(LuaLineBreakpointType::class.java) {
-            override fun registerBreakpoint(breakpoint: XLineBreakpoint<XBreakpointProperties<*>>) {
-                val sourcePosition = breakpoint.sourcePosition
-                if (sourcePosition != null) {
-                    this@LuaPandaDebugProcess.registerBreakpoint(sourcePosition, breakpoint)
-                }
-            }
-
-            override fun unregisterBreakpoint(breakpoint: XLineBreakpoint<XBreakpointProperties<*>>, temporary: Boolean) {
-                val sourcePosition = breakpoint.sourcePosition
-                if (sourcePosition != null) {
-                    this@LuaPandaDebugProcess.unregisterBreakpoint(sourcePosition, breakpoint)
-                }
-            }
-        })
     }
 }
