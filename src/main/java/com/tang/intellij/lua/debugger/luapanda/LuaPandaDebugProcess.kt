@@ -59,6 +59,7 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
     internal var transporter: LuaPandaTransporter? = null
     private val logger = Logger.getInstance(LuaPandaDebugProcess::class.java)
     private var isInitialized = false
+    private var isStopping = false // 标记是否正在主动停止
     private val isClientMode = configuration.transportType == LuaPandaTransportType.TCP_CLIENT
 
     companion object {
@@ -81,6 +82,7 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
 
     override fun stop() {
         logWithLevel("停止调试", LogLevel.DEBUG)
+        isStopping = true // 标记正在主动停止
         
         if (transporter != null) {
             try {
@@ -99,6 +101,7 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
             }
         } else {
             logWithLevel("transporter为null，无法发送stopRun命令", LogLevel.DEBUG)
+            stopTransporter()
         }
     }
     
@@ -157,6 +160,7 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
     private fun stopTransporter() {
         transporter?.stop()
         transporter = null
+        isStopping = false // 重置停止标志
     }
     
     private fun setupStopTimeout(stopConfirmed: AtomicBoolean) {
@@ -200,7 +204,13 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
     private fun onDisconnect() {
         logWithLevel("连接断开", LogLevel.CONNECTION)
         isInitialized = false
-        logWithLevel("客户端断开连接，等待重新连接...", LogLevel.CONNECTION)
+        
+        // 只有在非主动停止的情况下才显示重连消息
+        if (!isStopping) {
+            logWithLevel("客户端断开连接，等待重新连接...", LogLevel.CONNECTION)
+        } else {
+            logWithLevel("调试会话已停止", LogLevel.CONNECTION)
+        }
     }
     
     // ========== 初始化管理 ==========
