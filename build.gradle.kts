@@ -19,7 +19,7 @@ import org.apache.tools.ant.taskdefs.condition.Os
 import java.io.ByteArrayOutputStream
 
 plugins {
-    id("org.jetbrains.intellij").version("1.17.4")
+    id("org.jetbrains.intellij.platform").version("2.7.0")
     id("org.jetbrains.kotlin.jvm").version("2.1.20")
     id("de.undercouch.download").version("5.3.0")
 }
@@ -28,6 +28,7 @@ data class BuildData(
     val ideaSDKShortVersion: String,
     // https://www.jetbrains.com/intellij-repository/releases
     val ideaSDKVersion: String,
+    val ideaMainVersion: String, // 主版本号，用于intellijIdeaCommunity()
     val sinceBuild: String,
     val untilBuild: String,
     val archiveName: String = "IntelliJ-EmmyLua",
@@ -43,8 +44,9 @@ val buildDataList = listOf(
     BuildData(
         ideaSDKShortVersion = "252",
         ideaSDKVersion = "252.23892.409",
+        ideaMainVersion = "2025.2",
         sinceBuild = "252",
-        untilBuild = "252.*",
+        untilBuild = "",
         bunch = "212",
         targetCompatibilityLevel = JavaVersion.VERSION_21,
         jvmTarget = "21"
@@ -52,6 +54,7 @@ val buildDataList = listOf(
     BuildData(
         ideaSDKShortVersion = "251",
         ideaSDKVersion = "251.23774.435",
+        ideaMainVersion = "2025.1",
         sinceBuild = "251",
         untilBuild = "251.*",
         bunch = "212",
@@ -163,8 +166,11 @@ task("installEmmyDebugger", type = Copy::class) {
 
 project(":") {
     repositories {
-        maven(url = "https://www.jetbrains.com/intellij-repository/releases")
         mavenCentral()
+        
+        intellijPlatform {
+            defaultRepositories()
+        }
     }
 
     dependencies {
@@ -174,6 +180,11 @@ project(":") {
         implementation("org.luaj:luaj-jse:3.0.1")
         implementation("org.eclipse.mylyn.github:org.eclipse.egit.github.core:2.1.5")
         implementation("com.jgoodies:forms:1.2.1")
+        
+        intellijPlatform {
+            intellijIdeaCommunity(buildVersionData.ideaMainVersion)
+            pluginVerifier()
+        }
     }
 
     sourceSets {
@@ -184,18 +195,23 @@ project(":") {
         }
     }
 
-    /*configure<JavaPluginConvention> {
+    java {
         sourceCompatibility = buildVersionData.targetCompatibilityLevel
         targetCompatibility = buildVersionData.targetCompatibilityLevel
-    }*/
+    }
 
-    intellij {
-        type.set("IC")
-        updateSinceUntilBuild.set(false)
-        downloadSources.set(!isCI)
-        version.set(buildVersionData.ideaSDKVersion)
-        //localPath.set(System.getenv("IDEA_HOME_${buildVersionData.ideaSDKShortVersion}"))
-        sandboxDir.set("${project.buildDir}/${buildVersionData.ideaSDKShortVersion}/idea-sandbox")
+    intellijPlatform {
+        buildSearchableOptions = false
+        instrumentCode = true
+        
+        sandboxContainer = file("${layout.buildDirectory.get().asFile}/${buildVersionData.ideaSDKShortVersion}/idea-sandbox")
+        
+        pluginConfiguration {
+            ideaVersion {
+                sinceBuild = buildVersionData.sinceBuild
+                untilBuild = buildVersionData.untilBuild
+            }
+        }
     }
 
     task("bunch") {
@@ -235,33 +251,28 @@ project(":") {
         }
 
         compileKotlin {
-            kotlinOptions {
-                jvmTarget = buildVersionData.jvmTarget
+            compilerOptions {
+                jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.fromTarget(buildVersionData.jvmTarget))
             }
         }
 
-        patchPluginXml {
-            sinceBuild.set(buildVersionData.sinceBuild)
-            untilBuild.set(buildVersionData.untilBuild)
-        }
+        // patchPluginXml is now handled by intellijPlatform.pluginConfiguration
 
-        instrumentCode {
-            compilerVersion.set(buildVersionData.instrumentCodeCompilerVersion)
-        }
+        // instrumentCode configuration is now handled by instrumentationTools() dependency
 
         publishPlugin {
             token.set(System.getenv("IDEA_PUBLISH_TOKEN"))
         }
 
-        withType<org.jetbrains.intellij.tasks.PrepareSandboxTask> {
+        prepareSandbox {
             doLast {
                 copy {
                     from("src/main/resources/std")
-                    into("$destinationDir/${pluginName.get()}/std")
+                    into("${sandboxDirectory.get()}/plugins/${project.name}/std")
                 }
                 copy {
                     from("src/main/resources/debugger")
-                    into("$destinationDir/${pluginName.get()}/debugger")
+                    into("${sandboxDirectory.get()}/plugins/${project.name}/debugger")
                 }
             }
         }

@@ -37,8 +37,8 @@ class LuaPandaDebuggerRunner : LuaRunner() {
         return ID
     }
     
-    override fun canRun(executorId: String, profile: RunProfile): Boolean {
-        return DefaultDebugExecutor.EXECUTOR_ID == executorId && profile is LuaPandaDebugConfiguration
+    override fun canRun(executorId: String, runProfile: RunProfile): Boolean {
+        return DefaultDebugExecutor.EXECUTOR_ID == executorId && runProfile is LuaPandaDebugConfiguration
     }
     
     override fun doExecute(state: RunProfileState, environment: ExecutionEnvironment): RunContentDescriptor {
