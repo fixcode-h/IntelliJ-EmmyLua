@@ -247,10 +247,8 @@ project(":") {
     tasks {
         buildPlugin {
             dependsOn("bunch", "installEmmyDebugger")
-            archiveBaseName.set(buildVersionData.archiveName)
-            from(fileTree(resDir) { include("!!DONT_UNZIP_ME!!.txt") }) {
-                into("/${project.name}")
-            }
+            // 移除 archiveBaseName 配置，使用默认的插件名称
+            // 这样可以确保插件包结构正确，避免多余的目录层级
         }
 
         compileKotlin {
