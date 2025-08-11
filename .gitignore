@@ -5,6 +5,7 @@ publish_tmp
 .idea
 !.idea/IntelliJ-Lua.iml
 !.idea/modules.xml
+.intellijPlatform
 *.skeleton
 *.java~
 .gradle

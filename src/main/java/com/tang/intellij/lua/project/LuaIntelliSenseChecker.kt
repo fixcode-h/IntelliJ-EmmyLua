@@ -29,6 +29,7 @@ import java.io.File
  */
 class LuaIntelliSenseChecker : ProjectManagerListener {
     
+    @Deprecated("This method is deprecated in the parent class")
     override fun projectOpened(project: Project) {
         ApplicationManager.getApplication().invokeLater {
             checkLuaIntelliSense(project)
@@ -43,17 +44,14 @@ class LuaIntelliSenseChecker : ProjectManagerListener {
         if (!ideaFolder.exists()) return
         
         // Check project type and settings
-        when (settings.projectType) {
-            LuaProjectType.UNREAL_ENGINE -> {
-                if (settings.enableUEIntelliSense) {
-                    checkUEIntelliSense(project, ideaFolder, settings)
-                }
+        if (settings.projectType == LuaProjectType.UNREAL_ENGINE) {
+            if (settings.enableUEIntelliSense) {
+                checkUEIntelliSense(project, ideaFolder, settings)
             }
-            else -> {
-                // For standard Lua projects, check if it looks like a UE project
-                if (isUnrealEngineProject(projectPath)) {
-                    suggestUEProjectType(project)
-                }
+        } else {
+            // For standard Lua projects, check if it looks like a UE project
+            if (isUnrealEngineProject(projectPath)) {
+                suggestUEProjectType(project)
             }
         }
     }
