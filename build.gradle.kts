@@ -161,6 +161,9 @@ task("installEmmyDebugger", type = Copy::class) {
         into("debugger/emmy/mac/arm64")
     }
     destinationDir = file("src/main/resources")
+    
+    // 明确指定输出目录
+    outputs.dir("src/main/resources/debugger")
 }
 
 project(":") {
@@ -261,6 +264,8 @@ project(":") {
         // 确保 patchPluginXml 任务依赖于 installEmmyDebugger
         patchPluginXml {
             dependsOn("installEmmyDebugger")
+            // 明确声明输入，确保 Gradle 理解任务依赖关系
+            inputs.dir("src/main/resources/debugger")
         }
 
         // instrumentCode configuration is now handled by instrumentationTools() dependency
@@ -270,6 +275,7 @@ project(":") {
         }
 
         prepareSandbox {
+            dependsOn("installEmmyDebugger")
             doLast {
                 copy {
                     from("src/main/resources/std")
