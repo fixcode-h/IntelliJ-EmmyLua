@@ -27,17 +27,24 @@
     Features:
     <ul>
         <li>LuaPanda Debug</li>
+        <li>Support for IntelliJ IDEA 2025.2 (252.*)</li>
     </ul>
     ]]></description>
 
     <change-notes><![CDATA[
+    <strong>1.0.7-IDEA252</strong>
+    <ul>
+        <li>[UPDATE] 适配 IntelliJ IDEA 2025.2 (252.*) 版本</li>
+        <li>[UPDATE] 升级 Kotlin 版本至 2.1.20</li>
+        <li>[UPDATE] 升级 Java 版本至 21</li>
+        <li>[UPDATE] 升级 Gradle IntelliJ Plugin 版本至 1.17.4</li>
+    </ul>
     <strong>1.0.0</strong>
     <ul>
         <li>[NEW] LuaPanda Debug</li>
     </ul>
-    ]]>
-    </change-notes>
-    <idea-version since-build="231" until-build="232.*"/>
+    ]]></change-notes>
+    <idea-version since-build="231" until-build="252.*"/>
     <xi:include href="emmylua-core.xml" xpointer="xpointer(/idea-plugin/*)"/>
     <depends optional="true" config-file="emmylua-project.xml">com.intellij.java</depends>
 </idea-plugin>
