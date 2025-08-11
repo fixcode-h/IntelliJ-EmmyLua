@@ -75,9 +75,12 @@ val isWin = Os.isFamily(Os.FAMILY_WINDOWS)
 
 val isCI = System.getenv("CI") != null
 
-// CI
-if (isCI) {
-    version = System.getenv("CI_BUILD_VERSION")
+// 处理版本号：优先使用 pluginVersion 参数，然后是 CI_BUILD_VERSION，最后是默认版本
+val pluginVersion = project.findProperty("pluginVersion") as String?
+if (pluginVersion != null) {
+    version = pluginVersion
+} else if (isCI) {
+    version = System.getenv("CI_BUILD_VERSION") ?: version
     exec {
         executable = "git"
         args("config", "--global", "user.email", "love.tangzx@qq.com")
@@ -88,7 +91,10 @@ if (isCI) {
     }
 }
 
-version = "${version}-IDEA${buildVersion}"
+// 如果版本号不包含 IDEA 后缀，则添加
+if (!version.toString().contains("-IDEA")) {
+    version = "${version}-IDEA${buildVersion}"
+}
 
 fun getRev(): String {
     val os = ByteArrayOutputStream()
@@ -174,6 +180,9 @@ project(":") {
         implementation("org.eclipse.mylyn.github:org.eclipse.egit.github.core:2.1.5")
         implementation("com.jgoodies:forms:1.2.1")
         
+        // 添加 SLF4J 实现以解决警告
+        implementation("org.slf4j:slf4j-simple:2.0.9")
+        
         intellijPlatform {
             intellijIdeaCommunity(buildVersionData.ideaMainVersion)
             pluginVerifier()
@@ -249,7 +258,10 @@ project(":") {
             }
         }
 
-        // patchPluginXml is now handled by intellijPlatform.pluginConfiguration
+        // 确保 patchPluginXml 任务依赖于 installEmmyDebugger
+        patchPluginXml {
+            dependsOn("installEmmyDebugger")
+        }
 
         // instrumentCode configuration is now handled by instrumentationTools() dependency
 
