@@ -36,20 +36,25 @@ import com.tang.intellij.lua.psi.LuaFileUtil
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import javax.swing.Icon
+import com.intellij.icons.AllIcons
 
+/**
+ * LuaPanda暂停上下文
+ * 处理调试暂停时的变量查看和执行栈管理
+ */
 class LuaPandaSuspendContext(
     private val debugProcess: LuaPandaDebugProcess,
     private val stacks: List<LuaPandaStack>
 ) : XSuspendContext() {
 
-    override fun getActiveExecutionStack(): XExecutionStack? {
-        return if (stacks.isNotEmpty()) {
-            LuaPandaExecutionStack(debugProcess, stacks)
-        } else null
+    private val executionStack = LuaPandaExecutionStack(debugProcess, stacks)
+
+    override fun getActiveExecutionStack(): XExecutionStack {
+        return executionStack
     }
 
     override fun getExecutionStacks(): Array<XExecutionStack> {
-        return arrayOf(LuaPandaExecutionStack(debugProcess, stacks))
+        return arrayOf(executionStack)
     }
 }
 
@@ -175,7 +180,7 @@ class LuaPandaStackFrame(
                     println(" 解析栈帧变量响应失败: ${e.message}")
                     node.addChildren(XValueChildrenList.EMPTY, true)
                 }
-            })
+            }, 0)
         }
     }
 
@@ -269,7 +274,7 @@ class LuaPandaValue(
                     println(" 解析getVariable响应失败: ${e.message}")
                     node.addChildren(XValueChildrenList.EMPTY, true)
                 }
-            })
+            }, 0)
         } else {
             node.addChildren(XValueChildrenList.EMPTY, true)
         }
@@ -284,6 +289,46 @@ class LuaPandaValue(
             "function" -> com.intellij.icons.AllIcons.Nodes.Function
             "userdata" -> com.intellij.icons.AllIcons.Debugger.Value
             "thread" -> com.intellij.icons.AllIcons.Debugger.ThreadSuspended
+            else -> com.intellij.icons.AllIcons.Debugger.Value
+        }
+    }
+}
+
+/**
+ * LuaPanda表达式求值结果
+ */
+class LuaPandaEvaluationResult(
+    private val resultValue: String,
+    private val resultType: String,
+    private val variablesReference: Int
+) : XValue() {
+
+    override fun computePresentation(node: XValueNode, place: XValuePlace) {
+        val icon = getValueIcon(resultType)
+        node.setPresentation(icon, resultType, resultValue, variablesReference > 0)
+    }
+
+    override fun computeChildren(node: XCompositeNode) {
+        if (variablesReference > 0) {
+            // 如果有子变量引用，可以在这里实现展开逻辑
+            // 这需要向调试器发送getVariable请求
+            node.addChildren(XValueChildrenList.EMPTY, true)
+        } else {
+            node.addChildren(XValueChildrenList.EMPTY, true)
+        }
+    }
+    
+    /**
+     * 根据变量类型获取相应的图标
+     */
+    private fun getValueIcon(type: String): Icon? {
+        return when (type) {
+            "string" -> com.intellij.icons.AllIcons.Debugger.Db_primitive
+            "number" -> com.intellij.icons.AllIcons.Debugger.Db_primitive  
+            "boolean" -> com.intellij.icons.AllIcons.Debugger.Db_primitive
+            "table" -> com.intellij.icons.AllIcons.Debugger.Db_array
+            "function" -> com.intellij.icons.AllIcons.Nodes.Function
+            "userdata" -> com.intellij.icons.AllIcons.Debugger.Value
             else -> com.intellij.icons.AllIcons.Debugger.Value
         }
     }

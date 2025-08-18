@@ -53,7 +53,7 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
     // ========== 属性定义 ==========
     
     private val configuration = session.runProfile as LuaPandaDebugConfiguration
-    private val editorsProvider = LuaDebuggerEditorsProvider()
+    private val editorsProvider = LuaPandaDebuggerEditorsProvider()
     private val breakpoints = mutableMapOf<Int, LuaPandaBreakpoint>()
     private var idCounter = 0
     internal var transporter: LuaPandaTransporter? = null
@@ -81,27 +81,83 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
     }
 
     override fun stop() {
-        logWithLevel("停止调试", LogLevel.DEBUG)
+        logWithLevel("🛑 调试会话停止中...", LogLevel.CONNECTION)
         isStopping = true // 标记正在主动停止
         
-        if (transporter != null) {
-            try {
-                val stopConfirmed = AtomicBoolean(false)
-                
-                // 发送停止命令，等待确认
-                sendCommandWithResponse(LuaPandaCommands.STOP_RUN, null)
-                
-                // 设置超时机制
-                setupStopTimeout(stopConfirmed)
-                
-            } catch (e: Exception) {
-                logWithLevel("发送停止命令时出错: ${e.message}", LogLevel.ERROR, contentType = ConsoleViewContentType.ERROR_OUTPUT)
-                e.printStackTrace()
-                stopTransporter()
+        try {
+            // 1. 先停止连接尝试和重连机制
+            transporter?.let { 
+                if (it is LuaPandaTcpClientTransporter) {
+                    it.stopReconnectAttempts()
+                }
             }
-        } else {
-            logWithLevel("transporter为null，无法发送stopRun命令", LogLevel.DEBUG)
-            stopTransporter()
+            
+            // 2. 如果调试器已初始化，发送停止命令
+            if (isInitialized && transporter != null) {
+                try {
+                    logWithLevel("📤 发送停止运行命令到Lua调试器", LogLevel.DEBUG)
+                    
+                    // 参照VSCode插件的disconnectRequest，给Lua发消息让其停止运行
+                    val stopConfirmed = AtomicBoolean(false)
+                    transporter?.commandToDebugger(LuaPandaCommands.STOP_RUN, null, { response ->
+                        logWithLevel("✅ 收到Lua端停止确认", LogLevel.CONNECTION)
+                        stopConfirmed.set(true)
+                        // 在收到确认后立即清理连接
+                        finalizeStop()
+                    }, 0)
+                    
+                    // 设置超时机制 - 如果在指定时间内没有收到停止确认，强制停止
+                    setupStopTimeout(stopConfirmed)
+                    
+                } catch (e: Exception) {
+                    logWithLevel("❌ 发送停止命令失败: ${e.message}", LogLevel.ERROR, contentType = ConsoleViewContentType.ERROR_OUTPUT)
+                    finalizeStop() // 即使发送失败也要清理资源
+                }
+            } else {
+                logWithLevel("⚠️ 调试器未初始化或传输器不可用，直接清理资源", LogLevel.DEBUG)
+                finalizeStop()
+            }
+            
+        } catch (e: Exception) {
+            logWithLevel("❌ 停止过程中出现异常: ${e.message}", LogLevel.ERROR, contentType = ConsoleViewContentType.ERROR_OUTPUT)
+            e.printStackTrace()
+            finalizeStop() // 确保资源得到清理
+        }
+    }
+    
+    /**
+     * 最终停止处理，清理所有资源
+     * 参照VSCode插件的资源清理逻辑
+     */
+    private fun finalizeStop() {
+        try {
+            logWithLevel("🧹 清理调试会话资源...", LogLevel.DEBUG)
+            
+            // 1. 停止并清理传输器
+            transporter?.let { 
+                try {
+                    it.stop()
+                    logWithLevel("✅ 传输器已停止", LogLevel.DEBUG)
+                } catch (e: Exception) {
+                    logWithLevel("⚠️ 停止传输器时出错: ${e.message}", LogLevel.DEBUG)
+                }
+            }
+            
+            // 2. 清理回调和状态
+            transporter?.clearCallbacks()
+            
+            // 3. 重置状态标志
+            isInitialized = false
+            isStopping = false
+            transporter = null
+            
+            // 4. 清理断点映射
+            breakpoints.clear()
+            
+            logWithLevel("✅ 调试会话资源清理完成", LogLevel.CONNECTION)
+            
+        } catch (e: Exception) {
+            logWithLevel("❌ 资源清理过程中出错: ${e.message}", LogLevel.ERROR, contentType = ConsoleViewContentType.ERROR_OUTPUT)
         }
     }
     
@@ -125,7 +181,7 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
                 LuaPandaTcpClientTransporter(configuration.host, configuration.port, configuration.autoReconnect, this)
             }
             LuaPandaTransportType.TCP_SERVER -> {
-                LuaPandaTcpServerTransporter(configuration.port, this)
+                LuaPandaTcpServerTransporter(configuration.port, configuration.autoReconnect, this)
             }
         }
         
@@ -184,32 +240,51 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
     // ========== 连接管理 ==========
     
     private fun onConnect() {
-        logWithLevel("连接建立，等待连接稳定后发送初始化消息...", LogLevel.DEBUG)
+        logWithLevel("连接建立，立即发送初始化消息...", LogLevel.DEBUG)
         
-        // 延迟发送初始化消息，确保连接稳定
-        ApplicationManager.getApplication().executeOnPooledThread {
-            try {
-                Thread.sleep(1000) // 给Lua端更多准备时间
-                ApplicationManager.getApplication().invokeLater {
-                    if (transporter != null && !session.isStopped) {
-                        sendInitializationMessageWithRetry(1)
-                    }
-                }
-            } catch (e: InterruptedException) {
-                logWithLevel("初始化消息发送被中断", LogLevel.DEBUG)
+        // 参照VSCode插件的实现，连接建立后立即发送初始化消息
+        // 延迟发送可能导致客户端超时断开连接
+        ApplicationManager.getApplication().invokeLater {
+            if (transporter != null && !session.isStopped) {
+                sendInitializationMessageWithRetry(1)
             }
         }
     }
 
+    /**
+     * 断开连接处理
+     * 参照VSCode插件的onDisconnect逻辑
+     */
     private fun onDisconnect() {
-        logWithLevel("连接断开", LogLevel.CONNECTION)
+        logWithLevel("📡 连接断开", LogLevel.CONNECTION)
+        
+        // 重置初始化状态
         isInitialized = false
         
-        // 只有在非主动停止的情况下才显示重连消息
-        if (!isStopping) {
-            logWithLevel("客户端断开连接，等待重新连接...", LogLevel.CONNECTION)
+        // 根据断开原因显示不同消息
+        if (isStopping) {
+            logWithLevel("🏁 调试会话已正常结束", LogLevel.CONNECTION)
         } else {
-            logWithLevel("调试会话已停止", LogLevel.CONNECTION)
+            // 非主动停止的断开
+            if (configuration.autoReconnect && !session.isStopped) {
+                logWithLevel("🔄 客户端连接断开，等待重新连接...", LogLevel.CONNECTION)
+                logWithLevel("🔄 自动重连已启用，正在尝试重新连接...", LogLevel.CONNECTION)
+            } else {
+                // 没有启用自动重连或会话已停止，应该停止调试会话
+                logWithLevel("❌ 客户端连接断开，自动重连已禁用", LogLevel.CONNECTION)
+                logWithLevel("🛑 正在停止调试会话...", LogLevel.CONNECTION)
+                
+                // 在UI线程中停止调试会话
+                ApplicationManager.getApplication().invokeLater {
+                    try {
+                        session.stop()
+                        logWithLevel("✅ 调试会话已停止", LogLevel.CONNECTION)
+                    } catch (e: Exception) {
+                        logWithLevel("❌ 停止调试会话时出错: ${e.message}", LogLevel.ERROR, contentType = ConsoleViewContentType.ERROR_OUTPUT)
+                        logger.error("Error stopping debug session on disconnect", e)
+                    }
+                }
+            }
         }
     }
     
@@ -273,7 +348,30 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
         logWithLevel("发送初始化消息...", LogLevel.DEBUG)
         
         try {
-            sendCommandWithResponse(LuaPandaCommands.INIT_SUCCESS, initInfo)
+            // 将LuaPandaInitInfo转换为Map，作为info字段的内容
+            val initInfoMap = mapOf(
+                "stopOnEntry" to initInfo.stopOnEntry,
+                "luaFileExtension" to initInfo.luaFileExtension,
+                "cwd" to initInfo.cwd,
+                "isNeedB64EncodeStr" to initInfo.isNeedB64EncodeStr,
+                "TempFilePath" to initInfo.TempFilePath,
+                "logLevel" to initInfo.logLevel,
+                "pathCaseSensitivity" to initInfo.pathCaseSensitivity,
+                "OSType" to initInfo.OSType,
+                "clibPath" to initInfo.clibPath,
+                "useCHook" to initInfo.useCHook,
+                "adapterVersion" to initInfo.adapterVersion,
+                "autoPathMode" to initInfo.autoPathMode,
+                "distinguishSameNameFile" to initInfo.distinguishSameNameFile,
+                "truncatedOPath" to initInfo.truncatedOPath,
+                "DevelopmentMode" to initInfo.DevelopmentMode
+            )
+            
+            // 参照VSCode插件，直接发送命令而不是通过sendCommandWithResponse
+            transporter?.commandToDebugger(LuaPandaCommands.INIT_SUCCESS, initInfoMap, { response ->
+                handleInitializationResponse(response)
+            }, 0)
+            
             logWithLevel("初始化消息已发送，等待Lua端响应...", LogLevel.DEBUG)
             
         } catch (e: Exception) {
@@ -305,37 +403,74 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
         }
     }
     
+    /**
+     * 创建初始化信息
+     * 参照VSCode插件的实现，提供完整的配置参数
+     */
     private fun createInitInfo(pluginPath: String): LuaPandaInitInfo {
+        val osType = System.getProperty("os.name")
+        val projectPath = session.project.basePath ?: System.getProperty("user.dir")
+        
         return LuaPandaInitInfo(
             stopOnEntry = configuration.stopOnEntry.toString(),
-            useCHook = configuration.useCHook.toString(),
+            luaFileExtension = configuration.luaFileExtension.ifEmpty { "lua" },
+            cwd = projectPath,
+            isNeedB64EncodeStr = "true", // 固定使用Base64编码，避免字符串中的特殊字符问题
+            TempFilePath = configuration.tempFilePath.ifEmpty { projectPath },
             logLevel = configuration.logLevel.toString(),
-            luaFileExtension = "lua",
-            cwd = session.project.basePath ?: System.getProperty("user.dir"),
-            isNeedB64EncodeStr = "true",
-            TempFilePath = session.project.basePath ?: System.getProperty("user.dir"),
-            pathCaseSensitivity = "true",
-            OSType = System.getProperty("os.name"),
+            pathCaseSensitivity = "true", // Windows/Linux路径大小写敏感性
+            OSType = osType,
             clibPath = pluginPath,
-            adapterVersion = "1.0.0",
-            autoPathMode = "false",
-            distinguishSameNameFile = "false",
-            truncatedOPath = "",
-            DevelopmentMode = "false"
+            useCHook = configuration.useCHook.toString(),
+            adapterVersion = "1.0.0", // 插件版本信息
+            autoPathMode = configuration.autoPathMode.toString(),
+            distinguishSameNameFile = configuration.distinguishSameNameFile.toString(),
+            truncatedOPath = configuration.truncatedOPath,
+            DevelopmentMode = configuration.developmentMode.toString()
         )
     }
     
+    /**
+     * 处理初始化响应并进行后续设置
+     * 参照VSCode插件的实现，完整处理调试器状态
+     */
     private fun handleInitializationResponse(response: LuaPandaMessage) {
-        logWithLevel("收到Lua端初始化响应，调试器初始化成功！", LogLevel.CONNECTION)
+        logWithLevel("🎯 收到Lua端初始化响应，解析调试器状态...", LogLevel.CONNECTION)
         
-        response.getInfoAsObject()?.let { info ->
-            val useHookLib = info.get("UseHookLib")?.asString ?: "0"
-            val useLoadstring = info.get("UseLoadstring")?.asString ?: "0"
-            val isNeedB64EncodeStr = info.get("isNeedB64EncodeStr")?.asString ?: "false"
+        try {
+            response.getInfoAsObject()?.let { info ->
+                // 提取调试器状态信息
+                val useHookLib = info.get("UseHookLib")?.asString ?: "0"
+                val useLoadstring = info.get("UseLoadstring")?.asString ?: "0"
+                val isNeedB64EncodeStr = info.get("isNeedB64EncodeStr")?.asString ?: "true"
+                
+                logWithLevel("📋 调试器配置 - Hook库:${if(useHookLib == "1") "启用" else "禁用"}, " +
+                    "Loadstring:${if(useLoadstring == "1") "启用" else "禁用"}, " +
+                    "Base64编码:${if(isNeedB64EncodeStr == "true") "启用" else "禁用"}", LogLevel.DEBUG)
+                
+                // 更新传输器的编码设置
+                transporter?.enableB64Encoding(isNeedB64EncodeStr == "true")
+                
+                logger.info("LuaPanda初始化成功 - UseHookLib: $useHookLib, UseLoadstring: $useLoadstring, B64Encode: $isNeedB64EncodeStr")
+                
+                isInitialized = true
+                
+                // 发送现有断点到调试器
+                sendExistingBreakpoints()
+                
+                logWithLevel("🚀 调试器现已就绪，可以开始调试", LogLevel.CONNECTION)
+                
+            } ?: run {
+                logWithLevel("⚠️ 初始化响应缺少调试器状态信息，使用默认设置", LogLevel.DEBUG)
+                isInitialized = true
+                sendExistingBreakpoints()
+            }
             
-            logWithLevel("初始化完成 - HookLib:$useHookLib, Loadstring:$useLoadstring, B64:$isNeedB64EncodeStr", LogLevel.DEBUG)
-            logger.info("LuaPanda initialized - UseHookLib: $useHookLib, UseLoadstring: $useLoadstring, B64Encode: $isNeedB64EncodeStr")
+        } catch (e: Exception) {
+            logWithLevel("❌ 解析初始化响应失败: ${e.message}", LogLevel.ERROR, contentType = ConsoleViewContentType.ERROR_OUTPUT)
+            logger.error("Failed to parse initialization response", e)
             
+            // 即使解析失败，也标记为已初始化，允许基本调试功能
             isInitialized = true
             sendExistingBreakpoints()
         }
@@ -371,23 +506,75 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
     
     // ========== 消息处理 ==========
     
+    /**
+     * 处理来自调试器的消息
+     * 参照VSCode插件dataProcessor.getData中的消息处理逻辑
+     */
     private fun handleMessage(message: LuaPandaMessage) {
+        logWithLevel("收到消息: ${message.cmd}", LogLevel.DEBUG)
+        
         when (message.cmd) {
-            LuaPandaCommands.STOP_ON_BREAKPOINT, 
-            LuaPandaCommands.STOP_ON_ENTRY, 
-            LuaPandaCommands.STEP_OVER, 
-            LuaPandaCommands.STEP_IN, 
-            LuaPandaCommands.STEP_OUT -> {
+            // ========== 断点相关消息 ==========
+            LuaPandaCommands.STOP_ON_BREAKPOINT -> {
+                logWithLevel("🎯 断点命中", LogLevel.DEBUG)
                 handleBreakMessage(message)
             }
+            LuaPandaCommands.STOP_ON_ENTRY -> {
+                logWithLevel("🏁 程序入口暂停", LogLevel.DEBUG)
+                handleBreakMessage(message)
+            }
+            LuaPandaCommands.STOP_ON_CODE_BREAKPOINT -> {
+                logWithLevel("💻 代码断点命中", LogLevel.DEBUG)
+                handleBreakMessage(message)
+            }
+            
+            // ========== 单步调试相关消息 ==========
+            LuaPandaCommands.STEP_OVER -> {
+                logWithLevel("👣 单步跳过完成", LogLevel.DEBUG)
+                handleBreakMessage(message)
+            }
+            LuaPandaCommands.STEP_IN -> {
+                logWithLevel("📥 单步进入完成", LogLevel.DEBUG)
+                handleBreakMessage(message)
+            }
+            LuaPandaCommands.STEP_OUT -> {
+                logWithLevel("📤 单步跳出完成", LogLevel.DEBUG)
+                handleBreakMessage(message)
+            }
+            
+            // ========== 程序控制相关消息 ==========
             LuaPandaCommands.STOP_RUN -> {
+                logWithLevel("🛑 程序停止运行", LogLevel.CONNECTION)
                 handleStopRunMessage()
             }
-            LuaPandaCommands.OUTPUT -> {
+            LuaPandaCommands.CONTINUE -> {
+                logWithLevel("▶️ 程序继续运行", LogLevel.DEBUG)
+                // 继续运行通常不需要特殊处理，只是确认消息
+            }
+            
+            // ========== 输出和日志相关消息 ==========
+            "output" -> {
                 handleOutputMessage(message)
             }
+            "debug_console" -> {
+                handleDebugConsoleMessage(message)
+            }
+            
+            // ========== 内存和状态相关消息 ==========
+            "refreshLuaMemory" -> {
+                handleMemoryRefreshMessage(message)
+            }
+            "tip" -> {
+                handleTipMessage(message)
+            }
+            "tipError" -> {
+                handleTipErrorMessage(message)
+            }
+            
+            // ========== 未知消息 ==========
             else -> {
-                logger.info("Unknown message: ${message.cmd}")
+                logWithLevel("⚠️ 收到未知消息类型: ${message.cmd}", LogLevel.DEBUG, contentType = ConsoleViewContentType.ERROR_OUTPUT)
+                logger.info("Unknown message received: ${message.cmd}")
             }
         }
     }
@@ -431,9 +618,59 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
         }
     }
     
+    /**
+     * 处理输出消息
+     */
     private fun handleOutputMessage(message: LuaPandaMessage) {
-        val outputText = message.getInfoAsObject()?.get("content")?.asString ?: ""
-        logWithLevel(outputText, LogLevel.DEBUG)
+        val info = message.getInfoAsObject()
+        val logInfo = info?.get("logInfo")?.asString ?: ""
+        if (logInfo.isNotEmpty()) {
+            logWithLevel("📤 [Lua输出] $logInfo", LogLevel.DEBUG)
+        }
+    }
+    
+    /**
+     * 处理调试控制台消息
+     */
+    private fun handleDebugConsoleMessage(message: LuaPandaMessage) {
+        val info = message.getInfoAsObject()
+        val logInfo = info?.get("logInfo")?.asString ?: ""
+        if (logInfo.isNotEmpty()) {
+            logWithLevel("[调试控制台] $logInfo", LogLevel.DEBUG, contentType = ConsoleViewContentType.SYSTEM_OUTPUT)
+        }
+    }
+    
+    /**
+     * 处理内存刷新消息
+     */
+    private fun handleMemoryRefreshMessage(message: LuaPandaMessage) {
+        val info = message.getInfoAsObject()
+        val memInfo = info?.get("memInfo")?.asString ?: ""
+        if (memInfo.isNotEmpty()) {
+            logWithLevel("💾 Lua内存使用: ${memInfo}KB", LogLevel.DEBUG)
+        }
+    }
+    
+    /**
+     * 处理提示消息
+     */
+    private fun handleTipMessage(message: LuaPandaMessage) {
+        val info = message.getInfoAsObject()
+        val logInfo = info?.get("logInfo")?.asString ?: ""
+        if (logInfo.isNotEmpty()) {
+            logWithLevel("💡 [提示] $logInfo", LogLevel.CONNECTION)
+        }
+    }
+    
+    /**
+     * 处理错误提示消息
+     */
+    private fun handleTipErrorMessage(message: LuaPandaMessage) {
+        val info = message.getInfoAsObject()
+        val logInfo = info?.get("logInfo")?.asString ?: ""
+        if (logInfo.isNotEmpty()) {
+            logWithLevel("❌ [错误] $logInfo", LogLevel.CONNECTION, contentType = ConsoleViewContentType.ERROR_OUTPUT)
+        }
     }
     
     // ========== 断点管理 ==========
@@ -656,7 +893,7 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
     /**
      * 根据日志级别控制日志输出
      */
-    private fun logWithLevel(
+    internal fun logWithLevel(
         message: String, 
         level: LogLevel = LogLevel.CONNECTION,
         contentType: ConsoleViewContentType = ConsoleViewContentType.SYSTEM_OUTPUT
@@ -672,7 +909,7 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
     private fun sendCommandWithResponse(command: String, data: Any?) {
         transporter?.commandToDebugger(command, data, { response ->
             handleCommandResponse(command, response)
-        })
+        }, 0)
     }
     
     /**
