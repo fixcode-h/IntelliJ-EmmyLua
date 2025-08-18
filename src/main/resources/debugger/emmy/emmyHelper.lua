@@ -1,3 +1,5 @@
+---@meta
+
 -- Copyright (c) 2017. tangzx(love.tangzx@qq.com)
 --
 -- Licensed under the Apache License, Version 2.0 (the "License");
@@ -83,7 +85,7 @@ local xluaDebugger = {
             local CSType = obj:GetType()
             if CSType then
                 variable.valueTypeName = 'C#'
-                variable.value = tostring(obj)--CSType.FullName
+                variable.value = tostring(obj) --CSType.FullName
 
                 if depth > 1 then
                     local Type = CS.System.Type
@@ -187,12 +189,7 @@ elseif xlua then
     emmy = xluaDebugger
 end
 
-local emmyHelper = rawget(_G, "emmyHelper")
-if emmyHelper == nil then
-    rawset(_G, 'emmyHelper', emmy)
-elseif emmy.queryVariable then
-    emmyHelper.queryVariable = emmy.queryVariable
-end
+rawset(_G, 'emmyHelper', emmy)
 
 local emmyHelperInit = rawget(_G, 'emmyHelperInit')
 if emmyHelperInit then
