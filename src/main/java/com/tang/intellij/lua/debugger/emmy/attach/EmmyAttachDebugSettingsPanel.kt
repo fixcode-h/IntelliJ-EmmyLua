@@ -41,6 +41,7 @@ class EmmyAttachDebugSettingsPanel(private val project: Project) : SettingsEdito
     private val autoAttachSingleCheckBox = JCheckBox("自动附加单个进程")
     private val filterUEProcessesCheckBox = JCheckBox("过滤虚幻引擎进程")
     private val blacklistField = JBTextField()
+    private val logLevelComboBox = JComboBox(LogLevel.values())
 
     private val panel: JPanel
     private val processSelector = ProcessSelector(project)
@@ -74,6 +75,11 @@ class EmmyAttachDebugSettingsPanel(private val project: Project) : SettingsEdito
         captureLogCheckBox.addActionListener { fireEditorStateChanged() }
         autoAttachSingleCheckBox.addActionListener { fireEditorStateChanged() }
         filterUEProcessesCheckBox.addActionListener { fireEditorStateChanged() }
+        logLevelComboBox.addActionListener { fireEditorStateChanged() }
+        
+        // 设置日志等级默认值和提示
+        logLevelComboBox.selectedItem = LogLevel.NORMAL
+        logLevelComboBox.toolTipText = "设置日志输出等级：0级=调试日志，1级=普通日志，2级=错误日志"
 
         // 创建面板布局
         panel = createPanel()
@@ -112,6 +118,12 @@ class EmmyAttachDebugSettingsPanel(private val project: Project) : SettingsEdito
         panel.add(captureLogCheckBox)
         panel.add(autoAttachSingleCheckBox)
         panel.add(filterUEProcessesCheckBox)
+        
+        // 日志等级选择
+        val logLevelPanel = JPanel(BorderLayout())
+        logLevelPanel.add(JLabel("日志输出等级:"), BorderLayout.WEST)
+        logLevelPanel.add(logLevelComboBox, BorderLayout.CENTER)
+        panel.add(logLevelPanel)
         
         val blacklistPanel = JPanel(BorderLayout())
         blacklistPanel.add(JLabel("进程黑名单:"), BorderLayout.WEST)
@@ -178,6 +190,7 @@ class EmmyAttachDebugSettingsPanel(private val project: Project) : SettingsEdito
         captureLogCheckBox.isSelected = configuration.captureLog
         autoAttachSingleCheckBox.isSelected = configuration.autoAttachSingleProcess
         filterUEProcessesCheckBox.isSelected = configuration.filterUEProcesses
+        logLevelComboBox.selectedItem = configuration.logLevel
         blacklistField.text = configuration.threadFilterBlacklist.joinToString(",")
     }
 
@@ -194,6 +207,7 @@ class EmmyAttachDebugSettingsPanel(private val project: Project) : SettingsEdito
         configuration.captureLog = captureLogCheckBox.isSelected
         configuration.autoAttachSingleProcess = autoAttachSingleCheckBox.isSelected
         configuration.filterUEProcesses = filterUEProcessesCheckBox.isSelected
+        configuration.logLevel = logLevelComboBox.selectedItem as LogLevel
         configuration.threadFilterBlacklist = blacklistField.text.split(",")
             .map { it.trim() }.filter { it.isNotEmpty() }
     }

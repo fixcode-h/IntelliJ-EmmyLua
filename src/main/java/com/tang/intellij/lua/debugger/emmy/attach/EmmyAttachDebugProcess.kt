@@ -36,6 +36,15 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
     private var attachedPid = 0
     private var usedArch: WinArch = WinArch.X86
     @Volatile private var isStopping = false  // 添加停止标志
+    
+    /**
+     * 根据日志等级输出日志
+     */
+    private fun logWithLevel(message: String, level: LogLevel, contentType: ConsoleViewContentType = ConsoleViewContentType.SYSTEM_OUTPUT) {
+        if (level.level >= configuration.logLevel.level) {
+            println(message, LogConsoleType.NORMAL, contentType)
+        }
+    }
 
     override fun setupTransporter() {
         ApplicationManager.getApplication().executeOnPooledThread {
@@ -48,7 +57,7 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
                 
                 // 获取调试端口并尝试连接
                 val port = ProcessUtils.getPortFromPid(configuration.pid)
-                println("🔌 尝试连接调试端口: $port", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+                logWithLevel("🔌 尝试连接调试端口: $port", LogLevel.NORMAL)
                 
                 // 尝试多个地址：IPv4 和 IPv6
                 val hosts = listOf("127.0.0.1", "::1", "localhost")
@@ -57,7 +66,7 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
                 
                 for (host in hosts) {
                     try {
-                        println("🔌 尝试连接 $host:$port", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+                        logWithLevel("🔌 尝试连接 $host:$port", LogLevel.NORMAL)
                         
                         val transporter = SocketClientTransporter(host, port)
                         transporter.handler = this
@@ -66,7 +75,7 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
                         
                         transporter.start()
                         connected = true
-                        println("🎉 Connected! 调试器已连接成功 ($host:$port)", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+                        logWithLevel("🎉 Connected! 调试器已连接成功 ($host:$port)", LogLevel.NORMAL)
                         break
                         
                     } catch (hostException: Exception) {
@@ -76,7 +85,7 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
                             hostException.message?.contains("timeout") == true -> "连接超时"
                             else -> hostException.message?.take(30) ?: "未知错误"
                         }
-                        println("❌ $host:$port 连接失败: $errorMsg", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+                        logWithLevel("❌ $host:$port 连接失败: $errorMsg", LogLevel.ERROR)
                         lastException = hostException
                     }
                 }
@@ -111,7 +120,7 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
          }
 
          val debuggerPath = DebuggerPathUtils.getEmmyDebuggerPath()!!
-         println("调试器工具路径: $debuggerPath", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+         logWithLevel("调试器工具路径: $debuggerPath", LogLevel.DEBUG)
 
          // 检测进程架构
          val detectedArch = ProcessUtils.detectProcessArch(configuration.pid)
@@ -150,8 +159,8 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
             commands.add("-capture-log")
         }
 
-                 println("执行附加命令: ${commands.joinToString(" ")}", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
-         println("工作目录: ${toolDir.absolutePath}", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+                 logWithLevel("执行附加命令: ${commands.joinToString(" ")}", LogLevel.DEBUG)
+         logWithLevel("工作目录: ${toolDir.absolutePath}", LogLevel.DEBUG)
 
          // 执行附加命令（与VSCode完全相同的方式）
          val processBuilder = ProcessBuilder(commands)
@@ -164,7 +173,7 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
                  process.inputStream.bufferedReader().use { reader ->
                      var line: String?
                      while (reader.readLine().also { line = it } != null) {
-                         println("📤 attach输出: $line", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+                         logWithLevel("📤 attach输出: $line", LogLevel.DEBUG)
                      }
                  }
              } catch (e: Exception) {
@@ -203,8 +212,8 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
                  isAttached = true
          attachedPid = configuration.pid
          usedArch = useArch
-         println("✅ 成功附加到进程 ${configuration.pid}", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
-         println("📝 注意: 目标进程必须包含Lua运行时才能建立调试连接", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+         logWithLevel("✅ 成功附加到进程 ${configuration.pid}", LogLevel.NORMAL)
+         logWithLevel("📝 注意: 目标进程必须包含Lua运行时才能建立调试连接", LogLevel.NORMAL)
 
                          // 如果启用了日志捕获，启动日志捕获进程（模拟VSCode的receive_log功能）
         if (configuration.captureLog) {
@@ -212,7 +221,7 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
         }
         
         // 分析目标进程模块，检测Lua运行时
-        println("🔍 正在分析目标进程模块...", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+        logWithLevel("🔍 正在分析目标进程模块...", LogLevel.DEBUG)
         val moduleAnalysis = ProcessUtils.analyzeProcessModules(configuration.pid, useArch)
         
         if (moduleAnalysis.errorMessage != null) {
@@ -220,27 +229,27 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
         }
         
         if (moduleAnalysis.hasLuaRuntime) {
-            println("✅ 检测到标准Lua运行时模块:", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
-            moduleAnalysis.luaModules.forEach { module ->
-                println("  📚 $module", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
-            }
-            println("🚀 调试器将尝试连接到这些Lua运行时", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+            logWithLevel("✅ 检测到标准Lua运行时模块:", LogLevel.NORMAL)
+             moduleAnalysis.luaModules.forEach { module ->
+                 logWithLevel("  📚 $module", LogLevel.NORMAL)
+             }
+             logWithLevel("🚀 调试器将尝试连接到这些Lua运行时", LogLevel.NORMAL)
         } else {
             val totalModules = moduleAnalysis.allModules.size
             println("⚠️ 未检测到标准Lua运行时模块！", LogConsoleType.NORMAL, ConsoleViewContentType.ERROR_OUTPUT)
-            println("📊 进程共包含 $totalModules 个模块", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+            logWithLevel("📊 进程共包含 $totalModules 个模块", LogLevel.DEBUG)
             
             if (totalModules > 0) {
-                println("🔍 已分析的模块包括:", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
-                moduleAnalysis.allModules.take(10).forEach { module ->  // 只显示前10个
-                    println("  📄 $module", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
-                }
-                if (totalModules > 10) {
-                    println("  ... 还有 ${totalModules - 10} 个模块", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
-                }
+                logWithLevel("🔍 已分析的模块包括:", LogLevel.DEBUG)
+             moduleAnalysis.allModules.take(10).forEach { module ->
+                 logWithLevel("  📄 $module", LogLevel.DEBUG)
+             }
+             if (totalModules > 10) {
+                 logWithLevel("  ... 还有 ${totalModules - 10} 个模块", LogLevel.DEBUG)
+             }
             }
             
-            println("💡 建议：确保目标进程包含标准Lua运行时(如lua.dll、lua51.dll、luajit.dll等)", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+            logWithLevel("💡 建议：确保目标进程包含标准Lua运行时(如lua.dll、lua51.dll、luajit.dll等)", LogLevel.NORMAL)
             println("⚠️ 警告：由于未检测到标准Lua运行时，调试连接可能会失败", LogConsoleType.NORMAL, ConsoleViewContentType.ERROR_OUTPUT)
         }
     }
@@ -261,16 +270,16 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
             processBuilder.directory(toolDir)
             processBuilder.start()
 
-            println("启动日志捕获进程", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+            logWithLevel("启动日志捕获进程", LogLevel.DEBUG)
         } catch (e: Exception) {
-            println("启动日志捕获失败: ${e.message}", LogConsoleType.NORMAL, ConsoleViewContentType.ERROR_OUTPUT)
+            logWithLevel("启动日志捕获失败: ${e.message}", LogLevel.ERROR)
         }
     }
 
     override fun onConnect(suc: Boolean) {
         if (suc) {
-            println("🔗 TCP连接已建立", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
-            println("📤 正在发送初始化请求...", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+            logWithLevel("🔗 TCP连接已建立", LogLevel.NORMAL)
+        logWithLevel("📤 正在发送初始化请求...", LogLevel.DEBUG)
             
             // 按照VSCode流程：连接成功后直接发送初始化请求
             ApplicationManager.getApplication().runReadAction {
@@ -283,7 +292,7 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
     }
 
     override fun onDisconnect() {
-        println("📡 调试器连接断开", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+        logWithLevel("📡 调试器连接断开", LogLevel.NORMAL)
         stop()
         session?.stop()
     }
@@ -294,18 +303,18 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
                 try {
                     val gson = com.google.gson.Gson()
                     val msg = gson.fromJson(json, AttachedNotify::class.java)
-                    println("🎯 Connected! 已成功附加到Lua状态 0x${msg.state.toString(16)}", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
-                    println("🚀 调试器现已就绪，可以开始调试", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+                    logWithLevel("🎯 Connected! 已成功附加到Lua状态 0x${msg.state.toString(16)}", LogLevel.NORMAL)
+            logWithLevel("🚀 调试器现已就绪，可以开始调试", LogLevel.NORMAL)
                 } catch (e: Exception) {
-                    println("🎯 Connected! 已成功附加到Lua状态", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
-                    println("🚀 调试器现已就绪，可以开始调试", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+                    logWithLevel("🎯 Connected! 已成功附加到Lua状态", LogLevel.NORMAL)
+            logWithLevel("🚀 调试器现已就绪，可以开始调试", LogLevel.NORMAL)
                 }
             }
             MessageCMD.LogNotify -> {
                 try {
                     val gson = com.google.gson.Gson()
                     val msg = gson.fromJson(json, LogNotify::class.java)
-                    println("📝 ${msg.message}", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+                    logWithLevel("📝 ${msg.message}", LogLevel.DEBUG)
                 } catch (e: Exception) {
                     // 忽略解析错误
                 }
@@ -341,7 +350,7 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
      */
     private fun detachFromProcess() {
         try {
-            println("🔄 正在清理调试会话资源...", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+            logWithLevel("🔄 正在清理调试会话资源...", LogLevel.DEBUG)
             
             // 1. 断开TCP连接
             transporter?.let { 
@@ -355,8 +364,8 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
             // 2. 等待一段时间让目标进程清理资源
             Thread.sleep(1000)
             
-            println("✅ 调试会话清理完成", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
-            println("📝 注意: DLL文件可能仍被目标进程占用，这是正常现象", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+            logWithLevel("✅ 调试会话清理完成", LogLevel.NORMAL)
+        logWithLevel("📝 注意: DLL文件可能仍被目标进程占用，这是正常现象", LogLevel.NORMAL)
             
         } catch (e: Exception) {
             println("⚠️ 清理过程出错: ${e.message}", LogConsoleType.NORMAL, ConsoleViewContentType.ERROR_OUTPUT)
@@ -370,7 +379,7 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
      * 发送初始化请求（按照VSCode流程）
      */
     private fun sendInitReq() {
-        println("📤 发送调试器初始化请求", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+        logWithLevel("📤 发送调试器初始化请求", LogLevel.DEBUG)
         
         // 1. 发送初始化脚本（emmyHelper.lua）
         val helperPath = LuaFileUtil.getPluginVirtualFile("debugger/emmy/emmyHelper.lua")
@@ -378,14 +387,14 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
             val code = File(helperPath).readText()
             val extensions = com.tang.intellij.lua.psi.LuaFileManager.extensions
             transporter?.send(InitMessage(code, extensions))
-            println("📤 发送InitReq消息（emmyHelper.lua）", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+            logWithLevel("📤 发送InitReq消息（emmyHelper.lua）", LogLevel.DEBUG)
         }
         
         // 2. 发送断点信息
         val breakpointManager = com.intellij.xdebugger.XDebuggerManager.getInstance(session.project).breakpointManager
         val breakpoints = breakpointManager.getBreakpoints(com.tang.intellij.lua.debugger.LuaLineBreakpointType::class.java)
         if (breakpoints.isNotEmpty()) {
-            println("📤 发送 ${breakpoints.size} 个断点", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+            logWithLevel("📤 发送 ${breakpoints.size} 个断点", LogLevel.DEBUG)
             breakpoints.forEach { breakpoint ->
                 breakpoint.sourcePosition?.let { position ->
                     registerBreakpoint(position, breakpoint)
@@ -395,7 +404,7 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
         
         // 3. 发送准备消息
         transporter?.send(Message(MessageCMD.ReadyReq))
-        println("📤 发送ReadyReq消息", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+        logWithLevel("📤 发送ReadyReq消息", LogLevel.DEBUG)
     }
 }
 

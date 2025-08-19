@@ -89,6 +89,7 @@ class EmmyAttachDebugConfiguration(project: Project, factory: EmmyAttachDebugger
     var autoAttachSingleProcess: Boolean = true
     var filterUEProcesses: Boolean = false
     var threadFilterBlacklist: List<String> = listOf("winlogon", "csrss", "wininit", "services")
+    var logLevel: LogLevel = LogLevel.NORMAL  // 默认日志等级为1级（普通日志）
 
     override fun getConfigurationEditor(): SettingsEditor<out RunConfiguration> {
         val group = SettingsEditorGroup<EmmyAttachDebugConfiguration>()
@@ -113,6 +114,7 @@ class EmmyAttachDebugConfiguration(project: Project, factory: EmmyAttachDebugger
         JDOMExternalizerUtil.writeField(element, "AUTO_ATTACH_SINGLE_PROCESS", autoAttachSingleProcess.toString())
         JDOMExternalizerUtil.writeField(element, "FILTER_UE_PROCESSES", filterUEProcesses.toString())
         JDOMExternalizerUtil.writeField(element, "THREAD_FILTER_BLACKLIST", threadFilterBlacklist.joinToString(","))
+        JDOMExternalizerUtil.writeField(element, "LOG_LEVEL", logLevel.level.toString())
     }
 
     override fun readExternal(element: Element) {
@@ -130,5 +132,7 @@ class EmmyAttachDebugConfiguration(project: Project, factory: EmmyAttachDebugger
         filterUEProcesses = filterUEStr?.toBoolean() ?: false
         val blacklistStr = JDOMExternalizerUtil.readField(element, "THREAD_FILTER_BLACKLIST")
         threadFilterBlacklist = if (blacklistStr.isNullOrEmpty()) listOf() else blacklistStr.split(",")
+        val logLevelStr = JDOMExternalizerUtil.readField(element, "LOG_LEVEL")
+        logLevel = LogLevel.fromLevel(logLevelStr?.toIntOrNull() ?: 1)  // 默认为1级（普通日志）
     }
-} 
+}
