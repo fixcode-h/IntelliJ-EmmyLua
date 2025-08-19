@@ -150,7 +150,7 @@ class EmmyAttachDebugSettingsPanel(private val project: Project) : SettingsEdito
         val blacklist = blacklistField.text.split(",").map { it.trim() }.filter { it.isNotEmpty() }
 
         val selectedProcess = processSelector.showProcessSelectionDialog(
-            processName, filterUE, autoAttachSingle, blacklist
+            processName, autoAttachSingle, blacklist
         )
 
         selectedProcess?.let { process ->
@@ -202,4 +202,4 @@ class EmmyAttachDebugSettingsPanel(private val project: Project) : SettingsEdito
     override fun createEditor(): JComponent {
         return panel
     }
-} 
+}

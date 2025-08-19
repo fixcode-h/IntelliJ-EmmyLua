@@ -27,6 +27,7 @@ import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.util.ui.JBUI
 import com.tang.intellij.lua.psi.LuaFileUtil
+import com.tang.intellij.lua.project.LuaSettings
 import java.awt.BorderLayout
 import java.awt.Dimension
 import java.awt.event.MouseAdapter
@@ -40,20 +41,14 @@ import javax.swing.*
  */
 class ProcessSelector(private val project: Project) {
 
-    private val ueProcessNames = listOf(
-        "UnrealEngine", "UE4Editor", "UE5Editor", "UnrealEditor",
-        "UnrealHeaderTool", "UnrealBuildTool", "UnrealLightmass"
-    )
-
     /**
      * 获取系统进程列表
      */
-         fun getProcessList(
-         processName: String = "",
-         filterUEProcesses: Boolean = false,
-         autoAttachSingleProcess: Boolean = true,
-         threadFilterBlacklist: List<String> = emptyList()
-     ): List<ProcessInfo> {
+    fun getProcessList(
+        processName: String = "",
+        autoAttachSingleProcess: Boolean = true,
+        threadFilterBlacklist: List<String> = emptyList()
+    ): List<ProcessInfo> {
                   return try {
              // 验证调试器工具
              val validationError = DebuggerPathUtils.validateDebuggerTools()
@@ -73,7 +68,7 @@ class ProcessSelector(private val project: Project) {
             
             // 使用CP936编码解析输出(中文系统)
             val outputStr = String(output, Charset.forName("CP936"))
-            parseProcessList(outputStr, processName, filterUEProcesses, threadFilterBlacklist)
+            parseProcessList(outputStr, processName, threadFilterBlacklist)
         } catch (e: Exception) {
             throw Exception("获取进程列表失败: ${e.message}")
         }
@@ -85,7 +80,6 @@ class ProcessSelector(private val project: Project) {
     private fun parseProcessList(
         output: String,
         processName: String,
-        filterUEProcesses: Boolean,
         threadFilterBlacklist: List<String>
     ): List<ProcessInfo> {
         val lines = output.split("\r\n")
@@ -103,11 +97,10 @@ class ProcessSelector(private val project: Project) {
 
                 // 应用过滤条件
                 val matchesProcessName = processInfo.matchesProcessName(processName)
+                val ueProcessNames = LuaSettings.instance.ueProcessNames.toList()
                 val isUEProcess = processInfo.isUnrealEngineProcess(ueProcessNames)
                 val isBlacklisted = processInfo.isInBlacklist(threadFilterBlacklist)
-                val shouldInclude = matchesProcessName && 
-                                 (!filterUEProcesses || isUEProcess) && 
-                                 !isBlacklisted
+                val shouldInclude = matchesProcessName && isUEProcess && !isBlacklisted
 
                 if (shouldInclude) {
                     processes.add(processInfo)
@@ -126,7 +119,6 @@ class ProcessSelector(private val project: Project) {
      */
     fun showProcessSelectionDialog(
         processName: String = "",
-        filterUEProcesses: Boolean = false,
         autoAttachSingleProcess: Boolean = true,
         threadFilterBlacklist: List<String> = emptyList()
     ): ProcessInfo? {
@@ -137,7 +129,7 @@ class ProcessSelector(private val project: Project) {
                 indicator.text = "正在获取系统进程列表..."
                 
                 val processes = try {
-                    getProcessList(processName, filterUEProcesses, autoAttachSingleProcess, threadFilterBlacklist)
+                    getProcessList(processName, autoAttachSingleProcess, threadFilterBlacklist)
                 } catch (e: Exception) {
                     ApplicationManager.getApplication().invokeLater {
                         Messages.showErrorDialog(project, e.message, "错误")
@@ -228,4 +220,4 @@ class ProcessSelector(private val project: Project) {
             null
         }
     }
-} 
+}

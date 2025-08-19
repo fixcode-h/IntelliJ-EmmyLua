@@ -95,6 +95,14 @@ class LuaSettings : PersistentStateComponent<LuaSettings> {
      */
     var enableUEIntelliSense = true
 
+    /**
+     * UE进程名称列表，用于调试器进程过滤
+     */
+    var ueProcessNames: Array<String> = arrayOf(
+        "UnrealEngine", "UE4Editor", "UE5Editor", "UnrealEditor",
+        "UnrealHeaderTool", "UnrealBuildTool", "UnrealLightmass"
+    )
+
     override fun getState(): LuaSettings {
         return this
     }
@@ -119,7 +127,15 @@ class LuaSettings : PersistentStateComponent<LuaSettings> {
             return requireLikeFunctionNames.joinToString(";")
         }
         set(value) {
-            requireLikeFunctionNames = value.split(";").map { it.trim() }.toTypedArray()
+            requireLikeFunctionNames = value.split(";").toTypedArray()
+        }
+
+    var ueProcessNamesString: String
+        get() {
+            return ueProcessNames.joinToString(";")
+        }
+        set(value) {
+            ueProcessNames = value.split(";").filter { it.isNotBlank() }.toTypedArray()
         }
 
     /**
