@@ -36,6 +36,7 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
     private var attachedPid = 0
     private var usedArch: WinArch = WinArch.X86
     @Volatile private var isStopping = false  // 添加停止标志
+    // 移除进程监控，改为依赖Socket连接状态检测
     
     /**
      * 根据日志等级输出日志
@@ -294,8 +295,21 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
 
     override fun onDisconnect() {
         logWithLevel("📡 调试器连接断开", LogLevel.NORMAL)
-        stop()
-        session?.stop()
+        
+        // 参考VSCode版本的实现：连接断开时自动停止调试会话
+        if (!isStopping) {
+            logWithLevel("🛑 检测到客户端断开连接，正在停止调试会话...", LogLevel.NORMAL)
+            
+            // 在UI线程中停止调试会话，避免线程安全问题
+            ApplicationManager.getApplication().invokeLater {
+                try {
+                    session?.stop()
+                    logWithLevel("✅ 调试会话已停止", LogLevel.NORMAL)
+                } catch (e: Exception) {
+                    logWithLevel("⚠️ 停止调试会话时出错: ${e.message}", LogLevel.DEBUG)
+                }
+            }
+        }
     }
 
     override fun onReceiveMessage(cmd: MessageCMD, json: String) {
