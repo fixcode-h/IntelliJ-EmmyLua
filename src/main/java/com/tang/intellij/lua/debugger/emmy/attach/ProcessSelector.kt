@@ -111,7 +111,10 @@ class ProcessSelector(private val project: Project) {
             }
         }
 
-        return processes
+        // 按进程类型排序
+        return processes.sortedWith(compareBy<ProcessInfo> { 
+            UEProcessClassifier.getProcessTypePriority(it.ueProcessType) 
+        }.thenBy { it.name }.thenBy { it.pid })
     }
 
     /**
@@ -166,31 +169,22 @@ class ProcessSelector(private val project: Project) {
         val model = CollectionListModel(processes)
         val list = JBList(model)
         
-        // 设置渲染器
-        list.cellRenderer = object : DefaultListCellRenderer() {
-            override fun getListCellRendererComponent(
-                list: JList<*>?,
-                value: Any?,
-                index: Int,
-                isSelected: Boolean,
-                cellHasFocus: Boolean
-            ): java.awt.Component {
-                super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
-                if (value is ProcessInfo) {
-                    text = value.getDisplayText()
-                    toolTipText = "${value.getDescriptionText()}\n${value.getDetailText()}"
-                }
-                return this
-            }
+        // 设置自定义渲染器，支持分组显示
+        list.cellRenderer = UEProcessListRenderer()
+        
+        // 默认选中第一个进程
+        if (processes.isNotEmpty()) {
+            list.selectedIndex = 0
         }
 
         val scrollPane = JBScrollPane(list)
-        scrollPane.preferredSize = Dimension(600, 400)
+        scrollPane.preferredSize = Dimension(800, 400)
 
         val panel = JPanel(BorderLayout())
         panel.add(scrollPane, BorderLayout.CENTER)
         
-        val label = JLabel("选择要附加调试的进程:")
+        // 创建说明标签
+        val label = JLabel("<html>选择要附加调试的进程:<br><small>UE进程已标记类型: 🎨编辑器 🎮游戏 🖥️服务器 🔧工具</small></html>")
         label.border = JBUI.Borders.emptyBottom(8)
         panel.add(label, BorderLayout.NORTH)
 
@@ -209,7 +203,7 @@ class ProcessSelector(private val project: Project) {
         })
 
         val dialog = com.intellij.openapi.ui.DialogBuilder(project)
-        dialog.setTitle("选择进程")
+        dialog.setTitle("选择UE进程 - 类型标识")
         dialog.setCenterPanel(panel)
         dialog.addOkAction()
         dialog.addCancelAction()

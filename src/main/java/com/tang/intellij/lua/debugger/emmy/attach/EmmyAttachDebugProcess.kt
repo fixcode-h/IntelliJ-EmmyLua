@@ -187,7 +187,8 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
                  process.errorStream.bufferedReader().use { reader ->
                      var line: String?
                      while (reader.readLine().also { line = it } != null) {
-                         println("📤 attach错误: $line", LogConsoleType.NORMAL, ConsoleViewContentType.ERROR_OUTPUT)
+                         // 检查是否为inject dll相关的正常信息
+                         println("📤 attach信息: $line", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
                      }
                  }
              } catch (e: Exception) {

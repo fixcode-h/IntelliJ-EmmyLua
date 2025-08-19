@@ -29,9 +29,32 @@ data class ProcessInfo(
     val path: String
 ) {
     /**
+     * UE进程类型（懒加载）
+     */
+    val ueProcessType: UEProcessType by lazy {
+        UEProcessClassifier.classifyUEProcess(this)
+    }
+    
+    /**
      * 获取显示文本
      */
-    fun getDisplayText(): String = "$pid : $name"
+    fun getDisplayText(): String {
+        val icon = UEProcessClassifier.getProcessTypeIcon(ueProcessType)
+        val typeText = if (ueProcessType != UEProcessType.NON_UE) {
+            "[${ueProcessType.displayName}] "
+        } else {
+            ""
+        }
+        
+        // 添加窗口标题信息
+        val titleText = if (title.isNotEmpty() && title != name) {
+            " - $title"
+        } else {
+            ""
+        }
+        
+        return "$icon $pid $typeText: $titleText".trim()
+    }
     
     /**
      * 获取详细信息
@@ -39,9 +62,15 @@ data class ProcessInfo(
     fun getDetailText(): String = path
     
     /**
-     * 获取描述信息
+     * 获取描述信息（包含进程类型描述）
      */
-    fun getDescriptionText(): String = title
+    fun getDescriptionText(): String {
+        return if (ueProcessType != UEProcessType.NON_UE) {
+            "${ueProcessType.description}: $title"
+        } else {
+            title
+        }
+    }
 
     /**
      * 判断是否为虚幻引擎进程
@@ -140,4 +169,4 @@ object ProcessUtils {
     }
 
 
-} 
+}

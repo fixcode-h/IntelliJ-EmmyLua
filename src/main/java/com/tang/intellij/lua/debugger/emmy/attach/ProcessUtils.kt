@@ -179,22 +179,15 @@ private fun isStandardLuaRuntime(moduleName: String): Boolean {
         "lualib.dll"
     )
     
-    // 检查是否匹配标准模式
-    for (pattern in standardLuaPatterns) {
-        if (lowerModule.endsWith(pattern)) {
-            return true
-        }
+    // 提取文件名（处理完整路径的情况）
+    val fileName = if (lowerModule.contains("\\") || lowerModule.contains("/")) {
+        lowerModule.substringAfterLast("\\").substringAfterLast("/")
+    } else {
+        lowerModule
     }
     
-    // 检查是否为完整路径中的标准Lua DLL
-    if (lowerModule.contains("\\") || lowerModule.contains("/")) {
-        val fileName = lowerModule.substringAfterLast("\\").substringAfterLast("/")
-        for (pattern in standardLuaPatterns) {
-            if (fileName == pattern) {
-                return true
-            }
-        }
-    }
+    // 检查是否精确匹配标准Lua运行时DLL名称
+    return standardLuaPatterns.contains(fileName)
     
     // 排除包含"lua"但不是标准运行时的模块
     // 例如：luacheck.dll, luaunit.dll, mylua.dll 等
