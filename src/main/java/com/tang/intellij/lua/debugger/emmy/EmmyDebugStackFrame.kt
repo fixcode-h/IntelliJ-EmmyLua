@@ -50,7 +50,19 @@ class EmmyDebugStackFrame(val data: Stack, val process: EmmyDebugProcessBase) : 
     }
 
     override fun customizePresentation(component: ColoredTextContainer) {
-        component.append("${data.file}:${data.functionName}:${data.line}", SimpleTextAttributes.REGULAR_ATTRIBUTES)
+        val relativePath = getRelativePath(data.file)
+        component.append("${relativePath}:${data.functionName}:${data.line}", SimpleTextAttributes.REGULAR_ATTRIBUTES)
+    }
+
+    private fun getRelativePath(filePath: String): String {
+        val projectBasePath = process.session.project.basePath
+        return if (projectBasePath != null && filePath.startsWith(projectBasePath)) {
+            filePath.substring(projectBasePath.length + 1).replace('\\', '/')
+        } else {
+            // 如果不在项目目录下，尝试获取文件名
+            val file = java.io.File(filePath)
+            file.name
+        }
     }
 
     private fun addValue(node: LuaXValue) {
