@@ -11,10 +11,6 @@ publish_tmp
 .gradle
 jflex*.jar
 *.diff
-*.dll
-*.exe
-*.so
-*.dylib
 /*.zip
 
 .vs
