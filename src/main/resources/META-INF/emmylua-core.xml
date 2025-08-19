@@ -140,6 +140,8 @@
         <configurationType implementation="com.tang.intellij.lua.debugger.app.LuaAppConfigurationType"/>
         <programRunner implementation="com.tang.intellij.lua.debugger.emmy.EmmyDebuggerRunner"/>
         <configurationType implementation="com.tang.intellij.lua.debugger.emmy.EmmyDebugConfigurationType"/>
+        <programRunner implementation="com.tang.intellij.lua.debugger.emmy.attach.EmmyAttachDebugRunner"/>
+        <configurationType implementation="com.tang.intellij.lua.debugger.emmy.attach.EmmyAttachConfigurationType"/>
         <programRunner implementation="com.tang.intellij.lua.debugger.luapanda.LuaPandaDebuggerRunner"/>
         <configurationType implementation="com.tang.intellij.lua.debugger.luapanda.LuaPandaConfigurationType"/>
         <xdebugger.breakpointType implementation="com.tang.intellij.lua.debugger.LuaLineBreakpointType"/>

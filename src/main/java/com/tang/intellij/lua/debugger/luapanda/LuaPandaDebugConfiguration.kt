@@ -45,6 +45,14 @@ class LuaPandaDebugConfiguration(
     var logLevel: Int = 1
     var stopConfirmTimeout: Int = 3
     var autoReconnect: Boolean = true  // 自动重连配置，默认开启
+    
+    // ========== 参照VSCode插件添加的配置项 ==========
+    var luaFileExtension: String = "lua"
+    var tempFilePath: String = ""
+    var autoPathMode: Boolean = false
+    var distinguishSameNameFile: Boolean = false
+    var truncatedOPath: String = ""
+    var developmentMode: Boolean = false
 
     init {
         this.name = name
@@ -86,6 +94,14 @@ class LuaPandaDebugConfiguration(
         logLevel = element.getAttributeValue("logLevel")?.toIntOrNull() ?: 1
         stopConfirmTimeout = element.getAttributeValue("stopConfirmTimeout")?.toIntOrNull() ?: 3
         autoReconnect = element.getAttributeValue("autoReconnect")?.toBoolean() ?: true
+        
+        // 读取新添加的配置项
+        luaFileExtension = element.getAttributeValue("luaFileExtension") ?: "lua"
+        tempFilePath = element.getAttributeValue("tempFilePath") ?: ""
+        autoPathMode = element.getAttributeValue("autoPathMode")?.toBoolean() ?: false
+        distinguishSameNameFile = element.getAttributeValue("distinguishSameNameFile")?.toBoolean() ?: false
+        truncatedOPath = element.getAttributeValue("truncatedOPath") ?: ""
+        developmentMode = element.getAttributeValue("developmentMode")?.toBoolean() ?: false
     }
 
     @Throws(WriteExternalException::class)
@@ -99,5 +115,13 @@ class LuaPandaDebugConfiguration(
         element.setAttribute("logLevel", logLevel.toString())
         element.setAttribute("stopConfirmTimeout", stopConfirmTimeout.toString())
         element.setAttribute("autoReconnect", autoReconnect.toString())
+        
+        // 写入新添加的配置项
+        element.setAttribute("luaFileExtension", luaFileExtension)
+        element.setAttribute("tempFilePath", tempFilePath)
+        element.setAttribute("autoPathMode", autoPathMode.toString())
+        element.setAttribute("distinguishSameNameFile", distinguishSameNameFile.toString())
+        element.setAttribute("truncatedOPath", truncatedOPath)
+        element.setAttribute("developmentMode", developmentMode.toString())
     }
 }

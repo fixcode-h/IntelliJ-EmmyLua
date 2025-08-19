@@ -93,6 +93,7 @@ object LuaPandaCommands {
     const val INIT_SUCCESS = "initSuccess"
     const val SET_BREAKPOINT = "setBreakPoint"  // 注意大小写
     const val STOP_ON_BREAKPOINT = "stopOnBreakpoint"
+    const val STOP_ON_CODE_BREAKPOINT = "stopOnCodeBreakpoint"  // 添加代码断点常量
     const val STOP_ON_ENTRY = "stopOnEntry"
     const val CONTINUE = "continue"
     const val STEP_OVER = "stopOnStep"  // Lua中使用的是stopOnStep

@@ -35,6 +35,7 @@ abstract class LuaXValue(val value: VariableValue) : XValue() {
                 LuaValueType.TSTRING -> StringXValue(v)
                 LuaValueType.TNUMBER -> NumberXValue(v)
                 LuaValueType.TBOOLEAN -> BoolXValue(v)
+                LuaValueType.TFUNCTION -> AnyXValue(v)
                 LuaValueType.TUSERDATA,
                 LuaValueType.TTABLE -> TableXValue(v, frame)
                 LuaValueType.GROUP -> GroupXValue(v, frame)
@@ -62,25 +63,39 @@ private object VariableComparator : Comparator<VariableValue> {
 
 class StringXValue(v: VariableValue) : LuaXValue(v) {
     override fun computePresentation(xValueNode: XValueNode, place: XValuePlace) {
-        xValueNode.setPresentation(null, LuaXStringPresentation(value.value), false)
+        xValueNode.setPresentation(AllIcons.Debugger.Db_primitive, LuaXStringPresentation(value.value), false)
     }
 }
 
 class NumberXValue(v: VariableValue) : LuaXValue(v) {
     override fun computePresentation(xValueNode: XValueNode, place: XValuePlace) {
-        xValueNode.setPresentation(null, LuaXNumberPresentation(value.value), false)
+        xValueNode.setPresentation(AllIcons.Debugger.Db_primitive, LuaXNumberPresentation(value.value), false)
     }
 }
 
 class BoolXValue(val v: VariableValue) : LuaXValue(v) {
     override fun computePresentation(xValueNode: XValueNode, place: XValuePlace) {
-        xValueNode.setPresentation(null, LuaXBoolPresentation(v.value), false)
+        xValueNode.setPresentation(AllIcons.Debugger.Db_primitive, LuaXBoolPresentation(v.value), false)
     }
 }
 
 class AnyXValue(val v: VariableValue) : LuaXValue(v) {
     override fun computePresentation(xValueNode: XValueNode, place: XValuePlace) {
-        xValueNode.setPresentation(null, v.valueTypeName, v.value, false)
+        val icon = getIcon(v.valueTypeName)
+        xValueNode.setPresentation(icon, v.valueTypeName, v.value, false)
+    }
+    
+    private fun getIcon(type: String?): javax.swing.Icon? {
+        return when (type) {
+            "string" -> AllIcons.Debugger.Db_primitive
+            "number" -> AllIcons.Debugger.Db_primitive
+            "boolean" -> AllIcons.Debugger.Db_primitive
+            "table" -> AllIcons.Debugger.Db_array
+            "function" -> AllIcons.Nodes.Function
+            "userdata" -> AllIcons.Debugger.Value
+            "thread" -> AllIcons.Debugger.ThreadSuspended
+            else -> AllIcons.Debugger.Value
+        }
     }
 }
 
@@ -122,7 +137,7 @@ class TableXValue(v: VariableValue, val frame: EmmyDebugStackFrame) : LuaXValue(
     }
 
     override fun computePresentation(xValueNode: XValueNode, place: XValuePlace) {
-        var icon = AllIcons.Json.Object
+        var icon = AllIcons.Debugger.Db_array  // 默认使用table图标
         if (value.valueTypeName == "C#") {
             icon = LuaIcons.CSHARP
         }

@@ -55,6 +55,6 @@ class LuaPandaDebuggerEvaluator(
             } catch (e: Exception) {
                 xEvaluationCallback.errorOccurred("求值失败：${e.message}")
             }
-        })
+        }, 0)
     }
 }

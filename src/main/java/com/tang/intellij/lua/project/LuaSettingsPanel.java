@@ -49,7 +49,7 @@ import java.util.SortedMap;
 public class LuaSettingsPanel implements SearchableConfigurable, Configurable.NoScroll {
     private final LuaSettings settings;
     private JScrollPane myPanel;
-    private JPanel contentPanel;
+    private JTabbedPane contentPanel;
     private JTextField constructorNames;
     private JCheckBox strictDoc;
     private JCheckBox smartCloseEnd;
@@ -69,6 +69,9 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
     private JButton browseUEProjectButton;
     private JButton autoDetectUEProjectButton;
     private JCheckBox enableUEIntelliSenseCheckBox;
+    private JTextField ueProcessNamesField;
+
+    // createUIComponents方法不再需要，因为不再使用自定义组件
 
     public LuaSettingsPanel() {
         this.settings = LuaSettings.Companion.getInstance();
@@ -101,6 +104,13 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
         //UE project settings
         ueProjectPathField.setText(settings.getUeProjectPath());
         enableUEIntelliSenseCheckBox.setSelected(settings.getEnableUEIntelliSense());
+        // 将进程名称数组转换为逗号分隔的字符串
+        String[] processNames = settings.getUeProcessNames();
+        if (processNames != null && processNames.length > 0) {
+            ueProcessNamesField.setText(String.join(", ", processNames));
+        } else {
+            ueProcessNamesField.setText("");
+        }
 
         //browse button action
         browseUEProjectButton.addActionListener(e -> {
@@ -181,6 +191,7 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
                 settings.getLanguageLevel() != languageLevel.getSelectedItem() ||
                 !StringUtil.equals(settings.getUeProjectPath(), ueProjectPathField.getText()) ||
                 settings.getEnableUEIntelliSense() != enableUEIntelliSenseCheckBox.isSelected() ||
+                !Arrays.equals(settings.getUeProcessNames(), getProcessNamesFromTextField()) ||
                 !Arrays.equals(settings.getAdditionalSourcesRoot(), additionalRoots.getRoots(), String::compareTo);
     }
 
@@ -206,6 +217,17 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
         //UE project settings
         settings.setUeProjectPath(ueProjectPathField.getText());
         settings.setEnableUEIntelliSense(enableUEIntelliSenseCheckBox.isSelected());
+        // 将逗号分隔的字符串转换为进程名称数组
+        String processNamesText = ueProcessNamesField.getText().trim();
+        if (processNamesText.isEmpty()) {
+            settings.setUeProcessNames(new String[0]);
+        } else {
+            String[] processNames = processNamesText.split(",");
+            for (int i = 0; i < processNames.length; i++) {
+                processNames[i] = processNames[i].trim();
+            }
+            settings.setUeProcessNames(processNames);
+        }
         
         LuaLanguageLevel selectedLevel = (LuaLanguageLevel) Objects.requireNonNull(languageLevel.getSelectedItem());
         if (selectedLevel != settings.getLanguageLevel()) {
@@ -217,6 +239,19 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
             for (Project project : ProjectManager.getInstance().getOpenProjects()) {
                 DaemonCodeAnalyzer.getInstance(project).restart();
             }
+        }
+    }
+
+    private String[] getProcessNamesFromTextField() {
+        String processNamesText = ueProcessNamesField.getText().trim();
+        if (processNamesText.isEmpty()) {
+            return new String[0];
+        } else {
+            String[] processNames = processNamesText.split(",");
+            for (int i = 0; i < processNames.length; i++) {
+                processNames[i] = processNames[i].trim();
+            }
+            return processNames;
         }
     }
 
@@ -241,6 +276,13 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
         // Reset UE project fields
         ueProjectPathField.setText(settings.getUeProjectPath());
         enableUEIntelliSenseCheckBox.setSelected(settings.getEnableUEIntelliSense());
+        // 将进程名称数组转换为逗号分隔的字符串
+        String[] processNames = settings.getUeProcessNames();
+        if (processNames != null && processNames.length > 0) {
+            ueProcessNamesField.setText(String.join(", ", processNames));
+        } else {
+            ueProcessNamesField.setText("");
+        }
     }
 
     private int getTooLargerFileThreshold() {

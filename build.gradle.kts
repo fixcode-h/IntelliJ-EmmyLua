@@ -107,65 +107,12 @@ fun getRev(): String {
     return os.toString().substring(0, 7)
 }
 
-task("downloadEmmyDebugger", type = Download::class) {
-    src(arrayOf(
-        "https://github.com/EmmyLua/EmmyLuaDebugger/releases/download/${emmyDebuggerVersion}/darwin-arm64.zip",
-        "https://github.com/EmmyLua/EmmyLuaDebugger/releases/download/${emmyDebuggerVersion}/darwin-x64.zip",
-        "https://github.com/EmmyLua/EmmyLuaDebugger/releases/download/${emmyDebuggerVersion}/linux-x64.zip",
-        "https://github.com/EmmyLua/EmmyLuaDebugger/releases/download/${emmyDebuggerVersion}/win32-x64.zip",
-        "https://github.com/EmmyLua/EmmyLuaDebugger/releases/download/${emmyDebuggerVersion}/win32-x86.zip"
-    ))
+// 移除下载任务 - 调试器文件已包含在资源目录中
+// task("downloadEmmyDebugger", type = Download::class) { ... }
 
-    dest("temp")
-}
+// 移除解压任务 - 调试器文件已包含在资源目录中
 
-task("unzipEmmyDebugger", type = Copy::class) {
-    dependsOn("downloadEmmyDebugger")
-    from(zipTree("temp/win32-x86.zip")) {
-        into("windows/x86")
-    }
-    from(zipTree("temp/win32-x64.zip")) {
-        into("windows/x64")
-    }
-    from(zipTree("temp/darwin-x64.zip")) {
-        into("mac/x64")
-    }
-    from(zipTree("temp/darwin-arm64.zip")) {
-        into("mac/arm64")
-    }
-    from(zipTree("temp/linux-x64.zip")) {
-        into("linux")
-    }
-    destinationDir = file("temp")
-}
-
-task("installEmmyDebugger", type = Copy::class) {
-    dependsOn("unzipEmmyDebugger")
-    from("temp/windows/x64/") {
-        include("emmy_core.dll")
-        into("debugger/emmy/windows/x64")
-    }
-    from("temp/windows/x86/") {
-        include("emmy_core.dll")
-        into("debugger/emmy/windows/x86")
-    }
-    from("temp/linux/") {
-        include("emmy_core.so")
-        into("debugger/emmy/linux")
-    }
-    from("temp/mac/x64") {
-        include("emmy_core.dylib")
-        into("debugger/emmy/mac/x64")
-    }
-    from("temp/mac/arm64") {
-        include("emmy_core.dylib")
-        into("debugger/emmy/mac/arm64")
-    }
-    destinationDir = file("src/main/resources")
-    
-    // 明确指定输出目录
-    outputs.dir("src/main/resources/debugger")
-}
+// 移除安装任务 - 调试器文件已存在于资源目录中
 
 project(":") {
     repositories {
@@ -246,7 +193,7 @@ project(":") {
 
     tasks {
         buildPlugin {
-            dependsOn("bunch", "installEmmyDebugger")
+            dependsOn("bunch")
             // 移除 archiveBaseName 配置，使用默认的插件名称
             // 这样可以确保插件包结构正确，避免多余的目录层级
         }
@@ -257,9 +204,8 @@ project(":") {
             }
         }
 
-        // 确保 patchPluginXml 任务依赖于 installEmmyDebugger
-        patchPluginXml {
-            dependsOn("installEmmyDebugger")
+        // 移除对调试器安装任务的依赖 - 文件已包含在资源中
+patchPluginXml {
             // 明确声明输入，确保 Gradle 理解任务依赖关系
             inputs.dir("src/main/resources/debugger")
         }
@@ -271,7 +217,6 @@ project(":") {
         }
 
         prepareSandbox {
-            dependsOn("installEmmyDebugger")
             doLast {
                 copy {
                     from("src/main/resources/std")
