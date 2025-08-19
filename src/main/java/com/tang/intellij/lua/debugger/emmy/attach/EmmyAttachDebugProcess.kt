@@ -43,117 +43,49 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
                 // 执行附加操作
                 attachToProcess()
                 
-                                                  // 等待DLL注入完成
-                 Thread.sleep(2000)
-                 
-                                 // 实现重试连接机制，因为DLL可能需要时间启动调试服务器
+                // 等待DLL注入完成
+                Thread.sleep(2000)
+                
+                // 获取调试端口并尝试连接
                 val port = ProcessUtils.getPortFromPid(configuration.pid)
                 println("🔌 尝试连接调试端口: $port", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
                 
-                // 首先快速检测端口是否可连接（尝试IPv4和IPv6）
+                // 尝试多个地址：IPv4 和 IPv6
                 val hosts = listOf("127.0.0.1", "::1", "localhost")
-                var anyPortOpen = false
-                
-                for (host in hosts) {
-                    if (ProcessUtils.isPortConnectable(host, port, 1000)) {
-                        println("🔍 检测到调试服务器在 $host:$port 上运行", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
-                        anyPortOpen = true
-                        break
-                    }
-                }
-                
-                if (!anyPortOpen) {
-                    println("⚠️ 调试端口 $port 在所有地址上都不可访问，这可能表明:", LogConsoleType.NORMAL, ConsoleViewContentType.ERROR_OUTPUT)
-                    println("   1) 调试服务器尚未启动", LogConsoleType.NORMAL, ConsoleViewContentType.ERROR_OUTPUT)
-                    println("   2) DLL注入失败或仍在初始化中", LogConsoleType.NORMAL, ConsoleViewContentType.ERROR_OUTPUT)
-                    println("   3) 端口被防火墙阻止", LogConsoleType.NORMAL, ConsoleViewContentType.ERROR_OUTPUT)
-                }
-                
                 var connected = false
                 var lastException: Exception? = null
                 
-                // 重试连接最多30秒（每2秒重试一次）
-                var attempt = 1
-                while (attempt <= 15 && !isStopping) {
+                for (host in hosts) {
                     try {
-                        println("🔄 连接尝试 $attempt/15...", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+                        println("🔌 尝试连接 $host:$port", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
                         
-                        // 尝试多个地址：IPv4 和 IPv6
-                        val hosts = listOf("127.0.0.1", "::1", "localhost")
-                        var connectionSuccess = false
+                        val transporter = SocketClientTransporter(host, port)
+                        transporter.handler = this
+                        transporter.logger = this
+                        this.transporter = transporter
                         
-                        for (host in hosts) {
-                            try {
-                                println("   🔌 尝试连接 $host:$port", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
-                                
-                                val transporter = SocketClientTransporter(host, port)
-                                transporter.handler = this
-                                transporter.logger = this
-                                this.transporter = transporter
-                                
-                                transporter.start()
-                                connected = true
-                                connectionSuccess = true
-                                println("🎉 Connected! 调试器已连接成功 ($host:$port)", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
-                                break
-                                
-                            } catch (hostException: Exception) {
-                                // 记录但继续尝试下一个地址
-                                println("   ❌ $host:$port 连接失败: ${hostException.message?.take(30) ?: "未知错误"}", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
-                                lastException = hostException
-                            }
+                        transporter.start()
+                        connected = true
+                        println("🎉 Connected! 调试器已连接成功 ($host:$port)", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+                        break
+                        
+                    } catch (hostException: Exception) {
+                        val errorMsg = when {
+                            hostException.message?.contains("Connection refused") == true -> "连接被拒绝"
+                            hostException.message?.contains("ConnectException") == true -> "无法连接"
+                            hostException.message?.contains("timeout") == true -> "连接超时"
+                            else -> hostException.message?.take(30) ?: "未知错误"
                         }
-                        
-                        if (connectionSuccess) {
-                            break
-                        }
-                        
-                    } catch (e: Exception) {
-                        lastException = e
-                        val shortMessage = e.message?.let { msg ->
-                            when {
-                                msg.contains("Connection refused") -> "连接被拒绝"
-                                msg.contains("ConnectException") -> "无法连接"
-                                msg.contains("timeout") -> "连接超时"
-                                else -> msg.take(50)
-                            }
-                        } ?: "未知错误"
-                        
-                        println("❌ 所有地址连接失败: $shortMessage，等待2秒后重试...", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+                        println("❌ $host:$port 连接失败: $errorMsg", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+                        lastException = hostException
                     }
-                    
-                    if (!connected) {
-                        // 分段睡眠，以便及时响应停止信号
-                        var i = 0
-                        while (i < 20 && !isStopping) {
-                            Thread.sleep(100) // 总共2秒，但每100ms检查一次停止标志
-                            i++
-                        }
-                    }
-                    attempt++
                 }
-                 
-                 // 如果因为停止而退出循环
-                 if (isStopping) {
-                     println("🛑 调试会话已停止，取消连接重试", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
-                     return@executeOnPooledThread
-                 }
-                 
-                                 if (!connected) {
+                
+                if (!connected) {
                     val errorDetail = lastException?.message ?: "未知错误"
-                    val errorMessage = StringBuilder().apply {
-                        appendLine("❌ 经过15次重试仍无法连接到调试端口 $port")
-                        appendLine("🔍 可能的原因分析：")
-                        appendLine("   1️⃣ 目标进程不包含Lua运行时 - 这是最常见的原因")
-                        appendLine("   2️⃣ DLL注入失败或被防病毒软件阻止")
-                        appendLine("   3️⃣ 调试端口被其他程序占用")
-                        appendLine("   4️⃣ 防火墙阻止了本地连接")
-                        appendLine("🛠️ 建议解决方案：")
-                        appendLine("   📋 检查目标进程是否真正使用了Lua")
-                        appendLine("   🔒 临时禁用防病毒软件和防火墙")
-                        appendLine("   🎯 尝试选择包含Lua.dll的进程")
-                        appendLine("💡 最后错误: $errorDetail")
-                    }.toString()
+                    val errorMessage = "❌ 无法连接到调试端口 $port\n" +
+                            "🔍 可能原因：DLL注入失败、调试服务器未启动或端口被阻止\n" +
+                            "💻 最后错误：$errorDetail"
                     throw Exception(errorMessage)
                 }
                 
@@ -288,13 +220,14 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
         }
         
         if (moduleAnalysis.hasLuaRuntime) {
-            println("✅ 检测到Lua运行时模块:", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+            println("✅ 检测到标准Lua运行时模块:", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
             moduleAnalysis.luaModules.forEach { module ->
                 println("  📚 $module", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
             }
+            println("🚀 调试器将尝试连接到这些Lua运行时", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
         } else {
             val totalModules = moduleAnalysis.allModules.size
-            println("⚠️ 未检测到Lua运行时模块！", LogConsoleType.NORMAL, ConsoleViewContentType.ERROR_OUTPUT)
+            println("⚠️ 未检测到标准Lua运行时模块！", LogConsoleType.NORMAL, ConsoleViewContentType.ERROR_OUTPUT)
             println("📊 进程共包含 $totalModules 个模块", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
             
             if (totalModules > 0) {
@@ -307,7 +240,8 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
                 }
             }
             
-            println("💡 建议：确保目标进程包含Lua运行时(如lua.dll、luajit.dll等)", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+            println("💡 建议：确保目标进程包含标准Lua运行时(如lua.dll、lua51.dll、luajit.dll等)", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+            println("⚠️ 警告：由于未检测到标准Lua运行时，调试连接可能会失败", LogConsoleType.NORMAL, ConsoleViewContentType.ERROR_OUTPUT)
         }
     }
 
@@ -468,4 +402,4 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
 /**
  * 附加通知消息
  */
-data class AttachedNotify(val state: Long) 
+data class AttachedNotify(val state: Long)
