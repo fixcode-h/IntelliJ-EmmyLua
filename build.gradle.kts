@@ -107,14 +107,37 @@ fun getRev(): String {
     return os.toString().substring(0, 7)
 }
 
-// 移除下载任务 - 调试器文件已包含在资源目录中
-// task("downloadEmmyDebugger", type = Download::class) { ... }
-
-// 移除解压任务 - 调试器文件已包含在资源目录中
-
-// 移除安装任务 - 调试器文件已存在于资源目录中
-
 project(":") {
+    // 从GitHub仓库下载完整的debugger文件夹
+    task("downloadDebuggerFiles", type = Download::class) {
+        src("https://github.com/fixcode-h/IntelliJ-EmmyLua/archive/refs/heads/main.zip")
+        dest("temp/IntelliJ-EmmyLua-main.zip")
+        overwrite(false)
+    }
+
+    // 解压并复制debugger文件夹
+    task("extractDebuggerFiles", type = Copy::class) {
+        dependsOn("downloadDebuggerFiles")
+        
+        from(zipTree("temp/IntelliJ-EmmyLua-main.zip")) {
+            include("IntelliJ-EmmyLua-main/src/main/resources/debugger/**")
+            eachFile {
+                path = path.replace("IntelliJ-EmmyLua-main/src/main/resources/debugger/", "")
+            }
+            includeEmptyDirs = false
+        }
+        
+        into("${resDir}/debugger")
+    }
+
+    // 安装调试器任务
+    task("installEmmyDebugger") {
+        dependsOn("extractDebuggerFiles")
+        
+        doLast {
+            println("从GitHub仓库下载的调试器文件安装完成")
+        }
+    }
     repositories {
         mavenCentral()
         
@@ -193,7 +216,7 @@ project(":") {
 
     tasks {
         buildPlugin {
-            dependsOn("bunch")
+            dependsOn("bunch", "installEmmyDebugger")
             // 移除 archiveBaseName 配置，使用默认的插件名称
             // 这样可以确保插件包结构正确，避免多余的目录层级
         }
@@ -204,8 +227,9 @@ project(":") {
             }
         }
 
-        // 移除对调试器安装任务的依赖 - 文件已包含在资源中
-patchPluginXml {
+        // 添加对调试器文件提取任务的依赖
+        patchPluginXml {
+            dependsOn("extractDebuggerFiles")
             // 明确声明输入，确保 Gradle 理解任务依赖关系
             inputs.dir("src/main/resources/debugger")
         }
