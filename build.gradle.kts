@@ -142,7 +142,7 @@ project(":") {
     sourceSets {
         main {
             java.srcDirs("gen", "src/main/compat")
-            resources.exclude("debugger/**")
+            // 移除 debugger 文件夹的排除，确保调试器文件被包含在插件包中
             resources.exclude("std/**")
         }
     }
