@@ -396,30 +396,39 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
     private fun sendInitReq() {
         logWithLevel("📤 发送调试器初始化请求", LogLevel.DEBUG)
         
-        // 1. 发送初始化脚本（emmyHelper.lua）
-        val helperPath = LuaFileUtil.getPluginVirtualFile("debugger/emmy/emmyHelper.lua")
-        if (helperPath != null) {
-            val code = File(helperPath).readText()
-            val extensions = com.tang.intellij.lua.psi.LuaFileManager.extensions
-            transporter?.send(InitMessage(code, extensions))
-            logWithLevel("📤 发送InitReq消息（emmyHelper.lua）", LogLevel.DEBUG)
-        }
-        
-        // 2. 发送断点信息
-        val breakpointManager = com.intellij.xdebugger.XDebuggerManager.getInstance(session.project).breakpointManager
-        val breakpoints = breakpointManager.getBreakpoints(com.tang.intellij.lua.debugger.LuaLineBreakpointType::class.java)
-        if (breakpoints.isNotEmpty()) {
-            logWithLevel("📤 发送 ${breakpoints.size} 个断点", LogLevel.DEBUG)
-            breakpoints.forEach { breakpoint ->
-                breakpoint.sourcePosition?.let { position ->
-                    registerBreakpoint(position, breakpoint)
+        // 在后台线程执行文件读取操作，避免EDT违规
+        ApplicationManager.getApplication().executeOnPooledThread {
+            try {
+                // 1. 发送初始化脚本（emmyHelper.lua）
+                val helperPath = LuaFileUtil.getPluginVirtualFile("debugger/emmy/emmyHelper.lua")
+                if (helperPath != null) {
+                    val code = File(helperPath).readText()
+                    val extensions = com.tang.intellij.lua.psi.LuaFileManager.extensions
+                    transporter?.send(InitMessage(code, extensions))
+                    logWithLevel("📤 发送InitReq消息（emmyHelper.lua）", LogLevel.DEBUG)
                 }
+                
+                // 2. 发送断点信息
+                val breakpointManager = com.intellij.xdebugger.XDebuggerManager.getInstance(session.project).breakpointManager
+                val breakpoints = breakpointManager.getBreakpoints(com.tang.intellij.lua.debugger.LuaLineBreakpointType::class.java)
+                if (breakpoints.isNotEmpty()) {
+                    logWithLevel("📤 发送 ${breakpoints.size} 个断点", LogLevel.DEBUG)
+                    breakpoints.forEach { breakpoint ->
+                        breakpoint.sourcePosition?.let { position ->
+                            registerBreakpoint(position, breakpoint)
+                        }
+                    }
+                }
+                
+                // 3. 发送准备消息
+                transporter?.send(Message(MessageCMD.ReadyReq))
+                logWithLevel("📤 发送ReadyReq消息", LogLevel.DEBUG)
+                
+            } catch (e: Exception) {
+                logWithLevel("❌ 发送初始化请求失败: ${e.message}", LogLevel.ERROR)
+                this@EmmyAttachDebugProcess.error("初始化请求失败: ${e.message}")
             }
         }
-        
-        // 3. 发送准备消息
-        transporter?.send(Message(MessageCMD.ReadyReq))
-        logWithLevel("📤 发送ReadyReq消息", LogLevel.DEBUG)
     }
 }
 

@@ -50,7 +50,8 @@ class LuaPandaVersionChecker : ProjectManagerListener {
     
     @Deprecated("This method overrides a deprecated member")
     override fun projectOpened(project: Project) {
-        ApplicationManager.getApplication().invokeLater {
+        // 在后台线程执行文件系统操作，避免EDT违规
+        ApplicationManager.getApplication().executeOnPooledThread {
             checkLuaPandaVersion(project)
         }
     }
