@@ -84,15 +84,7 @@ class EmmyAttachDebugRunner : LuaRunner() {
             }
         }
 
-        // 启动调试会话
-        val manager = XDebuggerManager.getInstance(environment.project)
-        val session = manager.startSession(environment, object : XDebugProcessStarter() {
-            override fun start(session: XDebugSession): XDebugProcess {
-                return EmmyAttachDebugProcess(session)
-            }
-        })
-        
-        // 记录进程附加状态
+        // 获取附加的进程信息并设置自定义调试标题
         val processSelector = ProcessSelector(environment.project)
         val processes = try {
             processSelector.getProcessList()
@@ -100,6 +92,35 @@ class EmmyAttachDebugRunner : LuaRunner() {
             emptyList()
         }
         val attachedProcess = processes.find { it.pid == configuration.pid }
+        
+        // 设置自定义调试弹窗标题
+        if (attachedProcess != null) {
+            val processTypeText = if (attachedProcess.ueProcessType != UEProcessType.NON_UE) {
+                val icon = UEProcessClassifier.getProcessTypeIcon(attachedProcess.ueProcessType)
+                "$icon[${attachedProcess.ueProcessType.displayName}] "
+            } else {
+                ""
+            }
+            // 如果title是路径，只取最后部分
+            val displayTitle = if (attachedProcess.title.contains("\\") || attachedProcess.title.contains("/")) {
+                attachedProcess.title.substringAfterLast("\\").substringAfterLast("/")
+            } else {
+                attachedProcess.title
+            }
+            val customTitle = "$processTypeText$displayTitle (PID: ${attachedProcess.pid})"
+            configuration.setCustomDebugTitle(customTitle)
+        }
+        
+        // 启动调试会话
+        val manager = XDebuggerManager.getInstance(environment.project)
+        val session = manager.startSession(environment, object : XDebugProcessStarter() {
+            override fun start(session: XDebugSession): XDebugProcess {
+                return EmmyAttachDebugProcess(session)
+            }
+        })
+        configuration.restoreName()
+
+        // 记录进程附加状态
         if (attachedProcess != null) {
             attachmentManager.recordProcessAttachment(
                 configuration.pid,
