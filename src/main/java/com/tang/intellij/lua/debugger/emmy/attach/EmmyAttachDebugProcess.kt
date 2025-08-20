@@ -53,8 +53,8 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
                 // 执行附加操作
                 attachToProcess()
                 
-                // 等待DLL注入完成
-                Thread.sleep(2000)
+                // 等待DLL注入完成（缩短等待时间）
+                Thread.sleep(100)
                 
                 // 获取调试端口并尝试连接
                 val port = ProcessUtils.getPortFromPid(configuration.pid)
@@ -202,8 +202,8 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
 
                  // 等待attach进程完成
          val exitCode = process.waitFor()
-         outputThread.join(10000) // 等待输出线程完成，最多10秒
-         errorThread.join(5000)   // 等待错误输出线程完成
+         outputThread.join(3000) // 等待输出线程完成，最多3秒
+         errorThread.join(2000)   // 等待错误输出线程完成
          
          if (exitCode != 0) {
              val errorOutput = process.errorStream.readBytes()
@@ -376,8 +376,8 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
                 }
             }
             
-            // 2. 等待一段时间让目标进程清理资源
-            Thread.sleep(1000)
+            // 2. 等待一段时间让目标进程清理资源（缩短等待时间）
+            Thread.sleep(300)
             
             logWithLevel("✅ 调试会话清理完成", LogLevel.NORMAL)
         logWithLevel("📝 注意: DLL文件可能仍被目标进程占用，这是正常现象", LogLevel.NORMAL)
