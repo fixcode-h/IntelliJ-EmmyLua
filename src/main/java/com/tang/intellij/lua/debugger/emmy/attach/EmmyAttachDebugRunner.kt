@@ -27,6 +27,7 @@ import com.intellij.xdebugger.XDebugProcessStarter
 import com.intellij.xdebugger.XDebugSession
 import com.intellij.xdebugger.XDebuggerManager
 import com.tang.intellij.lua.debugger.LuaRunner
+import com.tang.intellij.lua.debugger.emmy.attach.ProcessAttachmentManager
 
 /**
  * Emmy附加调试运行器
@@ -45,6 +46,7 @@ class EmmyAttachDebugRunner : LuaRunner() {
 
     override fun doExecute(state: RunProfileState, environment: ExecutionEnvironment): RunContentDescriptor {
         val configuration = environment.runProfile as EmmyAttachDebugConfiguration
+        val attachmentManager = ProcessAttachmentManager.getInstance()
         
         // 每次启动调试时都重置PID为0，强制用户选择进程
         configuration.pid = 0
@@ -59,17 +61,26 @@ class EmmyAttachDebugRunner : LuaRunner() {
             )
             
             selectedProcess?.let { process ->
+                // 检查进程是否已被附加
+                if (attachmentManager.isProcessAttached(process.pid)) {
+                    val attachedInfo = attachmentManager.getAttachedProcessInfo(process.pid)
+                    Messages.showWarningDialog(
+                        environment.project,
+                        "进程 ${process.name}(PID:${process.pid}) 已经被附加调试。\n" +
+                        "附加时间: ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(java.util.Date(attachedInfo?.attachTime ?: 0))}\n" +
+                        "请选择其他进程或先断开现有调试会话。",
+                        "进程已附加"
+                    )
+                    throw RuntimeException("进程已被附加，无法重复附加")
+                }
+                
                 configuration.pid = process.pid
-                                 // 检测并更新架构
-                 val detectedArch = ProcessUtils.detectProcessArch(process.pid)
+                // 检测并更新架构
+                val detectedArch = ProcessUtils.detectProcessArch(process.pid)
                 configuration.winArch = detectedArch.toEmmyWinArch()
             } ?: run {
-                Messages.showErrorDialog(
-                    environment.project,
-                    "必须选择一个目标进程才能启动附加调试",
-                    "错误"
-                )
-                throw RuntimeException("没有选择目标进程")
+                // 用户取消了进程选择，静默退出而不显示错误
+                throw RuntimeException("用户取消了进程选择")
             }
         }
 
@@ -80,6 +91,22 @@ class EmmyAttachDebugRunner : LuaRunner() {
                 return EmmyAttachDebugProcess(session)
             }
         })
+        
+        // 记录进程附加状态
+        val processSelector = ProcessSelector(environment.project)
+        val processes = try {
+            processSelector.getProcessList()
+        } catch (e: Exception) {
+            emptyList()
+        }
+        val attachedProcess = processes.find { it.pid == configuration.pid }
+        if (attachedProcess != null) {
+            attachmentManager.recordProcessAttachment(
+                configuration.pid,
+                attachedProcess.name,
+                session
+            )
+        }
 
         return session.runContentDescriptor
     }

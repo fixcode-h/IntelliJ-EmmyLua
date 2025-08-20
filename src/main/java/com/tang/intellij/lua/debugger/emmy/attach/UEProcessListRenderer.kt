@@ -16,6 +16,7 @@
 
 package com.tang.intellij.lua.debugger.emmy.attach
 
+import com.tang.intellij.lua.debugger.emmy.attach.ProcessAttachmentManager
 import java.awt.Color
 import java.awt.Component
 import java.awt.Font
@@ -23,9 +24,11 @@ import javax.swing.DefaultListCellRenderer
 import javax.swing.JList
 
 /**
- * UE进程列表渲染器，支持分组显示
+ * UE进程列表渲染器，支持分组显示和已附加状态标识
  */
 class UEProcessListRenderer : DefaultListCellRenderer() {
+    
+    private val attachmentManager = ProcessAttachmentManager.getInstance()
     
     override fun getListCellRendererComponent(
         list: JList<*>?,
@@ -37,14 +40,21 @@ class UEProcessListRenderer : DefaultListCellRenderer() {
         super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus)
         
         if (value is ProcessInfo) {
-            // 直接显示进程信息，不分组
-            text = value.getDisplayText()
+            // 检查进程是否已被附加
+            val isAttached = attachmentManager.isProcessAttached(value.pid)
+            
+            // 显示进程信息，如果已附加则添加标识
+            text = if (isAttached) {
+                "🔗 ${value.getDisplayText()} [已附加]"
+            } else {
+                value.getDisplayText()
+            }
             
             // 设置工具提示
-            toolTipText = buildTooltipText(value)
+            toolTipText = buildTooltipText(value, isAttached)
             
             // 设置颜色和字体
-            setProcessAppearance(value, isSelected)
+            setProcessAppearance(value, isSelected, isAttached)
         }
         
         return this
@@ -53,8 +63,15 @@ class UEProcessListRenderer : DefaultListCellRenderer() {
     /**
      * 设置进程外观（颜色和字体）
      */
-    private fun setProcessAppearance(processInfo: ProcessInfo, isSelected: Boolean) {
+    private fun setProcessAppearance(processInfo: ProcessInfo, isSelected: Boolean, isAttached: Boolean) {
         if (isSelected) return // 选中状态使用默认颜色
+        
+        // 已附加的进程使用特殊样式
+        if (isAttached) {
+            foreground = Color(0xF44336) // 红色表示已附加
+            font = font.deriveFont(Font.BOLD or Font.ITALIC)
+            return
+        }
         
         when (processInfo.ueProcessType) {
             UEProcessType.EDITOR -> {
@@ -85,8 +102,16 @@ class UEProcessListRenderer : DefaultListCellRenderer() {
     /**
      * 构建工具提示文本
      */
-    private fun buildTooltipText(processInfo: ProcessInfo): String {
+    private fun buildTooltipText(processInfo: ProcessInfo, isAttached: Boolean): String {
         return buildString {
+            if (isAttached) {
+                val attachedInfo = attachmentManager.getAttachedProcessInfo(processInfo.pid)
+                appendLine("⚠️ 此进程已被附加调试")
+                if (attachedInfo != null) {
+                    appendLine("附加时间: ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(java.util.Date(attachedInfo.attachTime))}")
+                }
+                appendLine("")
+            }
             appendLine("进程类型: ${processInfo.ueProcessType.description}")
             appendLine("进程ID: ${processInfo.pid}")
             appendLine("进程名称: ${processInfo.name}")
@@ -94,6 +119,10 @@ class UEProcessListRenderer : DefaultListCellRenderer() {
                 appendLine("窗口标题: ${processInfo.title}")
             }
             appendLine("可执行文件路径: ${processInfo.path}")
+            if (isAttached) {
+                appendLine("")
+                appendLine("提示: 请先断开现有调试会话再重新附加")
+            }
         }.trim()
     }
 }
