@@ -90,6 +90,20 @@ class EmmyAttachDebugConfiguration(project: Project, factory: EmmyAttachDebugger
     var filterUEProcesses: Boolean = false
     var threadFilterBlacklist: List<String> = listOf("winlogon", "csrss", "wininit", "services")
     var logLevel: LogLevel = LogLevel.NORMAL  // 默认日志等级为1级（普通日志）
+    var defaultName = ""
+
+    /**
+     * 设置自定义调试弹窗标题
+     * @param title 自定义标题
+     */
+    fun setCustomDebugTitle(title: String) {
+        if(defaultName.isEmpty()) defaultName=name
+        name = title
+    }
+
+    fun restoreName(){
+        if(defaultName.isNotEmpty()) name=defaultName
+    }
 
     override fun getConfigurationEditor(): SettingsEditor<out RunConfiguration> {
         val group = SettingsEditorGroup<EmmyAttachDebugConfiguration>()

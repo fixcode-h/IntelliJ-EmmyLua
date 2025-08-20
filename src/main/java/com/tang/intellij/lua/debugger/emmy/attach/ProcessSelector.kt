@@ -101,7 +101,9 @@ class ProcessSelector(private val project: Project) {
                 // 使用插件设置中的黑名单
                 val debugProcessBlacklist = LuaSettings.instance.debugProcessBlacklist.toList()
                 val isBlacklisted = processInfo.isInBlacklist(debugProcessBlacklist)
-                val shouldInclude = isUEProcess && !isBlacklisted
+                // 过滤掉构建工具进程
+                val isBuildTool = processInfo.ueProcessType == UEProcessType.BUILD_TOOL
+                val shouldInclude = isUEProcess && !isBlacklisted && !isBuildTool
 
                 if (shouldInclude) {
                     processes.add(processInfo)
