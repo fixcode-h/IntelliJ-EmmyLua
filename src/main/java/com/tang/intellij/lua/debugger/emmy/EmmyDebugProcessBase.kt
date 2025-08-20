@@ -52,24 +52,31 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
     protected abstract fun setupTransporter()
 
     private fun sendInitReq() {
-        // send init
-        val path = LuaFileUtil.getPluginVirtualFile("debugger/emmy/emmyHelper.lua")
-        if (path != null) {
-            val code = File(path).readText()
-            val extList = LuaFileManager.extensions
-            transporter?.send(InitMessage(code, extList))
-        }
-        // send bps
-        val breakpoints = XDebuggerManager.getInstance(session.project)
-            .breakpointManager
-            .getBreakpoints(LuaLineBreakpointType::class.java)
-        breakpoints.forEach { breakpoint ->
-            breakpoint.sourcePosition?.let { position ->
-                registerBreakpoint(position, breakpoint)
+        // 在后台线程执行文件读取操作，避免EDT违规
+        ApplicationManager.getApplication().executeOnPooledThread {
+            try {
+                // send init
+                val path = LuaFileUtil.getPluginVirtualFile("debugger/emmy/emmyHelper.lua")
+                if (path != null) {
+                    val code = File(path).readText()
+                    val extList = LuaFileManager.extensions
+                    transporter?.send(InitMessage(code, extList))
+                }
+                // send bps
+                val breakpoints = XDebuggerManager.getInstance(session.project)
+                    .breakpointManager
+                    .getBreakpoints(LuaLineBreakpointType::class.java)
+                breakpoints.forEach { breakpoint ->
+                    breakpoint.sourcePosition?.let { position ->
+                        registerBreakpoint(position, breakpoint)
+                    }
+                }
+                // send ready
+                transporter?.send(Message(MessageCMD.ReadyReq))
+            } catch (e: Exception) {
+                error("发送初始化请求失败: ${e.message}")
             }
         }
-        // send ready
-        transporter?.send(Message(MessageCMD.ReadyReq))
     }
 
     override fun onConnect(suc: Boolean) {

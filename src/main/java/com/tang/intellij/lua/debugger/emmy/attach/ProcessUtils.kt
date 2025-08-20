@@ -197,7 +197,7 @@ private fun isStandardLuaRuntime(moduleName: String): Boolean {
 /**
  * 检测调试端口是否可连接
  */
-fun ProcessUtils.isPortConnectable(host: String = "localhost", port: Int, timeoutMs: Int = 5000): Boolean {
+fun ProcessUtils.isPortConnectable(host: String = "localhost", port: Int, timeoutMs: Int = 2000): Boolean {
     return try {
         java.net.Socket().use { socket ->
             val address = when {

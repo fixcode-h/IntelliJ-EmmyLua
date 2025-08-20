@@ -32,7 +32,6 @@ import javax.swing.*
 class EmmyAttachDebugSettingsPanel(private val project: Project) : SettingsEditor<EmmyAttachDebugConfiguration>() {
 
     // UI组件
-    private val processNameField = JBTextField()
     private val pidField = JBTextField()
     private val selectProcessButton = JButton("选择进程")
     private val x64RadioButton = JRadioButton("x64")
@@ -40,7 +39,7 @@ class EmmyAttachDebugSettingsPanel(private val project: Project) : SettingsEdito
     private val captureLogCheckBox = JCheckBox("捕获日志")
     private val autoAttachSingleCheckBox = JCheckBox("自动附加单个进程")
     private val filterUEProcessesCheckBox = JCheckBox("过滤虚幻引擎进程")
-    private val blacklistField = JBTextField()
+
     private val logLevelComboBox = JComboBox(LogLevel.values())
 
     private val panel: JPanel
@@ -60,9 +59,6 @@ class EmmyAttachDebugSettingsPanel(private val project: Project) : SettingsEdito
         // 设置字段属性 - PID字段可编辑，但建议通过按钮选择
         pidField.isEditable = true
         pidField.toolTipText = "进程ID，建议通过「选择进程」按钮选择，也可手动输入。每次启动调试都会重置为0"
-        processNameField.toolTipText = "用于过滤进程列表的进程名称，支持部分匹配"
-        blacklistField.toolTipText = "用逗号分隔的进程过滤黑名单"
-        blacklistField.text = "winlogon,csrss,wininit,services"  // 设置默认黑名单
 
         // 选择进程按钮事件
         selectProcessButton.addActionListener { selectProcess() }
@@ -90,11 +86,6 @@ class EmmyAttachDebugSettingsPanel(private val project: Project) : SettingsEdito
         panel.layout = BoxLayout(panel, BoxLayout.Y_AXIS)
         
         // 进程选择部分
-        val processNamePanel = JPanel(BorderLayout())
-        processNamePanel.add(JLabel("进程名称过滤:"), BorderLayout.WEST)
-        processNamePanel.add(processNameField, BorderLayout.CENTER)
-        panel.add(processNamePanel)
-        
         val processPanel = JPanel(BorderLayout())
         processPanel.add(JLabel("目标进程PID:"), BorderLayout.WEST)
         val pidPanel = JPanel(BorderLayout())
@@ -124,21 +115,15 @@ class EmmyAttachDebugSettingsPanel(private val project: Project) : SettingsEdito
         logLevelPanel.add(JLabel("日志输出等级:"), BorderLayout.WEST)
         logLevelPanel.add(logLevelComboBox, BorderLayout.CENTER)
         panel.add(logLevelPanel)
-        
-        val blacklistPanel = JPanel(BorderLayout())
-        blacklistPanel.add(JLabel("进程黑名单:"), BorderLayout.WEST)
-        blacklistPanel.add(blacklistField, BorderLayout.CENTER)
-        panel.add(blacklistPanel)
 
         // 添加使用说明
         val helpText = JTextArea()
         helpText.text = "使用说明:\n" +
-            "1. 进程名称过滤: 输入关键词过滤进程列表，支持部分匹配\n" +
-            "2. 目标进程选择: 默认PID为0，必须通过\"选择进程\"按钮选择目标进程\n" +
-            "3. 架构选择: Windows系统会自动检测进程架构，也可手动选择\n" +
-            "4. 调试选项: 可启用日志捕获、自动附加等功能\n" +
-            "5. 进程过滤: 支持虚幻引擎进程过滤和黑名单过滤\n" +
-            "6. 使用前请确保目标程序已集成emmylua调试库"
+            "1. 目标进程选择: 默认PID为0，必须通过\"选择进程\"按钮选择目标进程\n" +
+            "2. 架构选择: Windows系统会自动检测进程架构，也可手动选择\n" +
+            "3. 调试选项: 可启用日志捕获、自动附加等功能\n" +
+            "4. 进程过滤: 支持虚幻引擎进程过滤，黑名单过滤可在插件设置中配置\n" +
+            "5. 使用前请确保目标程序已集成emmylua调试库"
         helpText.isEditable = false
         helpText.background = panel.background
         helpText.border = JBUI.Borders.emptyTop(10)
@@ -156,21 +141,14 @@ class EmmyAttachDebugSettingsPanel(private val project: Project) : SettingsEdito
      * 选择进程
      */
     private fun selectProcess() {
-        val processName = processNameField.text.trim()
-        val filterUE = filterUEProcessesCheckBox.isSelected
         val autoAttachSingle = autoAttachSingleCheckBox.isSelected
-        val blacklist = blacklistField.text.split(",").map { it.trim() }.filter { it.isNotEmpty() }
 
         val selectedProcess = processSelector.showProcessSelectionDialog(
-            processName, autoAttachSingle, blacklist
+            "", autoAttachSingle
         )
 
         selectedProcess?.let { process ->
             pidField.text = process.pid.toString()
-            // 如果进程名称字段为空，自动填充
-            if (processNameField.text.trim().isEmpty()) {
-                processNameField.text = process.name
-            }
             fireEditorStateChanged()
         }
     }
@@ -178,7 +156,6 @@ class EmmyAttachDebugSettingsPanel(private val project: Project) : SettingsEdito
     override fun resetEditorFrom(@NotNull configuration: EmmyAttachDebugConfiguration) {
         // 总是显示空的PID，确保用户每次都需要选择进程
         pidField.text = ""
-        processNameField.text = configuration.processName
         
         if (SystemInfoRt.isWindows) {
             when (configuration.winArch) {
@@ -191,14 +168,13 @@ class EmmyAttachDebugSettingsPanel(private val project: Project) : SettingsEdito
         autoAttachSingleCheckBox.isSelected = configuration.autoAttachSingleProcess
         filterUEProcessesCheckBox.isSelected = configuration.filterUEProcesses
         logLevelComboBox.selectedItem = configuration.logLevel
-        blacklistField.text = configuration.threadFilterBlacklist.joinToString(",")
     }
 
     override fun applyEditorTo(@NotNull configuration: EmmyAttachDebugConfiguration) {
         // 如果用户没有选择进程（PID为空或0），则保持为0
         val inputPid = pidField.text.trim()
         configuration.pid = if (inputPid.isEmpty()) 0 else inputPid.toIntOrNull() ?: 0
-        configuration.processName = processNameField.text.trim()
+        configuration.processName = ""
         
         if (SystemInfoRt.isWindows) {
             configuration.winArch = if (x64RadioButton.isSelected) EmmyWinArch.X64 else EmmyWinArch.X86
@@ -208,8 +184,8 @@ class EmmyAttachDebugSettingsPanel(private val project: Project) : SettingsEdito
         configuration.autoAttachSingleProcess = autoAttachSingleCheckBox.isSelected
         configuration.filterUEProcesses = filterUEProcessesCheckBox.isSelected
         configuration.logLevel = logLevelComboBox.selectedItem as LogLevel
-        configuration.threadFilterBlacklist = blacklistField.text.split(",")
-            .map { it.trim() }.filter { it.isNotEmpty() }
+        // 使用插件设置中的黑名单
+        configuration.threadFilterBlacklist = emptyList()
     }
 
     @NotNull

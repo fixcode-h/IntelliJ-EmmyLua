@@ -56,6 +56,8 @@ class LuaCodeStyleSettingsProvider : CodeStyleSettingsProvider() {
 
     override fun getConfigurableDisplayName() = LuaLanguage.INSTANCE.displayName
 
+    override fun getConfigurableId() = "preferences.sourceCode.Lua"
+
     override fun createCustomSettings(settings: CodeStyleSettings): CustomCodeStyleSettings {
         return LuaCodeStyleSettings(settings)
     }

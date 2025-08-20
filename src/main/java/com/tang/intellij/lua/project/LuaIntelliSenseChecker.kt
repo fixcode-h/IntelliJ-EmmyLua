@@ -31,7 +31,8 @@ class LuaIntelliSenseChecker : ProjectManagerListener {
     
     @Deprecated("This method is deprecated in the parent class")
     override fun projectOpened(project: Project) {
-        ApplicationManager.getApplication().invokeLater {
+        // 在后台线程执行文件系统操作，避免EDT违规
+        ApplicationManager.getApplication().executeOnPooledThread {
             checkLuaIntelliSense(project)
         }
     }

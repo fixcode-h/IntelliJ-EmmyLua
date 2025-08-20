@@ -53,8 +53,8 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
                 // 执行附加操作
                 attachToProcess()
                 
-                // 等待DLL注入完成
-                Thread.sleep(2000)
+                // 等待DLL注入完成（缩短等待时间）
+                Thread.sleep(100)
                 
                 // 获取调试端口并尝试连接
                 val port = ProcessUtils.getPortFromPid(configuration.pid)
@@ -202,8 +202,8 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
 
                  // 等待attach进程完成
          val exitCode = process.waitFor()
-         outputThread.join(10000) // 等待输出线程完成，最多10秒
-         errorThread.join(5000)   // 等待错误输出线程完成
+         outputThread.join(3000) // 等待输出线程完成，最多3秒
+         errorThread.join(2000)   // 等待错误输出线程完成
          
          if (exitCode != 0) {
              val errorOutput = process.errorStream.readBytes()
@@ -280,7 +280,7 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
 
     override fun onConnect(suc: Boolean) {
         if (suc) {
-            logWithLevel("🔗 TCP连接已建立", LogLevel.NORMAL)
+            // 移除简单的TCP连接消息，保留初始化请求信息
         logWithLevel("📤 正在发送初始化请求...", LogLevel.DEBUG)
             
             // 按照VSCode流程：连接成功后直接发送初始化请求
@@ -376,8 +376,8 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
                 }
             }
             
-            // 2. 等待一段时间让目标进程清理资源
-            Thread.sleep(1000)
+            // 2. 等待一段时间让目标进程清理资源（缩短等待时间）
+            Thread.sleep(300)
             
             logWithLevel("✅ 调试会话清理完成", LogLevel.NORMAL)
         logWithLevel("📝 注意: DLL文件可能仍被目标进程占用，这是正常现象", LogLevel.NORMAL)
@@ -396,30 +396,39 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
     private fun sendInitReq() {
         logWithLevel("📤 发送调试器初始化请求", LogLevel.DEBUG)
         
-        // 1. 发送初始化脚本（emmyHelper.lua）
-        val helperPath = LuaFileUtil.getPluginVirtualFile("debugger/emmy/emmyHelper.lua")
-        if (helperPath != null) {
-            val code = File(helperPath).readText()
-            val extensions = com.tang.intellij.lua.psi.LuaFileManager.extensions
-            transporter?.send(InitMessage(code, extensions))
-            logWithLevel("📤 发送InitReq消息（emmyHelper.lua）", LogLevel.DEBUG)
-        }
-        
-        // 2. 发送断点信息
-        val breakpointManager = com.intellij.xdebugger.XDebuggerManager.getInstance(session.project).breakpointManager
-        val breakpoints = breakpointManager.getBreakpoints(com.tang.intellij.lua.debugger.LuaLineBreakpointType::class.java)
-        if (breakpoints.isNotEmpty()) {
-            logWithLevel("📤 发送 ${breakpoints.size} 个断点", LogLevel.DEBUG)
-            breakpoints.forEach { breakpoint ->
-                breakpoint.sourcePosition?.let { position ->
-                    registerBreakpoint(position, breakpoint)
+        // 在后台线程执行文件读取操作，避免EDT违规
+        ApplicationManager.getApplication().executeOnPooledThread {
+            try {
+                // 1. 发送初始化脚本（emmyHelper.lua）
+                val helperPath = LuaFileUtil.getPluginVirtualFile("debugger/emmy/emmyHelper.lua")
+                if (helperPath != null) {
+                    val code = File(helperPath).readText()
+                    val extensions = com.tang.intellij.lua.psi.LuaFileManager.extensions
+                    transporter?.send(InitMessage(code, extensions))
+                    logWithLevel("📤 发送InitReq消息（emmyHelper.lua）", LogLevel.DEBUG)
                 }
+                
+                // 2. 发送断点信息
+                val breakpointManager = com.intellij.xdebugger.XDebuggerManager.getInstance(session.project).breakpointManager
+                val breakpoints = breakpointManager.getBreakpoints(com.tang.intellij.lua.debugger.LuaLineBreakpointType::class.java)
+                if (breakpoints.isNotEmpty()) {
+                    logWithLevel("📤 发送 ${breakpoints.size} 个断点", LogLevel.DEBUG)
+                    breakpoints.forEach { breakpoint ->
+                        breakpoint.sourcePosition?.let { position ->
+                            registerBreakpoint(position, breakpoint)
+                        }
+                    }
+                }
+                
+                // 3. 发送准备消息
+                transporter?.send(Message(MessageCMD.ReadyReq))
+                logWithLevel("📤 发送ReadyReq消息", LogLevel.DEBUG)
+                
+            } catch (e: Exception) {
+                logWithLevel("❌ 发送初始化请求失败: ${e.message}", LogLevel.ERROR)
+                this@EmmyAttachDebugProcess.error("初始化请求失败: ${e.message}")
             }
         }
-        
-        // 3. 发送准备消息
-        transporter?.send(Message(MessageCMD.ReadyReq))
-        logWithLevel("📤 发送ReadyReq消息", LogLevel.DEBUG)
     }
 }
 

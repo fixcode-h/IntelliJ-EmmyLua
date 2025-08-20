@@ -67,13 +67,11 @@ abstract class Transporter {
 
     protected fun onConnect(suc: Boolean) {
         handler?.onConnect(suc)
-        if (suc) {
-            logger?.println("Connected.", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
-        }
+        // 移除简单的"Connected."消息，保留更详细的连接信息
     }
 
     protected open fun onDisconnect() {
-        logger?.println("Disconnected.", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+        // 移除简单的"Disconnected."消息，保留更详细的断开连接信息
     }
 
     protected fun onReceiveMessage(type: MessageCMD, json: String) {
@@ -157,7 +155,7 @@ class SocketClientTransporter(val host: String, val port: Int) : SocketChannelTr
     private var server: SocketChannel? = null
 
     override fun start() {
-        logger?.println("Try connect $host:$port ...", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+        // 移除简单的"Try connect"消息，保留更详细的连接信息
         val server = SocketChannel.open()
         val address = InetAddress.getByName(host)
         var connected = false

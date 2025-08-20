@@ -155,7 +155,7 @@ class MobClient(private val socketChannel: SocketChannel, private val listener: 
     private fun onClosed() {
         if (!isStopped) {
             isStopped = true
-            listener.println("Disconnected.", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+            // 移除简单的"Disconnected."消息，保留更详细的断开连接信息
         }
     }
 

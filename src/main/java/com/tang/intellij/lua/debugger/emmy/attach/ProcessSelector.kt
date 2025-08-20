@@ -26,6 +26,7 @@ import com.intellij.ui.CollectionListModel
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.util.ui.JBUI
+import com.tang.intellij.lua.debugger.emmy.attach.ProcessAttachmentManager
 import com.tang.intellij.lua.psi.LuaFileUtil
 import com.tang.intellij.lua.project.LuaSettings
 import java.awt.BorderLayout
@@ -46,8 +47,7 @@ class ProcessSelector(private val project: Project) {
      */
     fun getProcessList(
         processName: String = "",
-        autoAttachSingleProcess: Boolean = true,
-        threadFilterBlacklist: List<String> = emptyList()
+        autoAttachSingleProcess: Boolean = true
     ): List<ProcessInfo> {
                   return try {
              // 验证调试器工具
@@ -68,7 +68,7 @@ class ProcessSelector(private val project: Project) {
             
             // 使用CP936编码解析输出(中文系统)
             val outputStr = String(output, Charset.forName("CP936"))
-            parseProcessList(outputStr, processName, threadFilterBlacklist)
+            parseProcessList(outputStr, processName, emptyList())
         } catch (e: Exception) {
             throw Exception("获取进程列表失败: ${e.message}")
         }
@@ -96,11 +96,12 @@ class ProcessSelector(private val project: Project) {
                 val processInfo = ProcessInfo(pid, name, title, path)
 
                 // 应用过滤条件
-                val matchesProcessName = processInfo.matchesProcessName(processName)
                 val ueProcessNames = LuaSettings.instance.ueProcessNames.toList()
                 val isUEProcess = processInfo.isUnrealEngineProcess(ueProcessNames)
-                val isBlacklisted = processInfo.isInBlacklist(threadFilterBlacklist)
-                val shouldInclude = matchesProcessName && isUEProcess && !isBlacklisted
+                // 使用插件设置中的黑名单
+                val debugProcessBlacklist = LuaSettings.instance.debugProcessBlacklist.toList()
+                val isBlacklisted = processInfo.isInBlacklist(debugProcessBlacklist)
+                val shouldInclude = isUEProcess && !isBlacklisted
 
                 if (shouldInclude) {
                     processes.add(processInfo)
@@ -122,8 +123,7 @@ class ProcessSelector(private val project: Project) {
      */
     fun showProcessSelectionDialog(
         processName: String = "",
-        autoAttachSingleProcess: Boolean = true,
-        threadFilterBlacklist: List<String> = emptyList()
+        autoAttachSingleProcess: Boolean = true
     ): ProcessInfo? {
         return ProgressManager.getInstance().run(object : Task.WithResult<ProcessInfo?, Exception>(
             project, "获取进程列表...", true
@@ -132,7 +132,7 @@ class ProcessSelector(private val project: Project) {
                 indicator.text = "正在获取系统进程列表..."
                 
                 val processes = try {
-                    getProcessList(processName, autoAttachSingleProcess, threadFilterBlacklist)
+                    getProcessList(processName, autoAttachSingleProcess)
                 } catch (e: Exception) {
                     ApplicationManager.getApplication().invokeLater {
                         Messages.showErrorDialog(project, e.message, "错误")
@@ -184,18 +184,41 @@ class ProcessSelector(private val project: Project) {
         panel.add(scrollPane, BorderLayout.CENTER)
         
         // 创建说明标签
-        val label = JLabel("<html>选择要附加调试的进程:<br><small>UE进程已标记类型: 🎨编辑器 🎮游戏 🖥️服务器 🔧工具</small></html>")
+        val attachmentManager = ProcessAttachmentManager.getInstance()
+        val attachedCount = attachmentManager.getAttachedProcessIds().size
+        val attachedInfo = if (attachedCount > 0) {
+            "<br><small style='color: #F44336;'>⚠️ 当前有 $attachedCount 个进程已附加，已附加进程显示为红色</small>"
+        } else {
+            ""
+        }
+        
+        val label = JLabel("<html>选择要附加调试的进程:<br><small>UE进程已标记类型: 🎨编辑器 🎮游戏 🖥️服务器 🔧工具</small>$attachedInfo</html>")
         label.border = JBUI.Borders.emptyBottom(8)
         panel.add(label, BorderLayout.NORTH)
 
         // 添加双击事件
         var selectedProcess: ProcessInfo? = null
+        var doubleClickSelected = false
         list.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
                 if (e.clickCount == 2) {
                     val index = list.locationToIndex(e.point)
                     if (index >= 0) {
-                        selectedProcess = processes[index]
+                        val process = processes[index]
+                        // 检查进程是否已被附加
+                        if (attachmentManager.isProcessAttached(process.pid)) {
+                            val attachedInfo = attachmentManager.getAttachedProcessInfo(process.pid)
+                            Messages.showWarningDialog(
+                                project,
+                                "进程 ${process.name}(PID:${process.pid}) 已经被附加调试。\n" +
+                                "附加时间: ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(java.util.Date(attachedInfo?.attachTime ?: 0))}\n" +
+                                "请选择其他进程或先断开现有调试会话。",
+                                "进程已附加"
+                            )
+                            return
+                        }
+                        selectedProcess = process
+                        doubleClickSelected = true
                         SwingUtilities.getWindowAncestor(list).dispose()
                     }
                 }
@@ -208,7 +231,7 @@ class ProcessSelector(private val project: Project) {
         dialog.addOkAction()
         dialog.addCancelAction()
         
-        return if (dialog.showAndGet()) {
+        return if (dialog.showAndGet() || doubleClickSelected) {
             selectedProcess ?: list.selectedValue
         } else {
             null
