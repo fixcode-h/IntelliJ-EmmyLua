@@ -41,7 +41,7 @@ data class ProcessInfo(
     fun getDisplayText(): String {
         val icon = UEProcessClassifier.getProcessTypeIcon(ueProcessType)
         val typeText = if (ueProcessType != UEProcessType.NON_UE) {
-            "[${ueProcessType.displayName}] "
+            " [${ueProcessType.displayName}]"
         } else {
             ""
         }
