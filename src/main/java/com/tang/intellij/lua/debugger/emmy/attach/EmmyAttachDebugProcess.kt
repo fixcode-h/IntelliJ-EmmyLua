@@ -280,7 +280,7 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
 
     override fun onConnect(suc: Boolean) {
         if (suc) {
-            logWithLevel("🔗 TCP连接已建立", LogLevel.NORMAL)
+            // 移除简单的TCP连接消息，保留初始化请求信息
         logWithLevel("📤 正在发送初始化请求...", LogLevel.DEBUG)
             
             // 按照VSCode流程：连接成功后直接发送初始化请求

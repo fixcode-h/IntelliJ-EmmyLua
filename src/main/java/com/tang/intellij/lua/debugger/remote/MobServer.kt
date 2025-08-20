@@ -56,7 +56,7 @@ class MobServer(private val listener: MobServerListener) : Runnable {
             try {
                 val accept = server?.accept() ?: break
                 client?.stop()
-                listener.println("Connected.", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+                // 移除简单的"Connected."消息，保留更详细的连接信息
                 val newClient = MobClient(accept, listener)
                 client = newClient
                 listener.onConnect(newClient)
