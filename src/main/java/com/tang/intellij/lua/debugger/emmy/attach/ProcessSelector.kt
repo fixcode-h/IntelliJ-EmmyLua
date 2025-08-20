@@ -46,8 +46,7 @@ class ProcessSelector(private val project: Project) {
      */
     fun getProcessList(
         processName: String = "",
-        autoAttachSingleProcess: Boolean = true,
-        threadFilterBlacklist: List<String> = emptyList()
+        autoAttachSingleProcess: Boolean = true
     ): List<ProcessInfo> {
                   return try {
              // 验证调试器工具
@@ -68,7 +67,7 @@ class ProcessSelector(private val project: Project) {
             
             // 使用CP936编码解析输出(中文系统)
             val outputStr = String(output, Charset.forName("CP936"))
-            parseProcessList(outputStr, processName, threadFilterBlacklist)
+            parseProcessList(outputStr, processName, emptyList())
         } catch (e: Exception) {
             throw Exception("获取进程列表失败: ${e.message}")
         }
@@ -96,11 +95,12 @@ class ProcessSelector(private val project: Project) {
                 val processInfo = ProcessInfo(pid, name, title, path)
 
                 // 应用过滤条件
-                val matchesProcessName = processInfo.matchesProcessName(processName)
                 val ueProcessNames = LuaSettings.instance.ueProcessNames.toList()
                 val isUEProcess = processInfo.isUnrealEngineProcess(ueProcessNames)
-                val isBlacklisted = processInfo.isInBlacklist(threadFilterBlacklist)
-                val shouldInclude = matchesProcessName && isUEProcess && !isBlacklisted
+                // 使用插件设置中的黑名单
+                val debugProcessBlacklist = LuaSettings.instance.debugProcessBlacklist.toList()
+                val isBlacklisted = processInfo.isInBlacklist(debugProcessBlacklist)
+                val shouldInclude = isUEProcess && !isBlacklisted
 
                 if (shouldInclude) {
                     processes.add(processInfo)
@@ -122,8 +122,7 @@ class ProcessSelector(private val project: Project) {
      */
     fun showProcessSelectionDialog(
         processName: String = "",
-        autoAttachSingleProcess: Boolean = true,
-        threadFilterBlacklist: List<String> = emptyList()
+        autoAttachSingleProcess: Boolean = true
     ): ProcessInfo? {
         return ProgressManager.getInstance().run(object : Task.WithResult<ProcessInfo?, Exception>(
             project, "获取进程列表...", true
@@ -132,7 +131,7 @@ class ProcessSelector(private val project: Project) {
                 indicator.text = "正在获取系统进程列表..."
                 
                 val processes = try {
-                    getProcessList(processName, autoAttachSingleProcess, threadFilterBlacklist)
+                    getProcessList(processName, autoAttachSingleProcess)
                 } catch (e: Exception) {
                     ApplicationManager.getApplication().invokeLater {
                         Messages.showErrorDialog(project, e.message, "错误")

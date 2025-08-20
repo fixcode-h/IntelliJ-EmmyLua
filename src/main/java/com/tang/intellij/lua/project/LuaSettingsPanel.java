@@ -70,8 +70,7 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
     private JButton autoDetectUEProjectButton;
     private JCheckBox enableUEIntelliSenseCheckBox;
     private JTextField ueProcessNamesField;
-
-    // createUIComponents方法不再需要，因为不再使用自定义组件
+    private JTextField debugProcessBlacklistField;
 
     public LuaSettingsPanel() {
         this.settings = LuaSettings.Companion.getInstance();
@@ -110,6 +109,14 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
             ueProcessNamesField.setText(String.join(", ", processNames));
         } else {
             ueProcessNamesField.setText("");
+        }
+        
+        // 将调试器进程黑名单数组转换为逗号分隔的字符串
+        String[] blacklistProcesses = settings.getDebugProcessBlacklist();
+        if (blacklistProcesses != null && blacklistProcesses.length > 0) {
+            debugProcessBlacklistField.setText(String.join(", ", blacklistProcesses));
+        } else {
+            debugProcessBlacklistField.setText("");
         }
 
         //browse button action
@@ -192,6 +199,7 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
                 !StringUtil.equals(settings.getUeProjectPath(), ueProjectPathField.getText()) ||
                 settings.getEnableUEIntelliSense() != enableUEIntelliSenseCheckBox.isSelected() ||
                 !Arrays.equals(settings.getUeProcessNames(), getProcessNamesFromTextField()) ||
+                !Arrays.equals(settings.getDebugProcessBlacklist(), getDebugProcessBlacklistFromTextField()) ||
                 !Arrays.equals(settings.getAdditionalSourcesRoot(), additionalRoots.getRoots(), String::compareTo);
     }
 
@@ -229,6 +237,18 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
             settings.setUeProcessNames(processNames);
         }
         
+        // 将逗号分隔的字符串转换为调试器进程黑名单数组
+        String blacklistText = debugProcessBlacklistField.getText().trim();
+        if (blacklistText.isEmpty()) {
+            settings.setDebugProcessBlacklist(new String[0]);
+        } else {
+            String[] blacklistProcesses = blacklistText.split(",");
+            for (int i = 0; i < blacklistProcesses.length; i++) {
+                blacklistProcesses[i] = blacklistProcesses[i].trim();
+            }
+            settings.setDebugProcessBlacklist(blacklistProcesses);
+        }
+        
         LuaLanguageLevel selectedLevel = (LuaLanguageLevel) Objects.requireNonNull(languageLevel.getSelectedItem());
         if (selectedLevel != settings.getLanguageLevel()) {
             settings.setLanguageLevel(selectedLevel);
@@ -252,6 +272,19 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
                 processNames[i] = processNames[i].trim();
             }
             return processNames;
+        }
+    }
+    
+    private String[] getDebugProcessBlacklistFromTextField() {
+        String blacklistText = debugProcessBlacklistField.getText().trim();
+        if (blacklistText.isEmpty()) {
+            return new String[0];
+        } else {
+            String[] blacklistProcesses = blacklistText.split(",");
+            for (int i = 0; i < blacklistProcesses.length; i++) {
+                blacklistProcesses[i] = blacklistProcesses[i].trim();
+            }
+            return blacklistProcesses;
         }
     }
 

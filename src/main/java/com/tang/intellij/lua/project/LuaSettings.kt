@@ -103,6 +103,13 @@ class LuaSettings : PersistentStateComponent<LuaSettings> {
         "UnrealHeaderTool", "UnrealBuildTool", "UnrealLightmass"
     )
 
+    /**
+     * 调试器进程黑名单，用于过滤不需要显示的系统进程
+     */
+    var debugProcessBlacklist: Array<String> = arrayOf(
+        "winlogon", "csrss", "wininit", "services"
+    )
+
     override fun getState(): LuaSettings {
         return this
     }
@@ -136,6 +143,14 @@ class LuaSettings : PersistentStateComponent<LuaSettings> {
         }
         set(value) {
             ueProcessNames = value.split(";").filter { it.isNotBlank() }.toTypedArray()
+        }
+
+    var debugProcessBlacklistString: String
+        get() {
+            return debugProcessBlacklist.joinToString(";")
+        }
+        set(value) {
+            debugProcessBlacklist = value.split(";").filter { it.isNotBlank() }.toTypedArray()
         }
 
     /**

@@ -54,16 +54,12 @@ class EmmyAttachDebugRunner : LuaRunner() {
             // 尝试自动选择进程
             val processSelector = ProcessSelector(environment.project)
             val selectedProcess = processSelector.showProcessSelectionDialog(
-                configuration.processName,
-                configuration.autoAttachSingleProcess,
-                configuration.threadFilterBlacklist
+                "",
+                configuration.autoAttachSingleProcess
             )
             
             selectedProcess?.let { process ->
                 configuration.pid = process.pid
-                if (configuration.processName.isEmpty()) {
-                    configuration.processName = process.name
-                }
                                  // 检测并更新架构
                  val detectedArch = ProcessUtils.detectProcessArch(process.pid)
                 configuration.winArch = detectedArch.toEmmyWinArch()
