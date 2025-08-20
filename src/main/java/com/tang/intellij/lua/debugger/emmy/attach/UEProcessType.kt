@@ -127,7 +127,7 @@ object UEProcessClassifier {
         
         // 检查窗口标题中是否包含UE编辑器exe文件名（DS服务器特征）
         // 使用正则表达式匹配 UE4Editor{任意字符}.exe 模式
-        val ueEditorPattern = Regex("UE[45]?Editor.*\.exe", RegexOption.IGNORE_CASE)
+        val ueEditorPattern = Regex("UE[45]?Editor.*\\.exe", RegexOption.IGNORE_CASE)
         val isUEEditorInTitle = ueEditorPattern.containsMatchIn(title)
         
         return hasServerKeyword || isUEEditorInTitle
