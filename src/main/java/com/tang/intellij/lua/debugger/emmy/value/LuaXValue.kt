@@ -81,20 +81,22 @@ class BoolXValue(val v: VariableValue) : LuaXValue(v) {
 
 class AnyXValue(val v: VariableValue) : LuaXValue(v) {
     override fun computePresentation(xValueNode: XValueNode, place: XValuePlace) {
-        val icon = getIcon(v.valueTypeName)
+        val icon = getIcon(v.valueTypeValue)
         xValueNode.setPresentation(icon, v.valueTypeName, v.value, false)
     }
     
-    private fun getIcon(type: String?): javax.swing.Icon? {
-        return when (type) {
-            "string" -> AllIcons.Debugger.Db_primitive
-            "number" -> AllIcons.Debugger.Db_primitive
-            "boolean" -> AllIcons.Debugger.Db_primitive
-            "table" -> AllIcons.Debugger.Db_array
-            "function" -> AllIcons.Nodes.Function
-            "userdata" -> AllIcons.Debugger.Value
-            "thread" -> AllIcons.Debugger.ThreadSuspended
-            else -> AllIcons.Debugger.Value
+    private fun getIcon(valueType: LuaValueType): javax.swing.Icon? {
+        return when (valueType) {
+            LuaValueType.TSTRING -> AllIcons.Debugger.Db_primitive
+            LuaValueType.TNUMBER -> AllIcons.Debugger.Db_primitive
+            LuaValueType.TBOOLEAN -> AllIcons.Debugger.Db_primitive
+            LuaValueType.TTABLE -> AllIcons.Debugger.Db_array
+            LuaValueType.TFUNCTION -> AllIcons.Nodes.Function
+            LuaValueType.TUSERDATA -> AllIcons.Debugger.Value
+            LuaValueType.TTHREAD -> AllIcons.Debugger.ThreadSuspended
+            LuaValueType.TLIGHTUSERDATA -> AllIcons.Debugger.Value
+            LuaValueType.TNIL -> AllIcons.Debugger.Value
+            LuaValueType.GROUP -> AllIcons.Nodes.UpLevel
         }
     }
 }
