@@ -179,6 +179,79 @@ local cocosLuaDebugger = {
     end
 }
 
+local processedForToTable = setmetatable({}, { __mode = 'k' })
+rawset(_G, 'processedForToTable', processedForToTable)
+
+
+local unluaDebugger = {
+    queryVariable = function(variable, obj, typeName, depth)
+        -- 检查是否为 table 类型，并且看起来像一个 UnLua 代理对象
+        if typeName == 'table' then
+            -- 使用 rawget 避免触发元方法，安全地获取 Object 字段
+            local uObject = rawget(obj, 'Object')
+            if uObject and type(uObject) == 'userdata' then
+                local mt = getmetatable(uObject)
+                if mt then
+                    local name = rawget(mt, '__name')
+                    if name and type(name) == 'string' then
+                        -- 让调试器正常展开这个 table
+                        variable:query(obj, depth, true)
+                        -- 将 table 的类型名也显示为UE对象名
+                        variable.valueTypeName = name
+                        return true
+                    end
+                end
+            end
+        elseif typeName == 'userdata' then
+            local mt = getmetatable(obj)
+            if mt then
+                local bHandled = false -- 使用一个更清晰的变量名
+
+                local name = rawget(mt, '__name')
+                if name and type(name) == 'string' then
+                    bHandled = true
+                end
+
+                local toTableFunc = rawget(mt, 'ToTable')
+                if toTableFunc and type(toTableFunc) == 'function' then
+                    local key = tostring(obj)
+                    if not processedForToTable[variable] then
+                        -- 标记这个地址已被处理
+                        processedForToTable[variable] = true
+
+                        local resultNode = emmy.createNode()
+                        local resultTable = toTableFunc(obj)
+                        resultNode.name = "A_"..name.."_Value"
+                        resultNode.value = resultTable
+                        resultNode.valueType = 5
+                        resultNode.valueTypeName = 'table'
+                        resultNode:query(resultTable, depth - 1, true)
+                        variable:addChild(resultNode)
+                        bHandled = true
+                    end
+                end
+
+                -- 如果我们对这个 userdata 进行了任何自定义处理
+                if bHandled then
+                    -- 别忘了调用原始的 query，以便显示 userdata 的默认信息（如元表）
+                    variable:query(obj, depth, true)
+                    if name and type(name) == 'string' then
+                        variable.valueTypeName = "(userdata)"..name
+                    end
+                    local toStringFunc = rawget(mt, '__tostring')
+                    if toStringFunc and type(toStringFunc) == 'function' then
+                        variable.value = tostring(toStringFunc(obj))
+                        variable.valueType = 7
+                    end
+
+                    return true
+                end
+            end
+        end
+        return false
+    end
+}
+
 if tolua then
     if tolua.gettag then
         emmy = toluaHelper
@@ -187,6 +260,8 @@ if tolua then
     end
 elseif xlua then
     emmy = xluaDebugger
+else
+    emmy = unluaDebugger
 end
 
 rawset(_G, 'emmyHelper', emmy)
