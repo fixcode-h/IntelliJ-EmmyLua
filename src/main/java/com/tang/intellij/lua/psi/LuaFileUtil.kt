@@ -122,14 +122,35 @@ object LuaFileUtil {
     }
 
     fun getPluginVirtualFile(path: String): String? {
+        // 方案1：使用类加载器从JAR包中加载资源
+        val classLoader = LuaFileUtil::class.java.classLoader
+        val resource = classLoader.getResource(path)
+        if (resource != null) {
+            // 对于JAR包内的资源，需要特殊处理路径格式
+            val resourcePath = resource.toString()
+            if (resourcePath.startsWith("jar:")) {
+                // 处理JAR包内的资源路径
+                return resourcePath
+            } else {
+                // 处理文件系统中的资源路径
+                return resource.path
+            }
+        }
+        
+        // 方案2：改进的插件目录查找
         val directory = pluginVirtualDirectory
         if (directory != null) {
-            var fullPath = directory.path + "/classes/" + path
-            if (File(fullPath).exists())
-                return fullPath
-            fullPath = directory.path + "/" + path
-            if (File(fullPath).exists())
-                return fullPath
+            val possiblePaths = listOf(
+                directory.path + "/" + path,
+                directory.path + "/classes/" + path,
+                directory.path + "/lib/" + path
+            )
+            
+            for (fullPath in possiblePaths) {
+                if (File(fullPath).exists()) {
+                    return fullPath
+                }
+            }
         }
         return null
     }

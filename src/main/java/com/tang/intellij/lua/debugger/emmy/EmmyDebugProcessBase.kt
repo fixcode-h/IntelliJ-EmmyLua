@@ -29,6 +29,7 @@ import com.intellij.xdebugger.frame.XSuspendContext
 import com.tang.intellij.lua.debugger.*
 import com.tang.intellij.lua.psi.LuaFileManager
 import com.tang.intellij.lua.psi.LuaFileUtil
+import com.tang.intellij.lua.project.LuaSettings
 import java.io.File
 
 abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(session), ITransportHandler {
@@ -56,9 +57,8 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
                 // send init
-                val path = LuaFileUtil.getPluginVirtualFile("debugger/emmy/emmyHelper.lua")
-                if (path != null) {
-                    val code = File(path).readText()
+                val code = readPluginResource("debugger/emmy/emmyHelper.lua")
+                if (code != null) {
                     val extList = LuaFileManager.extensions
                     transporter?.send(InitMessage(code, extList))
                 }
@@ -76,6 +76,60 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
             } catch (e: Exception) {
                 error("发送初始化请求失败: ${e.message}")
             }
+        }
+    }
+    
+    /**
+     * 读取插件资源文件内容，支持JAR包和文件系统
+     */
+    private fun readPluginResource(path: String): String? {
+        return try {
+            // 如果是emmyHelper.lua文件，优先使用用户设置的自定义路径
+            if (path == "debugger/emmy/emmyHelper.lua") {
+                val settings = LuaSettings.instance
+                val customPath = settings.customEmmyHelperPath
+                if (!customPath.isNullOrBlank()) {
+                    val customFile = File(customPath)
+                    if (customFile.exists() && customFile.isFile()) {
+                        val content = customFile.readText()
+                        println("✅ 成功从自定义路径读取EmmyHelper: $customPath")
+                        println("📝 内容长度: ${content.length} 字符")
+                        println("📋 内容预览: ${content.take(200)}...")
+                        return content
+                    } else {
+                        println("⚠️ 自定义EmmyHelper路径无效，回退到默认路径: $customPath")
+                    }
+                }
+            }
+            
+            // 首先尝试使用类加载器从JAR包中读取
+            val classLoader = LuaFileUtil::class.java.classLoader
+            val resource = classLoader.getResource(path)
+            if (resource != null) {
+                val content = resource.readText()
+                println("✅ 成功从类加载器读取资源: $path")
+                println("📄 资源URL: ${resource}")
+                println("📝 内容长度: ${content.length} 字符")
+                println("📋 内容预览: ${content.take(200)}...")
+                content
+            } else {
+                // 如果类加载器无法找到，尝试使用LuaFileUtil的方法
+                val filePath = LuaFileUtil.getPluginVirtualFile(path)
+                if (filePath != null && !filePath.startsWith("jar:")) {
+                    val content = File(filePath).readText()
+                    println("✅ 成功从文件系统读取资源: $filePath")
+                    println("📝 内容长度: ${content.length} 字符")
+                    println("📋 内容预览: ${content.take(200)}...")
+                    content
+                } else {
+                    println("❌ 无法找到资源: $path")
+                    println("🔍 LuaFileUtil返回路径: $filePath")
+                    null
+                }
+            }
+        } catch (e: Exception) {
+            error("读取插件资源失败: $path, ${e.message}")
+            null
         }
     }
 

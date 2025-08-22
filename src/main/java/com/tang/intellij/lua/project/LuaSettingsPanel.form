@@ -328,7 +328,7 @@
           </grid>
           
           <!-- 调试设置标签页 -->
-          <grid id="debugSettingsTab" layout-manager="GridLayoutManager" row-count="3" column-count="2" same-size-horizontally="false" same-size-vertically="false" hgap="10" vgap="10">
+          <grid id="debugSettingsTab" layout-manager="GridLayoutManager" row-count="4" column-count="3" same-size-horizontally="false" same-size-vertically="false" hgap="10" vgap="10">
             <margin top="15" left="15" bottom="15" right="15"/>
             <constraints>
               <tabbedpane title="调试设置"/>
@@ -347,16 +347,44 @@
               </component>
               <component id="charsetComboBox" class="javax.swing.JComboBox" binding="charsetComboBox">
                 <constraints>
-                  <grid row="0" column="1" row-span="1" col-span="1" vsize-policy="0" hsize-policy="2" anchor="8" fill="1" indent="0" use-parent-layout="false"/>
+                  <grid row="0" column="1" row-span="1" col-span="2" vsize-policy="0" hsize-policy="2" anchor="8" fill="1" indent="0" use-parent-layout="false"/>
                 </constraints>
                 <properties/>
+              </component>
+              
+              <!-- 自定义EmmyHelper.lua文件路径 -->
+              <component id="customEmmyHelperPathLabel" class="javax.swing.JLabel">
+                <constraints>
+                  <grid row="1" column="0" row-span="1" col-span="1" vsize-policy="0" hsize-policy="0" anchor="8" fill="0" indent="0" use-parent-layout="false"/>
+                </constraints>
+                <properties>
+                  <text value="Custom EmmyHelper.lua Path:"/>
+                </properties>
+              </component>
+              <component id="customEmmyHelperPathField" class="javax.swing.JTextField" binding="customEmmyHelperPathField">
+                <constraints>
+                  <grid row="1" column="1" row-span="1" col-span="1" vsize-policy="0" hsize-policy="6" anchor="8" fill="1" indent="0" use-parent-layout="false">
+                    <preferred-size width="300" height="-1"/>
+                  </grid>
+                </constraints>
+                <properties>
+                  <toolTipText value="Specify a custom path to emmyHelper.lua file (leave empty to use default)"/>
+                </properties>
+              </component>
+              <component id="browseCustomEmmyHelperButton" class="javax.swing.JButton" binding="browseCustomEmmyHelperButton">
+                <constraints>
+                  <grid row="1" column="2" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="0" fill="1" indent="0" use-parent-layout="false"/>
+                </constraints>
+                <properties>
+                  <text value="Browse"/>
+                </properties>
               </component>
               
               <!-- 调试选项 -->
               <grid id="debugOptionsPanel" layout-manager="GridLayoutManager" row-count="2" column-count="1" same-size-horizontally="false" same-size-vertically="false" hgap="-1" vgap="5">
                 <margin top="10" left="10" bottom="10" right="10"/>
                 <constraints>
-                  <grid row="1" column="0" row-span="1" col-span="2" vsize-policy="0" hsize-policy="3" anchor="0" fill="3" indent="0" use-parent-layout="false"/>
+                  <grid row="2" column="0" row-span="1" col-span="3" vsize-policy="0" hsize-policy="3" anchor="0" fill="3" indent="0" use-parent-layout="false"/>
                 </constraints>
                 <properties/>
                 <border type="etched" title="调试选项"/>
@@ -384,7 +412,7 @@
               <!-- 填充空间 -->
               <vspacer id="debugTabSpacer">
                 <constraints>
-                  <grid row="2" column="1" row-span="1" col-span="1" vsize-policy="6" hsize-policy="1" anchor="0" fill="2" indent="0" use-parent-layout="false"/>
+                  <grid row="3" column="1" row-span="1" col-span="1" vsize-policy="6" hsize-policy="1" anchor="0" fill="2" indent="0" use-parent-layout="false"/>
                 </constraints>
               </vspacer>
             </children>

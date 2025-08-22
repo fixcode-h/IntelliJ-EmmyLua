@@ -91,6 +91,11 @@ class LuaSettings : PersistentStateComponent<LuaSettings> {
     var ueProjectPath = ""
 
     /**
+     * Custom Lua file path for emmyHelper.lua
+     */
+    var customEmmyHelperPath = ""
+
+    /**
      * Enable UE IntelliSense generation
      */
     var enableUEIntelliSense = true
@@ -99,8 +104,7 @@ class LuaSettings : PersistentStateComponent<LuaSettings> {
      * UE进程名称列表，用于调试器进程过滤
      */
     var ueProcessNames: Array<String> = arrayOf(
-        "UnrealEngine", "UE4Editor", "UE5Editor", "UnrealEditor",
-        "UnrealHeaderTool", "UnrealBuildTool", "UnrealLightmass"
+        "UnrealEngine", "UE4Editor", "UE5Editor", "UnrealEditor"
     )
 
     /**
