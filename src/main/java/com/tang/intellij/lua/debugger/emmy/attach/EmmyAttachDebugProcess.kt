@@ -391,6 +391,42 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
     }
 
     /**
+     * 读取插件资源文件内容，支持JAR包和文件系统
+     */
+    private fun readPluginResource(path: String): String? {
+        return try {
+            // 首先尝试使用类加载器从JAR包中读取
+            val classLoader = LuaFileUtil::class.java.classLoader
+            val resource = classLoader.getResource(path)
+            if (resource != null) {
+                val content = resource.readText()
+                logWithLevel("✅ 成功从类加载器读取资源: $path", LogLevel.DEBUG)
+                logWithLevel("📄 资源URL: ${resource}", LogLevel.DEBUG)
+                logWithLevel("📝 内容长度: ${content.length} 字符", LogLevel.DEBUG)
+                logWithLevel("📋 内容预览: ${content.take(200)}...", LogLevel.DEBUG)
+                content
+            } else {
+                // 如果类加载器无法找到，尝试使用LuaFileUtil的方法
+                val filePath = LuaFileUtil.getPluginVirtualFile(path)
+                if (filePath != null && !filePath.startsWith("jar:")) {
+                    val content = File(filePath).readText()
+                    logWithLevel("✅ 成功从文件系统读取资源: $filePath", LogLevel.DEBUG)
+                    logWithLevel("📝 内容长度: ${content.length} 字符", LogLevel.DEBUG)
+                    logWithLevel("📋 内容预览: ${content.take(200)}...", LogLevel.DEBUG)
+                    content
+                } else {
+                    logWithLevel("❌ 无法找到资源: $path", LogLevel.ERROR, ConsoleViewContentType.ERROR_OUTPUT)
+                    logWithLevel("🔍 LuaFileUtil返回路径: $filePath", LogLevel.DEBUG)
+                    null
+                }
+            }
+        } catch (e: Exception) {
+            logWithLevel("❌ 读取插件资源失败: $path, ${e.message}", LogLevel.ERROR, ConsoleViewContentType.ERROR_OUTPUT)
+            null
+        }
+    }
+
+    /**
      * 发送初始化请求（按照VSCode流程）
      */
     private fun sendInitReq() {
@@ -400,12 +436,13 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
                 // 1. 发送初始化脚本（emmyHelper.lua）
-                val helperPath = LuaFileUtil.getPluginVirtualFile("debugger/emmy/emmyHelper.lua")
-                if (helperPath != null) {
-                    val code = File(helperPath).readText()
+                val code = readPluginResource("debugger/emmy/emmyHelper.lua")
+                if (code != null) {
                     val extensions = com.tang.intellij.lua.psi.LuaFileManager.extensions
                     transporter?.send(InitMessage(code, extensions))
                     logWithLevel("📤 发送InitReq消息（emmyHelper.lua）", LogLevel.DEBUG)
+                } else {
+                    logWithLevel("❌ 无法读取emmyHelper.lua文件", LogLevel.ERROR, ConsoleViewContentType.ERROR_OUTPUT)
                 }
                 
                 // 2. 发送断点信息

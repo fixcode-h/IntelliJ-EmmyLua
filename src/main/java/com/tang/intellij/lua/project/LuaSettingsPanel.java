@@ -71,6 +71,8 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
     private JCheckBox enableUEIntelliSenseCheckBox;
     private JTextField ueProcessNamesField;
     private JTextField debugProcessBlacklistField;
+    private JTextField customEmmyHelperPathField;
+    private JButton browseCustomEmmyHelperButton;
 
     public LuaSettingsPanel() {
         this.settings = LuaSettings.Companion.getInstance();
@@ -118,6 +120,22 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
         } else {
             debugProcessBlacklistField.setText("");
         }
+        
+        // 自定义EmmyHelper.lua路径设置
+        customEmmyHelperPathField.setText(settings.getCustomEmmyHelperPath());
+
+        //browse custom emmy helper button action
+        browseCustomEmmyHelperButton.addActionListener(e -> {
+            FileChooserDescriptor descriptor = new FileChooserDescriptor(true, false, false, false, false, false)
+                    .withFileFilter(file -> file.getName().endsWith(".lua"));
+            descriptor.setTitle("Select Custom EmmyHelper.lua File");
+            descriptor.setDescription("Choose a custom Lua file to use as EmmyHelper");
+            
+            VirtualFile selectedFile = FileChooser.chooseFile(descriptor, null, null);
+            if (selectedFile != null) {
+                customEmmyHelperPathField.setText(selectedFile.getPath());
+            }
+        });
 
         //browse button action
         browseUEProjectButton.addActionListener(e -> {
@@ -200,6 +218,7 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
                 settings.getEnableUEIntelliSense() != enableUEIntelliSenseCheckBox.isSelected() ||
                 !Arrays.equals(settings.getUeProcessNames(), getProcessNamesFromTextField()) ||
                 !Arrays.equals(settings.getDebugProcessBlacklist(), getDebugProcessBlacklistFromTextField()) ||
+                !StringUtil.equals(settings.getCustomEmmyHelperPath(), customEmmyHelperPathField.getText()) ||
                 !Arrays.equals(settings.getAdditionalSourcesRoot(), additionalRoots.getRoots(), String::compareTo);
     }
 
@@ -225,6 +244,9 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
         //UE project settings
         settings.setUeProjectPath(ueProjectPathField.getText());
         settings.setEnableUEIntelliSense(enableUEIntelliSenseCheckBox.isSelected());
+        
+        //Custom EmmyHelper path
+        settings.setCustomEmmyHelperPath(customEmmyHelperPathField.getText());
         // 将逗号分隔的字符串转换为进程名称数组
         String processNamesText = ueProcessNamesField.getText().trim();
         if (processNamesText.isEmpty()) {
@@ -316,6 +338,9 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
         } else {
             ueProcessNamesField.setText("");
         }
+        
+        // Reset custom EmmyHelper path
+        customEmmyHelperPathField.setText(settings.getCustomEmmyHelperPath());
     }
 
     private int getTooLargerFileThreshold() {
