@@ -399,7 +399,7 @@ val LuaNameExpr.docTy: ITy? get() {
     val stub = stub
     if (stub != null)
         return stub.docTy
-    return assignStat?.comment?.ty
+    return assignStat?.comment?.docTy
 }
 
 private val KEY_SHOULD_CREATE_STUB = Key.create<CachedValue<Boolean>>("lua.should_create_stub")

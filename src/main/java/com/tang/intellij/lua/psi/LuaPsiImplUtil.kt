@@ -259,7 +259,41 @@ fun guessTypeAt(list: LuaExprList, context: SearchContext): ITy {
 
 fun guessParentType(indexExpr: LuaIndexExpr, context: SearchContext): ITy {
     val expr = PsiTreeUtil.getStubChildOfType(indexExpr, LuaExpr::class.java)
-    return expr?.guessType(context) ?: Ty.UNKNOWN
+    if (expr == null) return Ty.UNKNOWN
+    
+    var parentType = expr.guessType(context)
+    
+    // 处理别名情况：如果父表达式是一个名称表达式，尝试解析别名
+    if (expr is LuaNameExpr && parentType is TyUnknown) {
+        val resolved = resolve(expr, context)
+        if (resolved is LuaNameDef) {
+            // 检查是否是别名赋值，如 UE4 = UE
+            val assignStat = PsiTreeUtil.getParentOfType(resolved, LuaAssignStat::class.java)
+            if (assignStat != null) {
+                val varExprList = assignStat.varExprList
+                val valueExprList = assignStat.valueExprList
+                if (varExprList != null && valueExprList != null) {
+                    val index = varExprList.exprList.indexOf(resolved.parent)
+                    if (index >= 0) {
+                        val valueExpr = valueExprList.exprList.getOrNull(index)
+                        if (valueExpr != null) {
+                            parentType = valueExpr.guessType(context)
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // 处理索引表达式的情况：如果父表达式本身是索引表达式，递归解析
+    if (expr is LuaIndexExpr && parentType is TyUnknown) {
+        val resolvedParent = resolve(expr, context)
+        if (resolvedParent is LuaClassMember) {
+            parentType = resolvedParent.guessType(context)
+        }
+    }
+    
+    return parentType
 }
 
 fun getNameIdentifier(indexExpr: LuaIndexExpr): PsiElement? {
