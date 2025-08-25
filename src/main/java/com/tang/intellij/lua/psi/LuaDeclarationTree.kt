@@ -330,10 +330,39 @@ private abstract class LuaDeclarationTreeBase(val file: PsiFile) : LuaRecursiveV
     }
 
     override fun visitAssignStat(o: LuaAssignStat) {
-        o.varExprList.exprList.forEach { expr ->
+        val varList = o.varExprList.exprList
+        val valueList = o.valueExprList?.exprList
+        
+        varList.forEachIndexed { index, expr ->
             if (expr is LuaNameExpr) {
                 val flags = find(expr)?.flags ?: DeclarationFlag.Global
-                curScope?.add(createDeclaration(expr.name, expr, flags))
+                val declaration = createDeclaration(expr.name, expr, flags)
+                
+                // 处理别名赋值：如果右侧是一个名称表达式，建立别名关系
+                if (valueList != null && index < valueList.size) {
+                    val valueExpr = valueList[index]
+                    if (valueExpr is LuaNameExpr) {
+                        // 查找右侧表达式的声明
+                        val sourceDeclaration = find(valueExpr)
+                        if (sourceDeclaration != null) {
+                            // 创建别名声明，指向原始声明
+                            val aliasDeclaration = Declaration(
+                                expr.name,
+                                getPosition(expr),
+                                expr,
+                                flags,
+                                sourceDeclaration as? Declaration
+                            )
+                            curScope?.add(aliasDeclaration)
+                        } else {
+                            curScope?.add(declaration)
+                        }
+                    } else {
+                        curScope?.add(declaration)
+                    }
+                } else {
+                    curScope?.add(declaration)
+                }
             } else if (expr is LuaIndexExpr) {
                 val name = expr.name
                 if (name != null) {
