@@ -83,9 +83,22 @@ class LuaFileElementType : IStubFileElementType<LuaFileStub>(LuaLanguage.INSTANC
     }
 
     override fun deserialize(dataStream: StubInputStream, parentStub: StubElement<*>?): LuaFileStub {
-        val moduleRef = dataStream.readName()
-        val uid = dataStream.readUTFFast()
-        return LuaFileStub(null, StringRef.toString(moduleRef), uid)
+        // 缓存验证：在访问Stub数据前验证文件完整性
+        try {
+            val moduleRef = dataStream.readName()
+            val uid = dataStream.readUTFFast()
+            
+            // 验证读取的数据是否有效
+            if (uid.isEmpty()) {
+                LOG.warn("Invalid UID in stub data, creating empty stub")
+                return LuaFileStub(null, null, "")
+            }
+            
+            return LuaFileStub(null, StringRef.toString(moduleRef), uid)
+        } catch (e: Exception) {
+            LOG.warn("Failed to deserialize LuaFileStub, creating empty stub", e)
+            return LuaFileStub(null, null, "")
+        }
     }
 
     override fun getExternalId() = "lua.file"

@@ -45,8 +45,26 @@ class LuaClassMemberIndex : IntStubIndexExtension<LuaClassMember>() {
         private fun process(key: String, context: SearchContext, processor: Processor<LuaClassMember>): Boolean {
             if (context.isDumb)
                 return false
-            val all = StubIndex.getElements(StubKeys.CLASS_MEMBER, key.hashCode(), context.project, context.scope, LuaClassMember::class.java)
-            return ContainerUtil.process(all, processor)
+            
+            // 缓存验证：在访问Stub数据前验证文件完整性
+            try {
+                val all = StubIndex.getElements(StubKeys.CLASS_MEMBER, key.hashCode(), context.project, context.scope, LuaClassMember::class.java)
+                
+                // 过滤掉无效的元素
+                val validElements = all.filter { element ->
+                    try {
+                        val containingFile = element.containingFile
+                        containingFile != null && containingFile.isValid
+                    } catch (e: Exception) {
+                        false
+                    }
+                }
+                
+                return ContainerUtil.process(validElements, processor)
+            } catch (e: Exception) {
+                // 如果访问Stub索引失败，返回true继续处理其他索引
+                return true
+            }
         }
 
         fun process(className: String, fieldName: String, context: SearchContext, processor: Processor<LuaClassMember>, deep: Boolean = true): Boolean {

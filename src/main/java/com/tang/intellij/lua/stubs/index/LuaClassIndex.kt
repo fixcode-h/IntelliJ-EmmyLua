@@ -58,8 +58,25 @@ class LuaClassIndex : StringStubIndexExtension<LuaDocTagClass>() {
         }
 
         fun process(key: String, project: Project, scope: GlobalSearchScope, processor: Processor<LuaDocTagClass>): Boolean {
-            val collection = StubIndex.getElements(StubKeys.CLASS, key, project, scope, LuaDocTagClass::class.java)
-            return ContainerUtil.process(collection, processor)
+            // 缓存验证：在访问Stub数据前验证文件完整性
+            try {
+                val collection = StubIndex.getElements(StubKeys.CLASS, key, project, scope, LuaDocTagClass::class.java)
+                
+                // 过滤掉无效的元素
+                val validElements = collection.filter { element ->
+                    try {
+                        val containingFile = element.containingFile
+                        containingFile != null && containingFile.isValid
+                    } catch (e: Exception) {
+                        false
+                    }
+                }
+                
+                return ContainerUtil.process(validElements, processor)
+            } catch (e: Exception) {
+                // 如果访问Stub索引失败，返回true继续处理
+                return true
+            }
         }
 
         fun processKeys(project: Project, processor: Processor<String>): Boolean {

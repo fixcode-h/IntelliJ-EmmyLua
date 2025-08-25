@@ -68,34 +68,59 @@ class LuaDocumentationProvider : AbstractDocumentationProvider(), DocumentationP
     }
 
     override fun generateDoc(element: PsiElement, originalElement: PsiElement?): String? {
-        val sb = StringBuilder()
-        val tyRenderer = renderer
-        when (element) {
-            is LuaParamNameDef -> renderParamNameDef(sb, element)
-            is LuaDocTagClass -> renderClassDef(sb, element, tyRenderer)
-            is LuaClassMember -> renderClassMember(sb, element)
-            is LuaNameDef -> { //local xx
-
-                renderDefinition(sb) {
-                    sb.append("local <b>${element.name}</b>:")
-                    val ty = element.guessType(SearchContext.get(element.project))
-                    renderTy(sb, ty, tyRenderer)
-                }
-
-                val owner = PsiTreeUtil.getParentOfType(element, LuaCommentOwner::class.java)
-                owner?.let { renderComment(sb, owner.comment, tyRenderer) }
+        // 延迟加载：检查文件状态，避免在索引不稳定时访问PSI
+        try {
+            val containingFile = element.containingFile
+            if (containingFile == null || !containingFile.isValid) {
+                return null
             }
-            is LuaLocalFuncDef -> {
-                sb.wrapTag("pre") {
-                    sb.append("local function <b>${element.name}</b>")
-                    val type = element.guessType(SearchContext.get(element.project)) as ITyFunction
-                    renderSignature(sb, type.mainSignature, tyRenderer)
-                }
-                renderComment(sb, element.comment, tyRenderer)
+            
+            // 检查文件是否正在被修改或索引中
+            val virtualFile = containingFile.virtualFile
+            if (virtualFile != null && !virtualFile.isValid) {
+                return null
             }
+            
+            // 使用懒加载机制延迟创建StringBuilder和渲染器
+            val sb by lazy { StringBuilder() }
+            val tyRenderer by lazy { renderer }
+            
+            when (element) {
+                is LuaParamNameDef -> {
+                    renderParamNameDef(sb, element)
+                }
+                is LuaDocTagClass -> {
+                    renderClassDef(sb, element, tyRenderer)
+                }
+                is LuaClassMember -> {
+                    renderClassMember(sb, element)
+                }
+                is LuaNameDef -> { //local xx
+                    renderDefinition(sb) {
+                        sb.append("local <b>${element.name}</b>:")
+                        val ty = element.guessType(SearchContext.get(element.project))
+                        renderTy(sb, ty, tyRenderer)
+                    }
+
+                    val owner = PsiTreeUtil.getParentOfType(element, LuaCommentOwner::class.java)
+                    owner?.let { renderComment(sb, owner.comment, tyRenderer) }
+                }
+                is LuaLocalFuncDef -> {
+                    sb.wrapTag("pre") {
+                        sb.append("local function <b>${element.name}</b>")
+                        val type = element.guessType(SearchContext.get(element.project)) as ITyFunction
+                        renderSignature(sb, type.mainSignature, tyRenderer)
+                    }
+                    renderComment(sb, element.comment, tyRenderer)
+                }
+            }
+            
+            if (sb.isNotEmpty()) return sb.toString()
+            return super<AbstractDocumentationProvider>.generateDoc(element, originalElement)
+        } catch (e: Exception) {
+            // 捕获任何PSI访问异常，避免插件崩溃
+            return null
         }
-        if (sb.isNotEmpty()) return sb.toString()
-        return super<AbstractDocumentationProvider>.generateDoc(element, originalElement)
     }
 
     private fun renderClassMember(sb: StringBuilder, classMember: LuaClassMember) {

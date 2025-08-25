@@ -47,7 +47,24 @@ object LuaCommentUtil {
     }
 
     fun findComment(element: LuaCommentOwner): LuaComment? {
-        return PsiTreeUtil.getChildOfType(element, LuaComment::class.java)
+        // 增强错误处理：检查文件状态，避免在索引不匹配时访问PSI
+        try {
+            val containingFile = element.containingFile
+            if (containingFile == null || !containingFile.isValid) {
+                return null
+            }
+            
+            // 检查文件是否正在被修改或索引中
+            val virtualFile = containingFile.virtualFile
+            if (virtualFile != null && !virtualFile.isValid) {
+                return null
+            }
+            
+            return PsiTreeUtil.getChildOfType(element, LuaComment::class.java)
+        } catch (e: Exception) {
+            // 捕获任何PSI访问异常，避免插件崩溃
+            return null
+        }
     }
 
     fun insertTemplate(commentOwner: LuaCommentOwner, editor: Editor, action:(TemplateManager, Template) -> Unit) {

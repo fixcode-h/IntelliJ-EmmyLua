@@ -75,7 +75,24 @@ fun getReferences(element: LuaPsiElement): Array<PsiReference> {
  * @return LuaComment
  */
 fun getComment(declaration: LuaCommentOwner): LuaComment? {
-    return LuaCommentUtil.findComment(declaration)
+    // 增强错误处理：在访问PSI前检查文件状态
+    try {
+        val containingFile = declaration.containingFile
+        if (containingFile == null || !containingFile.isValid) {
+            return null
+        }
+        
+        // 检查虚拟文件状态
+        val virtualFile = containingFile.virtualFile
+        if (virtualFile != null && !virtualFile.isValid) {
+            return null
+        }
+        
+        return LuaCommentUtil.findComment(declaration)
+    } catch (e: Exception) {
+        // 捕获Stub索引不匹配等异常，避免插件崩溃
+        return null
+    }
 }
 
 fun getNameIdentifier(classMethodDef: LuaClassMethodDef): PsiElement? {
