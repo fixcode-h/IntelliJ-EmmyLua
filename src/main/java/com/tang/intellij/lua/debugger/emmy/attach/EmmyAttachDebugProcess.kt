@@ -23,6 +23,7 @@ import com.intellij.xdebugger.XDebugSession
 import com.tang.intellij.lua.debugger.emmy.*
 import com.tang.intellij.lua.debugger.LogConsoleType
 import com.tang.intellij.lua.psi.LuaFileUtil
+import com.tang.intellij.lua.project.LuaSettings
 import java.io.File
 import java.nio.charset.Charset
 
@@ -227,7 +228,7 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
         val moduleAnalysis = ProcessUtils.analyzeProcessModules(configuration.pid, useArch)
         
         if (moduleAnalysis.errorMessage != null) {
-            println("⚠️ 模块分析遇到问题: ${moduleAnalysis.errorMessage}", LogConsoleType.NORMAL, ConsoleViewContentType.ERROR_OUTPUT)
+            logWithLevel("⚠️ 模块分析遇到问题: ${moduleAnalysis.errorMessage}", LogLevel.DEBUG)
         }
         
         if (moduleAnalysis.hasLuaRuntime) {
@@ -238,7 +239,7 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
              logWithLevel("🚀 调试器将尝试连接到这些Lua运行时", LogLevel.DEBUG)
         } else {
             val totalModules = moduleAnalysis.allModules.size
-            println("⚠️ 未检测到标准Lua运行时模块！", LogConsoleType.NORMAL, ConsoleViewContentType.ERROR_OUTPUT)
+            logWithLevel("⚠️ 未检测到标准Lua运行时模块！", LogLevel.DEBUG)
             logWithLevel("📊 进程共包含 $totalModules 个模块", LogLevel.DEBUG)
             
             if (totalModules > 0) {
@@ -252,7 +253,7 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
             }
             
             logWithLevel("💡 建议：确保目标进程包含标准Lua运行时(如lua.dll、lua51.dll、luajit.dll等)", LogLevel.DEBUG)
-            println("⚠️ 警告：由于未检测到标准Lua运行时，调试连接可能会失败", LogConsoleType.NORMAL, ConsoleViewContentType.ERROR_OUTPUT)
+            logWithLevel("⚠️ 警告：由于未检测到标准Lua运行时，调试连接可能会失败", LogLevel.DEBUG)
         }
     }
 
@@ -395,6 +396,24 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
      */
     private fun readPluginResource(path: String): String? {
         return try {
+            // 如果是emmyHelper.lua文件，优先使用用户设置的自定义路径
+            if (path == "debugger/emmy/emmyHelper.lua") {
+                val settings = LuaSettings.instance
+                val customPath = settings.customEmmyHelperPath
+                if (!customPath.isNullOrBlank()) {
+                    val customFile = File(customPath)
+                    if (customFile.exists() && customFile.isFile()) {
+                        val content = customFile.readText()
+                        logWithLevel("✅ 成功从自定义路径读取EmmyHelper: $customPath", LogLevel.DEBUG)
+                        logWithLevel("📝 内容长度: ${content.length} 字符", LogLevel.DEBUG)
+                        logWithLevel("📋 内容预览: ${content.take(200)}...", LogLevel.DEBUG)
+                        return content
+                    } else {
+                        logWithLevel("⚠️ 自定义EmmyHelper路径无效，回退到默认路径: $customPath", LogLevel.DEBUG)
+                    }
+                }
+            }
+            
             // 首先尝试使用类加载器从JAR包中读取
             val classLoader = LuaFileUtil::class.java.classLoader
             val resource = classLoader.getResource(path)
