@@ -215,7 +215,7 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
          attachedPid = configuration.pid
          usedArch = useArch
          logWithLevel("✅ 成功附加到进程 ${configuration.pid}", LogLevel.NORMAL)
-         logWithLevel("📝 注意: 目标进程必须包含Lua运行时才能建立调试连接", LogLevel.NORMAL)
+         logWithLevel("📝 注意: 目标进程必须包含Lua运行时才能建立调试连接", LogLevel.DEBUG)
 
                          // 如果启用了日志捕获，启动日志捕获进程（模拟VSCode的receive_log功能）
         if (configuration.captureLog) {
@@ -231,11 +231,11 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
         }
         
         if (moduleAnalysis.hasLuaRuntime) {
-            logWithLevel("✅ 检测到标准Lua运行时模块:", LogLevel.NORMAL)
+            logWithLevel("✅ 检测到标准Lua运行时模块:", LogLevel.DEBUG)
              moduleAnalysis.luaModules.forEach { module ->
-                 logWithLevel("  📚 $module", LogLevel.NORMAL)
+                 logWithLevel("  📚 $module", LogLevel.DEBUG)
              }
-             logWithLevel("🚀 调试器将尝试连接到这些Lua运行时", LogLevel.NORMAL)
+             logWithLevel("🚀 调试器将尝试连接到这些Lua运行时", LogLevel.DEBUG)
         } else {
             val totalModules = moduleAnalysis.allModules.size
             println("⚠️ 未检测到标准Lua运行时模块！", LogConsoleType.NORMAL, ConsoleViewContentType.ERROR_OUTPUT)
@@ -251,7 +251,7 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
              }
             }
             
-            logWithLevel("💡 建议：确保目标进程包含标准Lua运行时(如lua.dll、lua51.dll、luajit.dll等)", LogLevel.NORMAL)
+            logWithLevel("💡 建议：确保目标进程包含标准Lua运行时(如lua.dll、lua51.dll、luajit.dll等)", LogLevel.DEBUG)
             println("⚠️ 警告：由于未检测到标准Lua运行时，调试连接可能会失败", LogConsoleType.NORMAL, ConsoleViewContentType.ERROR_OUTPUT)
         }
     }
