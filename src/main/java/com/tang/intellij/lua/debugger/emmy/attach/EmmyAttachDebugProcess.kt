@@ -23,6 +23,7 @@ import com.intellij.xdebugger.XDebugSession
 import com.tang.intellij.lua.debugger.emmy.*
 import com.tang.intellij.lua.debugger.LogConsoleType
 import com.tang.intellij.lua.psi.LuaFileUtil
+import com.tang.intellij.lua.project.LuaSettings
 import java.io.File
 import java.nio.charset.Charset
 
@@ -395,6 +396,24 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
      */
     private fun readPluginResource(path: String): String? {
         return try {
+            // 如果是emmyHelper.lua文件，优先使用用户设置的自定义路径
+            if (path == "debugger/emmy/emmyHelper.lua") {
+                val settings = LuaSettings.instance
+                val customPath = settings.customEmmyHelperPath
+                if (!customPath.isNullOrBlank()) {
+                    val customFile = File(customPath)
+                    if (customFile.exists() && customFile.isFile()) {
+                        val content = customFile.readText()
+                        logWithLevel("✅ 成功从自定义路径读取EmmyHelper: $customPath", LogLevel.DEBUG)
+                        logWithLevel("📝 内容长度: ${content.length} 字符", LogLevel.DEBUG)
+                        logWithLevel("📋 内容预览: ${content.take(200)}...", LogLevel.DEBUG)
+                        return content
+                    } else {
+                        logWithLevel("⚠️ 自定义EmmyHelper路径无效，回退到默认路径: $customPath", LogLevel.DEBUG)
+                    }
+                }
+            }
+            
             // 首先尝试使用类加载器从JAR包中读取
             val classLoader = LuaFileUtil::class.java.classLoader
             val resource = classLoader.getResource(path)
