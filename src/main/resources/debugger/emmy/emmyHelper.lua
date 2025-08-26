@@ -203,50 +203,48 @@ local unluaDebugger = {
                 end
             end
         elseif typeName == 'userdata' then
+            if processedForToTable[variable] then
+                return false
+            end
             local mt = getmetatable(obj)
-            if mt then
-                local bHandled = false -- 使用一个更清晰的变量名
+            if not mt then return false end
 
-                local name = rawget(mt, '__name')
-                if name and type(name) == 'string' then
-                    bHandled = true
-                end
+            local name = rawget(mt, '__name')
+            if not name or type(name) ~= 'string' then
+                return
+            end
 
-                local toTableFunc = rawget(mt, 'ToTable')
-                if toTableFunc and type(toTableFunc) == 'function' then
-                    local key = tostring(obj)
-                    if not processedForToTable[variable] then
-                        -- 标记这个地址已被处理
-                        processedForToTable[variable] = true
+            processedForToTable[variable] = true
+            variable.valueTypeName = name
 
-                        local resultNode = emmy.createNode()
-                        local resultTable = toTableFunc(obj)
-                        resultNode.name = "A_"..name.."_Value"
-                        resultNode.value = resultTable
-                        resultNode.valueType = 5
-                        resultNode.valueTypeName = 'table'
-                        resultNode:query(resultTable, depth - 1, true)
-                        variable:addChild(resultNode)
-                        bHandled = true
-                    end
-                end
+            local toStringFunc = rawget(mt, '__tostring')
+            if toStringFunc and type(toStringFunc) == 'function' then
+                variable.value = tostring(toStringFunc(obj))
+                variable.valueType = 7
+            end
 
-                -- 如果我们对这个 userdata 进行了任何自定义处理
-                if bHandled then
-                    -- 别忘了调用原始的 query，以便显示 userdata 的默认信息（如元表）
-                    variable:query(obj, depth, true)
-                    if name and type(name) == 'string' then
-                        variable.valueTypeName = "(userdata)"..name
-                    end
-                    local toStringFunc = rawget(mt, '__tostring')
-                    if toStringFunc and type(toStringFunc) == 'function' then
-                        variable.value = tostring(toStringFunc(obj))
-                        variable.valueType = 7
-                    end
+            local toTableFunc = rawget(mt, 'ToTable')
+            if toTableFunc and type(toTableFunc) == 'function' then
+                local resultNode = emmy.createNode()
+                local resultTable = toTableFunc(obj)
+                resultNode.name = name.."_Value"
+                resultNode.value = resultTable
+                resultNode.valueType = 5
+                resultNode.valueTypeName = 'table'
+                resultNode:query(resultTable, depth - 1, true)
+                variable:addChild(resultNode)
+            end
 
-                    return true
+            if depth > 1 then
+                local parent = variable
+                for property, val in pairs(mt) do
+                    local v = emmy.createNode()
+                    v.name = property
+                    v:query(obj[property], depth - 1, true)
+                    parent:addChild(v)
                 end
             end
+            return true
         end
         return false
     end
