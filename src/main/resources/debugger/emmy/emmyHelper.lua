@@ -260,7 +260,7 @@ if tolua then
     end
 elseif xlua then
     emmy = xluaDebugger
-elseif UnLua then
+else
     emmy = unluaDebugger
 end
 
