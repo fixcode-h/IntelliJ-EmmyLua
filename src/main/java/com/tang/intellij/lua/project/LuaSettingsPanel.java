@@ -30,6 +30,7 @@ import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.util.ArrayUtil;
 import com.intellij.util.FileContentUtil;
 import com.tang.intellij.lua.lang.LuaLanguageLevel;
+import com.tang.intellij.lua.LuaBundle;
 import org.jetbrains.annotations.Nls;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -73,6 +74,10 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
     private JTextField debugProcessBlacklistField;
     private JTextField customEmmyHelperPathField;
     private JButton browseCustomEmmyHelperButton;
+    private JCheckBox enableCustomFileTemplateCheckBox;
+    private JTextArea customFileTemplateTextArea;
+    private JCheckBox enableFileNameReplacementCheckBox;
+    private JTextField fileNamePlaceholderField;
 
     public LuaSettingsPanel() {
         this.settings = LuaSettings.Companion.getInstance();
@@ -123,6 +128,12 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
         
         // 自定义EmmyHelper.lua路径设置
         customEmmyHelperPathField.setText(settings.getCustomEmmyHelperPath());
+        
+        // 文件模板设置
+        enableCustomFileTemplateCheckBox.setSelected(settings.getEnableCustomFileTemplate());
+        customFileTemplateTextArea.setText(settings.getCustomFileTemplate());
+        enableFileNameReplacementCheckBox.setSelected(settings.getEnableFileNameReplacement());
+        fileNamePlaceholderField.setText(settings.getFileNamePlaceholder());
 
         //browse custom emmy helper button action
         browseCustomEmmyHelperButton.addActionListener(e -> {
@@ -219,6 +230,10 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
                 !Arrays.equals(settings.getUeProcessNames(), getProcessNamesFromTextField()) ||
                 !Arrays.equals(settings.getDebugProcessBlacklist(), getDebugProcessBlacklistFromTextField()) ||
                 !StringUtil.equals(settings.getCustomEmmyHelperPath(), customEmmyHelperPathField.getText()) ||
+                settings.getEnableCustomFileTemplate() != enableCustomFileTemplateCheckBox.isSelected() ||
+                !StringUtil.equals(settings.getCustomFileTemplate(), customFileTemplateTextArea.getText()) ||
+                settings.getEnableFileNameReplacement() != enableFileNameReplacementCheckBox.isSelected() ||
+                !StringUtil.equals(settings.getFileNamePlaceholder(), fileNamePlaceholderField.getText()) ||
                 !Arrays.equals(settings.getAdditionalSourcesRoot(), additionalRoots.getRoots(), String::compareTo);
     }
 
@@ -247,6 +262,12 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
         
         //Custom EmmyHelper path
         settings.setCustomEmmyHelperPath(customEmmyHelperPathField.getText());
+        
+        // 文件模板设置
+        settings.setEnableCustomFileTemplate(enableCustomFileTemplateCheckBox.isSelected());
+        settings.setCustomFileTemplate(customFileTemplateTextArea.getText());
+        settings.setEnableFileNameReplacement(enableFileNameReplacementCheckBox.isSelected());
+        settings.setFileNamePlaceholder(fileNamePlaceholderField.getText());
         // 将逗号分隔的字符串转换为进程名称数组
         String processNamesText = ueProcessNamesField.getText().trim();
         if (processNamesText.isEmpty()) {
@@ -341,6 +362,12 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
         
         // Reset custom EmmyHelper path
         customEmmyHelperPathField.setText(settings.getCustomEmmyHelperPath());
+        
+        // Reset 文件模板设置
+        enableCustomFileTemplateCheckBox.setSelected(settings.getEnableCustomFileTemplate());
+        customFileTemplateTextArea.setText(settings.getCustomFileTemplate());
+        enableFileNameReplacementCheckBox.setSelected(settings.getEnableFileNameReplacement());
+        fileNamePlaceholderField.setText(settings.getFileNamePlaceholder());
     }
 
     private int getTooLargerFileThreshold() {

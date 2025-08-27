@@ -16,9 +16,12 @@
 
 package com.tang.intellij.lua.stubs.index
 
+import com.intellij.openapi.project.Project
+import com.intellij.psi.search.ProjectAndLibrariesScope
 import com.intellij.psi.stubs.StringStubIndexExtension
 import com.intellij.psi.stubs.StubIndex
 import com.intellij.psi.stubs.StubIndexKey
+import com.intellij.util.Processor
 import com.tang.intellij.lua.comment.psi.LuaDocTagAlias
 import com.tang.intellij.lua.search.SearchContext
 
@@ -30,6 +33,16 @@ class LuaAliasIndex : StringStubIndexExtension<LuaDocTagAlias>() {
             if (context.isDumb)
                 return null
             return StubIndex.getElements(StubKeys.ALIAS, name, context.project, context.scope, LuaDocTagAlias::class.java).firstOrNull()
+        }
+        
+        fun processAllKeys(project: Project, processor: Processor<String>): Boolean {
+            val scope = ProjectAndLibrariesScope(project)
+            val allKeys = instance.getAllKeys(project)
+            for (key in allKeys) {
+                if (!processor.process(key))
+                    return false
+            }
+            return true
         }
     }
 

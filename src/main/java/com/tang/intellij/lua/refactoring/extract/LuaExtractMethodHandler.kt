@@ -146,9 +146,17 @@ class LuaExtractMethodOperation(
     private fun getClassName(): String {
         containingMethod?.let { method ->
             // 尝试从方法定义中获取类名
-            val nameExpr = method.classMethodName?.expr
-            if (nameExpr is LuaIndexExpr) {
-                return nameExpr.prefixExpr?.text ?: "M"
+            val classMethodName = method.classMethodName
+            classMethodName?.let {
+                // 处理 ClassName:methodName 或 ClassName.methodName 格式
+                val nameExpr = it.expr
+                if (nameExpr is LuaNameExpr) {
+                    // 直接的类名，如 BP_RebornInteractVolume_C:ReceiveEndPlay
+                    return nameExpr.name ?: "M"
+                } else if (nameExpr is LuaIndexExpr) {
+                    // 嵌套的表达式，如 self.class:methodName
+                    return nameExpr.prefixExpr?.text ?: "M"
+                }
             }
         }
         // 默认返回 M（常见的 Lua 模块名）

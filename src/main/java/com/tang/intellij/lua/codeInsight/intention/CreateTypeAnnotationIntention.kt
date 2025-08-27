@@ -22,7 +22,7 @@ import com.intellij.codeInsight.template.impl.TextExpression
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiFile
-import com.tang.intellij.lua.codeInsight.template.macro.SuggestTypeMacro
+import com.tang.intellij.lua.codeInsight.template.macro.SmartSuggestTypeMacro
 import com.tang.intellij.lua.comment.LuaCommentUtil
 import com.tang.intellij.lua.psi.LuaLocalDef
 import com.tang.intellij.lua.psi.LuaPsiTreeUtil
@@ -55,7 +55,7 @@ class CreateTypeAnnotationIntention : BaseIntentionAction() {
         if (localDef != null) {
             LuaCommentUtil.insertTemplate(localDef, editor) { _, template ->
                 template.addTextSegment("---@type ")
-                val name = MacroCallNode(SuggestTypeMacro())
+                val name = MacroCallNode(SmartSuggestTypeMacro())
                 template.addVariable("type", name, TextExpression("table"), true)
                 template.addEndVariable()
             }

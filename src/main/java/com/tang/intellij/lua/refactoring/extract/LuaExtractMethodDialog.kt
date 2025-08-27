@@ -55,14 +55,18 @@ class LuaExtractMethodDialog(
         
         // 参数列表显示
         parametersArea = JTextArea(3, 30).apply {
-            text = operation.getInputVariables().joinToString("\n") { "参数: $it" }
+            text = operation.getInputVariables().joinToString("\n") { 
+                LuaBundle.message("refactor.extract_method.parameter_prefix", it)
+            }
             isEditable = false
             background = panel.background
         }
         
         // 返回值列表显示
         returnValuesArea = JTextArea(3, 30).apply {
-            text = operation.getOutputVariables().joinToString("\n") { "返回值: $it" }
+            text = operation.getOutputVariables().joinToString("\n") { 
+                LuaBundle.message("refactor.extract_method.return_value_prefix", it)
+            }
             isEditable = false
             background = panel.background
         }

@@ -1,0 +1,32 @@
+<html>
+<body>
+Creates class and field annotations for local variables that are returned at the end of the file.
+<p>
+This intention action analyzes the current file to find all <code>self.</code> field references and generates appropriate <code>@class</code> and <code>@field</code> annotations for the local variable.
+</p>
+<p>
+Example:
+<pre>
+local BP_RebornInteractVolume_C = {}
+function BP_RebornInteractVolume_C:new()
+    self.Age = 0
+    self.Name = "test"
+end
+return BP_RebornInteractVolume_C
+</pre>
+
+Will be transformed to:
+<pre>
+---@class BP_RebornInteractVolume_C
+---@field Age number
+---@field Name string
+local BP_RebornInteractVolume_C = {}
+function BP_RebornInteractVolume_C:new()
+    self.Age = 0
+    self.Name = "test"
+end
+return BP_RebornInteractVolume_C
+</pre>
+</p>
+</body>
+</html>

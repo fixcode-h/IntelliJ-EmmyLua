@@ -42,7 +42,7 @@ class LuaShortNamesManagerImpl : LuaShortNamesManager() {
         return LuaClassIndex.process(name, context.project, context.scope) { processor.process(it) }
     }
 
-    @Deprecated("This method is deprecated in the parent class")
+    @Suppress("DEPRECATION")
     override fun getClassMembers(clazzName: String, context: SearchContext): Collection<LuaClassMember> {
         if (context.forStub) return emptyList()
         return LuaClassMemberIndex.instance.get(clazzName.hashCode(), context.project, context.scope)
