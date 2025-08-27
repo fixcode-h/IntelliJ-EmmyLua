@@ -418,6 +418,88 @@
             </children>
           </grid>
           
+          <!-- 文件模板标签页 -->
+          <grid id="fileTemplateTab" layout-manager="GridLayoutManager" row-count="4" column-count="2" same-size-horizontally="false" same-size-vertically="false" hgap="10" vgap="10">
+            <margin top="15" left="15" bottom="15" right="15"/>
+            <constraints>
+              <tabbedpane title="文件模板"/>
+            </constraints>
+            <properties/>
+            <border type="none"/>
+            <children>
+              <!-- 启用自定义文件模板 -->
+              <component id="enableCustomFileTemplateCheckBox" class="javax.swing.JCheckBox" binding="enableCustomFileTemplateCheckBox">
+                <constraints>
+                  <grid row="0" column="0" row-span="1" col-span="2" vsize-policy="0" hsize-policy="3" anchor="8" fill="0" indent="0" use-parent-layout="false"/>
+                </constraints>
+                <properties>
+                  <text value="启用自定义文件模板"/>
+                </properties>
+              </component>
+              
+              <!-- 自定义文件模板内容 -->
+              <component id="customFileTemplateLabel" class="javax.swing.JLabel">
+                <constraints>
+                  <grid row="1" column="0" row-span="1" col-span="1" vsize-policy="0" hsize-policy="0" anchor="9" fill="0" indent="0" use-parent-layout="false"/>
+                </constraints>
+                <properties>
+                  <text value="模板内容:"/>
+                </properties>
+              </component>
+              <scrollpane id="customFileTemplateScrollPane">
+                <constraints>
+                  <grid row="1" column="1" row-span="1" col-span="1" vsize-policy="7" hsize-policy="7" anchor="0" fill="3" indent="0" use-parent-layout="false">
+                    <preferred-size width="400" height="200"/>
+                  </grid>
+                </constraints>
+                <properties/>
+                <border type="none"/>
+                <children>
+                  <component id="customFileTemplateTextArea" class="javax.swing.JTextArea" binding="customFileTemplateTextArea">
+                    <constraints/>
+                    <properties>
+                      <font name="Monospaced" size="12"/>
+                      <lineWrap value="true"/>
+                      <wrapStyleWord value="true"/>
+                      <rows value="8"/>
+                      <columns value="50"/>
+                    </properties>
+                  </component>
+                </children>
+              </scrollpane>
+              
+              <!-- 启用文件名替换 -->
+              <component id="enableFileNameReplacementCheckBox" class="javax.swing.JCheckBox" binding="enableFileNameReplacementCheckBox">
+                <constraints>
+                  <grid row="2" column="0" row-span="1" col-span="2" vsize-policy="0" hsize-policy="3" anchor="8" fill="0" indent="0" use-parent-layout="false"/>
+                </constraints>
+                <properties>
+                  <text value="启用文件名替换功能"/>
+                </properties>
+              </component>
+              
+              <!-- 文件名占位符 -->
+              <component id="fileNamePlaceholderLabel" class="javax.swing.JLabel">
+                <constraints>
+                  <grid row="3" column="0" row-span="1" col-span="1" vsize-policy="0" hsize-policy="0" anchor="8" fill="0" indent="0" use-parent-layout="false"/>
+                </constraints>
+                <properties>
+                  <text value="文件名占位符:"/>
+                </properties>
+              </component>
+              <component id="fileNamePlaceholderField" class="javax.swing.JTextField" binding="fileNamePlaceholderField">
+                <constraints>
+                  <grid row="3" column="1" row-span="1" col-span="1" vsize-policy="0" hsize-policy="6" anchor="8" fill="1" indent="0" use-parent-layout="false">
+                    <preferred-size width="200" height="-1"/>
+                  </grid>
+                </constraints>
+                <properties>
+                  <toolTipText value="在模板中用于替换为实际文件名的占位符，例如: ${FILE_NAME}"/>
+                </properties>
+              </component>
+            </children>
+          </grid>
+          
           <!-- 高级设置标签页 -->
           <grid id="advancedSettingsTab" layout-manager="GridLayoutManager" row-count="2" column-count="1" same-size-horizontally="false" same-size-vertically="false" hgap="-1" vgap="15">
             <margin top="15" left="15" bottom="15" right="15"/>
