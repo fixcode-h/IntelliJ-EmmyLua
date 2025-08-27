@@ -236,6 +236,12 @@
             <className>com.tang.intellij.lua.codeInsight.intention.ExtractMethodIntention</className>
             <descriptionDirectoryName>ExtractMethodIntention</descriptionDirectoryName>
         </intentionAction>
+        <intentionAction>
+            <language>Lua</language>
+            <category>Lua</category>
+            <className>com.tang.intellij.lua.codeInsight.intention.CreateClassFieldAnnotationIntention</className>
+            <descriptionDirectoryName>CreateClassFieldAnnotationIntention</descriptionDirectoryName>
+        </intentionAction>
 
         <lang.inspectionSuppressor language="Lua" implementationClass="com.tang.intellij.lua.codeInsight.inspection.LuaSuppressManager"/>
 
