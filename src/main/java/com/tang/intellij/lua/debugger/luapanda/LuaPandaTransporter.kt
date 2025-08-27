@@ -211,7 +211,7 @@ abstract class LuaPandaTransporter(private val logger: DebugLogger? = null) {
             
             // 检查是否有回调ID（对应VSCode插件中的callbackId处理）
             val callbackId = message.callbackId
-            if (callbackId != null && callbackId != "0") {
+            if (callbackId.isNotEmpty() && callbackId != "0") {
                 // 处理回调响应
                 handleCallbackResponse(callbackId, message)
             } else {

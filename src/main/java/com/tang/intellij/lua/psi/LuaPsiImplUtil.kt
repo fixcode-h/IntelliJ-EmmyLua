@@ -291,7 +291,7 @@ fun guessParentType(indexExpr: LuaIndexExpr, context: SearchContext): ITy {
                 val valueExprList = assignStat.valueExprList
                 if (varExprList != null && valueExprList != null) {
                     val index = varExprList.exprList.indexOf(resolved.parent)
-                    if (index >= 0) {
+                    if (index != -1) {
                         val valueExpr = valueExprList.exprList.getOrNull(index)
                         if (valueExpr != null) {
                             parentType = valueExpr.guessType(context)

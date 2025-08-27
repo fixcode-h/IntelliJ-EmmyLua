@@ -34,6 +34,7 @@ class LuaPandaDebuggerEditorsProvider : XDebuggerEditorsProvider() {
         return LuaFileType.INSTANCE
     }
 
+    @Deprecated("This method overrides a deprecated member")
     override fun createDocument(
         project: Project, 
         text: String, 
@@ -42,4 +43,4 @@ class LuaPandaDebuggerEditorsProvider : XDebuggerEditorsProvider() {
     ): Document {
         return EditorFactory.getInstance().createDocument(text)
     }
-} 
+}
