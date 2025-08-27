@@ -190,8 +190,76 @@ project(":") {
     tasks {
         buildPlugin {
             dependsOn("bunch")
+            // 确保依赖 processResources 任务，获取最新的资源文件
+            dependsOn(processResources)
             // 移除 archiveBaseName 配置，使用默认的插件名称
             // 这样可以确保插件包结构正确，避免多余的目录层级
+            
+            doFirst {
+                println("Building plugin - verifying debugger directory")
+                val debuggerDir = file("src/main/resources/debugger")
+                if (debuggerDir.exists()) {
+                    println("✅ Source debugger directory: ${debuggerDir.absolutePath}")
+                    
+                    val allFiles = debuggerDir.walkTopDown().filter { it.isFile() }
+                    val fileCount = allFiles.count()
+                    val totalSize = allFiles.sumOf { it.length() }
+                    
+                    println("📁 Files to be packaged: $fileCount")
+                    println("📝 Total size: $totalSize bytes")
+                    
+                    // 验证关键文件
+                    val keyFiles = listOf(
+                        "debugger/emmy/emmyHelper.lua",
+                        "debugger/Emmy.lua"
+                    )
+                    
+                    keyFiles.forEach { relativePath ->
+                        val keyFile = file("src/main/resources/$relativePath")
+                        if (keyFile.exists()) {
+                            println("✅ Key file found: $relativePath (${keyFile.length()} bytes)")
+                        } else {
+                            println("⚠️ Key file missing: $relativePath")
+                        }
+                    }
+                } else {
+                    println("❌ Source debugger directory not found!")
+                }
+            }
+        }
+        
+        // 清理调试器目录缓存的任务
+        register("cleanDebuggerCache") {
+            group = "build"
+            description = "Clean debugger directory cache to ensure fresh builds with latest files"
+            
+            doLast {
+                println("Cleaning debugger directory cache...")
+                
+                // 清理构建缓存中与调试器相关的文件
+                val buildCacheDir = file("${project.buildDir}/.gradle")
+                if (buildCacheDir.exists()) {
+                    buildCacheDir.deleteRecursively()
+                    println("✅ Build cache cleared")
+                }
+                
+                // 清理临时文件
+                val tempDir = file("${project.buildDir}/tmp")
+                if (tempDir.exists()) {
+                    tempDir.deleteRecursively()
+                    println("✅ Temp files cleared")
+                }
+                
+                // 清理 processResources 的输出缓存
+                val resourcesOutputDir = file("${project.buildDir}/resources")
+                if (resourcesOutputDir.exists()) {
+                    resourcesOutputDir.deleteRecursively()
+                    println("✅ Resources output cache cleared")
+                }
+                
+                println("🧹 Debugger directory cache cleanup completed")
+                println("💡 Next build will use fresh files from src/main/resources/debugger")
+            }
         }
 
         compileKotlin {
@@ -203,6 +271,50 @@ project(":") {
         patchPluginXml {// 明确声明输入，确保 Gradle 理解任务依赖关系
             inputs.dir("src/main/resources/debugger")
         }
+        
+        // 确保每次构建都使用最新的 debugger 目录下所有文件，避免缓存干扰
+        processResources {
+            // 明确声明对整个 debugger 目录的依赖
+            inputs.dir("src/main/resources/debugger")
+            // 禁用此任务的缓存，确保每次都重新处理
+            outputs.cacheIf { false }
+            
+            doFirst {
+                println("Processing debugger directory - ensuring all files are fresh")
+                val debuggerDir = file("src/main/resources/debugger")
+                if (debuggerDir.exists()) {
+                    println("✅ Debugger directory found: ${debuggerDir.absolutePath}")
+                    
+                    // 统计目录下的文件
+                    val allFiles = debuggerDir.walkTopDown().filter { it.isFile() }
+                    val fileCount = allFiles.count()
+                    val totalSize = allFiles.sumOf { it.length() }
+                    
+                    println("📁 Total files in debugger directory: $fileCount")
+                    println("📝 Total size: $totalSize bytes")
+                    
+                    // 显示关键文件信息
+                    val emmyHelperFile = file("src/main/resources/debugger/emmy/emmyHelper.lua")
+                    if (emmyHelperFile.exists()) {
+                        println("📄 emmyHelper.lua: ${emmyHelperFile.length()} bytes, modified: ${emmyHelperFile.lastModified()}")
+                    }
+                    
+                    val emmyFile = file("src/main/resources/debugger/Emmy.lua")
+                    if (emmyFile.exists()) {
+                        println("📄 Emmy.lua: ${emmyFile.length()} bytes, modified: ${emmyFile.lastModified()}")
+                    }
+                    
+                    // 显示所有 .lua 文件
+                    allFiles.filter { it.extension == "lua" }.forEach { luaFile ->
+                        val relativePath = debuggerDir.toPath().relativize(luaFile.toPath())
+                        println("🔧 Lua file: $relativePath (${luaFile.length()} bytes)")
+                    }
+                    
+                } else {
+                    println("❌ Debugger directory not found at expected location")
+                }
+            }
+        }
 
         // instrumentCode configuration is now handled by instrumentationTools() dependency
 
@@ -211,6 +323,9 @@ project(":") {
         }
 
         prepareSandbox {
+            // 确保依赖 processResources 任务，获取最新的资源文件
+            dependsOn(processResources)
+            
             doLast {
                 copy {
                     from("src/main/resources/std")
@@ -219,6 +334,38 @@ project(":") {
                 copy {
                     from("src/main/resources/debugger")
                     into("${sandboxDirectory.get()}/plugins/${project.name}/debugger")
+                    // 确保每次都重新复制，避免缓存问题
+                    duplicatesStrategy = DuplicatesStrategy.INCLUDE
+                }
+                
+                // 验证 debugger 目录是否成功复制到沙盒
+                val sandboxDebuggerDir = file("${sandboxDirectory.get()}/plugins/${project.name}/debugger")
+                if (sandboxDebuggerDir.exists()) {
+                    println("✅ Debugger directory successfully copied to sandbox")
+                    
+                    val allFiles = sandboxDebuggerDir.walkTopDown().filter { it.isFile() }
+                    val fileCount = allFiles.count()
+                    val totalSize = allFiles.sumOf { it.length() }
+                    
+                    println("📁 Files in sandbox debugger directory: $fileCount")
+                    println("📝 Total size in sandbox: $totalSize bytes")
+                    
+                    // 验证关键文件是否存在于沙盒中
+                    val keyFiles = listOf(
+                        "emmy/emmyHelper.lua",
+                        "Emmy.lua"
+                    )
+                    
+                    keyFiles.forEach { relativePath ->
+                        val sandboxFile = file("${sandboxDebuggerDir}/$relativePath")
+                        if (sandboxFile.exists()) {
+                            println("✅ Key file in sandbox: $relativePath (${sandboxFile.length()} bytes)")
+                        } else {
+                            println("❌ Key file missing in sandbox: $relativePath")
+                        }
+                    }
+                } else {
+                    println("❌ Debugger directory not found in sandbox!")
                 }
             }
         }
