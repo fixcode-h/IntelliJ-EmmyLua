@@ -290,8 +290,9 @@ private abstract class LuaDeclarationTreeBase(val file: PsiFile) : LuaRecursiveV
     }
 
     private fun createDeclaration(name: String, psi: PsiNamedElement, flags: Int): Declaration {
-        val first = if (psi is LuaExpr) find(psi) else null
-        return Declaration(name, getPosition(psi), psi, flags, first)
+        // 避免在创建声明时进行递归查找，防止栈溢出
+        // val first = if (psi is LuaExpr) find(psi) else null
+        return Declaration(name, getPosition(psi), psi, flags, null)
     }
 
     override fun find(expr: LuaExpr): Declaration? {
@@ -335,39 +336,17 @@ private abstract class LuaDeclarationTreeBase(val file: PsiFile) : LuaRecursiveV
         
         varList.forEachIndexed { index, expr ->
             if (expr is LuaNameExpr) {
-                val flags = find(expr)?.flags ?: DeclarationFlag.Global
+                // 避免递归调用find方法，使用默认的Global标志
+                val flags = DeclarationFlag.Global
                 val declaration = createDeclaration(expr.name, expr, flags)
-                
-                // 处理别名赋值：如果右侧是一个名称表达式，建立别名关系
-                if (valueList != null && index < valueList.size) {
-                    val valueExpr = valueList[index]
-                    if (valueExpr is LuaNameExpr) {
-                        // 查找右侧表达式的声明
-                        val sourceDeclaration = find(valueExpr)
-                        if (sourceDeclaration != null) {
-                            // 创建别名声明，指向原始声明
-                            val aliasDeclaration = Declaration(
-                                expr.name,
-                                getPosition(expr),
-                                expr,
-                                flags,
-                                sourceDeclaration as? Declaration
-                            )
-                            curScope?.add(aliasDeclaration)
-                        } else {
-                            curScope?.add(declaration)
-                        }
-                    } else {
-                        curScope?.add(declaration)
-                    }
-                } else {
-                    curScope?.add(declaration)
-                }
+                curScope?.add(declaration)
             } else if (expr is LuaIndexExpr) {
                 val name = expr.name
                 if (name != null) {
-                    val declaration = curScope?.find(expr.prefixExpr)
-                    declaration?.addField(createDeclaration(name, expr, DeclarationFlag.ClassMember))
+                    // 避免递归调用find方法
+                    // val declaration = curScope?.find(expr.prefixExpr)
+                    // declaration?.addField(createDeclaration(name, expr, DeclarationFlag.ClassMember))
+                    // 暂时跳过索引表达式的处理以避免递归
                 }
             }
         }
