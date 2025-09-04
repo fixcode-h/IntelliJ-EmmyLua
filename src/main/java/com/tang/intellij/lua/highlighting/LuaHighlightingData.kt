@@ -57,6 +57,37 @@ object LuaHighlightingData {
     val TYPE_ALIAS = TextAttributesKey.createTextAttributesKey("LUA_TYPE_ALIAS", DefaultLanguageHighlighterColors.CLASS_NAME)
     val INSTANCE_METHOD = TextAttributesKey.createTextAttributesKey("LUA_INSTANCE_METHOD", DefaultLanguageHighlighterColors.INSTANCE_METHOD)
     val STATIC_METHOD = TextAttributesKey.createTextAttributesKey("LUA_STATIC_METHOD", DefaultLanguageHighlighterColors.STATIC_METHOD)
+    
+    // 更细致的标识符颜色定义
+    val CLASS_INSTANCE_VAR = TextAttributesKey.createTextAttributesKey("LUA_CLASS_INSTANCE_VAR", DefaultLanguageHighlighterColors.INSTANCE_FIELD)
+    val FUNCTION_LOCAL_VAR = TextAttributesKey.createTextAttributesKey("LUA_FUNCTION_LOCAL_VAR", CustomHighlighterColors.CUSTOM_KEYWORD1_ATTRIBUTES)
+    val METHOD_LOCAL_VAR = TextAttributesKey.createTextAttributesKey("LUA_METHOD_LOCAL_VAR", CustomHighlighterColors.CUSTOM_KEYWORD2_ATTRIBUTES)
+    val CLOSURE_VAR = TextAttributesKey.createTextAttributesKey("LUA_CLOSURE_VAR", CustomHighlighterColors.CUSTOM_KEYWORD3_ATTRIBUTES)
+    val MODULE_VAR = TextAttributesKey.createTextAttributesKey("LUA_MODULE_VAR", DefaultLanguageHighlighterColors.STATIC_FIELD)
+    val CONSTANT_VAR = TextAttributesKey.createTextAttributesKey("LUA_CONSTANT_VAR", DefaultLanguageHighlighterColors.CONSTANT)
+    val TABLE_KEY = TextAttributesKey.createTextAttributesKey("LUA_TABLE_KEY", DefaultLanguageHighlighterColors.IDENTIFIER)
+    val METATABLE_KEY = TextAttributesKey.createTextAttributesKey("LUA_METATABLE_KEY", CustomHighlighterColors.CUSTOM_KEYWORD4_ATTRIBUTES)
+    
+    // 控制流关键字
+    val CONTROL_FLOW_KEYWORD = TextAttributesKey.createTextAttributesKey("LUA_CONTROL_FLOW_KEYWORD", DefaultLanguageHighlighterColors.KEYWORD)
+    // 逻辑操作符
+    val LOGICAL_OPERATOR = TextAttributesKey.createTextAttributesKey("LUA_LOGICAL_OPERATOR", CustomHighlighterColors.CUSTOM_KEYWORD1_ATTRIBUTES)
+    // 比较操作符
+    val COMPARISON_OPERATOR = TextAttributesKey.createTextAttributesKey("LUA_COMPARISON_OPERATOR", DefaultLanguageHighlighterColors.OPERATION_SIGN)
+    // 算术操作符
+    val ARITHMETIC_OPERATOR = TextAttributesKey.createTextAttributesKey("LUA_ARITHMETIC_OPERATOR", DefaultLanguageHighlighterColors.OPERATION_SIGN)
+    // 位操作符
+    val BITWISE_OPERATOR = TextAttributesKey.createTextAttributesKey("LUA_BITWISE_OPERATOR", CustomHighlighterColors.CUSTOM_KEYWORD4_ATTRIBUTES)
+    // 字符串连接操作符
+    val STRING_CONCAT_OPERATOR = TextAttributesKey.createTextAttributesKey("LUA_STRING_CONCAT_OPERATOR", DefaultLanguageHighlighterColors.OPERATION_SIGN)
+    // 长度操作符
+    val LENGTH_OPERATOR = TextAttributesKey.createTextAttributesKey("LUA_LENGTH_OPERATOR", DefaultLanguageHighlighterColors.OPERATION_SIGN)
+    // 省略号
+    val ELLIPSIS = TextAttributesKey.createTextAttributesKey("LUA_ELLIPSIS", CustomHighlighterColors.CUSTOM_KEYWORD2_ATTRIBUTES)
+    // 标签
+    val LABEL = TextAttributesKey.createTextAttributesKey("LUA_LABEL", DefaultLanguageHighlighterColors.LABEL)
+    // goto语句
+    val GOTO_KEYWORD = TextAttributesKey.createTextAttributesKey("LUA_GOTO_KEYWORD", DefaultLanguageHighlighterColors.KEYWORD)
 
     //region
     val REGION_HEADER = TextAttributesKey.createTextAttributesKey("LUA_REGION_START", DefaultLanguageHighlighterColors.DOC_COMMENT)

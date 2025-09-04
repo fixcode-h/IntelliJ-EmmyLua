@@ -209,6 +209,7 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
 
     override fun runToPosition(position: XSourcePosition, context: XSuspendContext?) {
         send(AddBreakPointReq(listOf(BreakPoint(position.file.path, position.line + 1, null, null, null))))
+        send(DebugActionMessage(DebugAction.Continue))
     }
 
     private fun onBreak(data: BreakNotify) {

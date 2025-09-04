@@ -19,97 +19,98 @@
     <option name="LUA_UP_VALUE">
         <value>
             <option name="FONT_TYPE" value="3"/>
-            <option name="EFFECT_COLOR" value="A8C023"/>
+            <option name="EFFECT_COLOR" value="7CB342"/>
             <option name="EFFECT_TYPE" value="1"/>
         </value>
     </option>
     <option name="LUA_STD_API">
         <value>
-            <option name="FOREGROUND" value="CC542E"/>
+            <option name="FOREGROUND" value="FF7043"/>
             <option name="EFFECT_TYPE" value="2"/>
         </value>
     </option>
     <option name="LUA_REGION_DESC">
         <value>
-            <option name="FOREGROUND" value="0088FF"/>
+            <option name="FOREGROUND" value="42A5F5"/>
         </value>
     </option>
     <option name="LUA_CONTROL_FLOW_KEYWORD">
         <value>
-            <option name="FOREGROUND" value="CC7832"/>
+            <option name="FOREGROUND" value="AB47BC"/>
             <option name="FONT_TYPE" value="1"/>
         </value>
     </option>
     <option name="LUA_LOGICAL_OPERATOR">
         <value>
-            <option name="FOREGROUND" value="CC7832"/>
+            <option name="FOREGROUND" value="AB47BC"/>
             <option name="FONT_TYPE" value="1"/>
         </value>
     </option>
     <option name="LUA_COMPARISON_OPERATOR">
         <value>
-            <option name="FOREGROUND" value="A9B7C6"/>
+            <option name="FOREGROUND" value="E0E0E0"/>
         </value>
     </option>
     <option name="LUA_ARITHMETIC_OPERATOR">
         <value>
-            <option name="FOREGROUND" value="A9B7C6"/>
+            <option name="FOREGROUND" value="E0E0E0"/>
         </value>
     </option>
     <option name="LUA_BITWISE_OPERATOR">
         <value>
-            <option name="FOREGROUND" value="9876AA"/>
+            <option name="FOREGROUND" value="BA68C8"/>
         </value>
     </option>
     <option name="LUA_STRING_CONCAT_OPERATOR">
         <value>
-            <option name="FOREGROUND" value="6A8759"/>
+            <option name="FOREGROUND" value="81C784"/>
             <option name="FONT_TYPE" value="1"/>
         </value>
     </option>
     <option name="LUA_LENGTH_OPERATOR">
         <value>
-            <option name="FOREGROUND" value="A9B7C6"/>
+            <option name="FOREGROUND" value="E0E0E0"/>
         </value>
     </option>
     <option name="LUA_ELLIPSIS">
         <value>
-            <option name="FOREGROUND" value="CC7832"/>
+            <option name="FOREGROUND" value="AB47BC"/>
         </value>
     </option>
     <option name="LUA_GOTO_KEYWORD">
         <value>
-            <option name="FOREGROUND" value="CC7832"/>
+            <option name="FOREGROUND" value="AB47BC"/>
             <option name="FONT_TYPE" value="1"/>
         </value>
     </option>
     <option name="LUA_LABEL">
         <value>
-            <option name="FOREGROUND" value="FFC66D"/>
+            <option name="FOREGROUND" value="FFB74D"/>
             <option name="FONT_TYPE" value="1"/>
         </value>
     </option>
+    <!-- 新增的标识符颜色配置 -->
     <option name="LUA_CLASS_INSTANCE_VAR">
         <value>
-            <option name="FOREGROUND" value="D4A5D4"/>
+            <option name="FOREGROUND" value="CE93D8"/>
             <option name="FONT_TYPE" value="0"/>
         </value>
     </option>
     <option name="LUA_FUNCTION_LOCAL_VAR">
         <value>
-            <option name="FOREGROUND" value="9CCC65"/>
+            <option name="FOREGROUND" value="A5D6A7"/>
             <option name="FONT_TYPE" value="0"/>
         </value>
     </option>
     <option name="LUA_METHOD_LOCAL_VAR">
         <value>
-            <option name="FOREGROUND" value="81C7E8"/>
+            <option name="FOREGROUND" value="90CAF9"/>
             <option name="FONT_TYPE" value="0"/>
         </value>
     </option>
     <option name="LUA_CLOSURE_VAR">
         <value>
-            <option name="FOREGROUND" value="FFD54F"/>
+            <option name="FOREGROUND" value="FFF176"/>
             <option name="FONT_TYPE" value="2"/>
         </value>
     </option>
@@ -121,19 +122,19 @@
     </option>
     <option name="LUA_CONSTANT_VAR">
         <value>
-            <option name="FOREGROUND" value="E1BEE7"/>
+            <option name="FOREGROUND" value="F8BBD9"/>
             <option name="FONT_TYPE" value="1"/>
         </value>
     </option>
     <option name="LUA_TABLE_KEY">
         <value>
-            <option name="FOREGROUND" value="BCBEC4"/>
+            <option name="FOREGROUND" value="CFD8DC"/>
             <option name="FONT_TYPE" value="0"/>
         </value>
     </option>
     <option name="LUA_METATABLE_KEY">
         <value>
-            <option name="FOREGROUND" value="FF8A65"/>
+            <option name="FOREGROUND" value="FFAB40"/>
             <option name="FONT_TYPE" value="1"/>
         </value>
     </option>

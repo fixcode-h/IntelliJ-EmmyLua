@@ -52,15 +52,39 @@ class LuaColorSettingsPage : ColorSettingsPage {
 
             ---@alias <docTypeAlias>MyType</docTypeAlias> <docClassNameRef>Emmy</docClassNameRef>
 
-            --- doc comment
+            --- doc comment with control flow examples
             ---@param <docTagValue>par1</docTagValue> <docClassNameRef>Par1Type</docClassNameRef> @comments
             function var:<method>fun</method>(<parameter>par1</parameter>, <parameter>par2</parameter>)
                <std>print</std>('hello')
+               local <functionLocalVar>funcVar</functionLocalVar> = "function scope"
+               if <parameter>par1</parameter> and <parameter>par2</parameter> then
+                   for <localVar>i</localVar> = 1, 10 do
+                       local <methodLocalVar>methodVar</methodLocalVar> = "method scope"
+                       if <localVar>i</localVar> > 5 then
+                           break
+                       elseif <localVar>i</localVar> == 3 then
+                           goto continue
+                       end
+                       <localVar>result</localVar> = <localVar>i</localVar> * 2 + 1
+                       <localVar>bitwise</localVar> = <localVar>i</localVar> & 0xFF | 0x10
+                       <localVar>concat</localVar> = "value: " .. <localVar>result</localVar>
+                       <localVar>length</localVar> = #<localVar>concat</localVar>
+                       ::continue::
+                   end
+               end
+               <self>self</self>.<classInstanceVar>instanceVar</classInstanceVar> = <functionLocalVar>funcVar</functionLocalVar>
                return <self>self</self>.<field>len</field> + 2
             end
 
             ---@overload <docKeyword>fun</docKeyword>(name:<docClassNameRef>string</docClassNameRef>):<docClassNameRef>Emmy</docClassNameRef>
-            function var.<staticMethod>staticFun</staticMethod>()
+            function var.<staticMethod>staticFun</staticMethod>(<parameter>...</parameter>)
+               local <localVar>args</localVar> = {...}
+               while <localVar>condition</localVar> do
+                   repeat
+                       <localVar>x</localVar> = <localVar>x</localVar> + 1
+                   until <localVar>x</localVar> >= 10
+               end
+               return <localVar>args</localVar>
             end
             <regionHeader>--endregion</regionHeader> <regionDesc>end my class members region</regionDesc>
 
@@ -70,7 +94,24 @@ class LuaColorSettingsPage : ColorSettingsPage {
             end
 
             <globalVar>globalVar</globalVar> = {
-               <field>property</field> = value
+               <field>property</field> = value,
+               <tableKey>key1</tableKey> = "table value",
+               <tableKey>key2</tableKey> = 123
+            }
+            
+            local <constantVar>MAX_SIZE</constantVar> = 100
+            local <moduleVar>_M</moduleVar> = {}
+            
+            local function <localFunction>createClosure</localFunction>()
+               local <closureVar>captured</closureVar> = "captured value"
+               return function()
+                   return <closureVar>captured</closureVar>
+               end
+            end
+            
+            local mt = {
+               <metatableKey>__index</metatableKey> = function() end,
+               <metatableKey>__newindex</metatableKey> = function() end
             }
         """.trimIndent()
     }
@@ -93,12 +134,21 @@ class LuaColorSettingsPage : ColorSettingsPage {
 
     companion object {
         private val ourAttributeDescriptors = arrayOf(
-                AttributesDescriptor("Keywords", LuaHighlightingData.KEYWORD),
+                AttributesDescriptor("Keywords//Basic Keywords", LuaHighlightingData.KEYWORD),
+                AttributesDescriptor("Keywords//Control Flow Keywords", LuaHighlightingData.CONTROL_FLOW_KEYWORD),
+                AttributesDescriptor("Keywords//Goto Keyword", LuaHighlightingData.GOTO_KEYWORD),
                 AttributesDescriptor("self", LuaHighlightingData.SELF),
                 AttributesDescriptor("String", LuaHighlightingData.STRING),
                 AttributesDescriptor("nil/true/false", LuaHighlightingData.PRIMITIVE_TYPE),
                 AttributesDescriptor("Number", LuaHighlightingData.NUMBER),
-                AttributesDescriptor("Braces and Operators//Operators", LuaHighlightingData.OPERATORS),
+                AttributesDescriptor("Braces and Operators//Logical Operators", LuaHighlightingData.LOGICAL_OPERATOR),
+                AttributesDescriptor("Braces and Operators//Comparison Operators", LuaHighlightingData.COMPARISON_OPERATOR),
+                AttributesDescriptor("Braces and Operators//Arithmetic Operators", LuaHighlightingData.ARITHMETIC_OPERATOR),
+                AttributesDescriptor("Braces and Operators//Bitwise Operators", LuaHighlightingData.BITWISE_OPERATOR),
+                AttributesDescriptor("Braces and Operators//String Concatenation", LuaHighlightingData.STRING_CONCAT_OPERATOR),
+                AttributesDescriptor("Braces and Operators//Length Operator", LuaHighlightingData.LENGTH_OPERATOR),
+                AttributesDescriptor("Braces and Operators//Ellipsis", LuaHighlightingData.ELLIPSIS),
+                AttributesDescriptor("Braces and Operators//Label", LuaHighlightingData.LABEL),
                 AttributesDescriptor("Braces and Operators//Brackets", LuaHighlightingData.BRACKETS),
                 AttributesDescriptor("Braces and Operators//Braces", LuaHighlightingData.BRACES),
                 AttributesDescriptor("Braces and Operators//Parentheses", LuaHighlightingData.PARENTHESES),
@@ -111,6 +161,14 @@ class LuaColorSettingsPage : ColorSettingsPage {
                 AttributesDescriptor("Variables//Global variable", LuaHighlightingData.GLOBAL_VAR),
                 AttributesDescriptor("Variables//Global function", LuaHighlightingData.GLOBAL_FUNCTION),
                 AttributesDescriptor("Variables//Up value", LuaHighlightingData.UP_VALUE),
+                AttributesDescriptor("Variables//Class instance variable", LuaHighlightingData.CLASS_INSTANCE_VAR),
+                AttributesDescriptor("Variables//Function local variable", LuaHighlightingData.FUNCTION_LOCAL_VAR),
+                AttributesDescriptor("Variables//Method local variable", LuaHighlightingData.METHOD_LOCAL_VAR),
+                AttributesDescriptor("Variables//Closure variable", LuaHighlightingData.CLOSURE_VAR),
+                AttributesDescriptor("Variables//Module variable", LuaHighlightingData.MODULE_VAR),
+                AttributesDescriptor("Variables//Constant variable", LuaHighlightingData.CONSTANT_VAR),
+                AttributesDescriptor("Variables//Table key", LuaHighlightingData.TABLE_KEY),
+                AttributesDescriptor("Variables//Metatable key", LuaHighlightingData.METATABLE_KEY),
                 AttributesDescriptor("Comments//Line comment", LuaHighlightingData.LINE_COMMENT),
                 AttributesDescriptor("Comments//Doc comment", LuaHighlightingData.DOC_COMMENT),
                 AttributesDescriptor("Comments//EmmyDoc//Tag", LuaHighlightingData.DOC_COMMENT_TAG),
@@ -150,6 +208,14 @@ class LuaColorSettingsPage : ColorSettingsPage {
             ourTags["primitive"] = LuaHighlightingData.PRIMITIVE_TYPE
             ourTags["regionHeader"] = LuaHighlightingData.REGION_HEADER
             ourTags["regionDesc"] = LuaHighlightingData.REGION_DESC
+            ourTags["classInstanceVar"] = LuaHighlightingData.CLASS_INSTANCE_VAR
+            ourTags["functionLocalVar"] = LuaHighlightingData.FUNCTION_LOCAL_VAR
+            ourTags["methodLocalVar"] = LuaHighlightingData.METHOD_LOCAL_VAR
+            ourTags["closureVar"] = LuaHighlightingData.CLOSURE_VAR
+            ourTags["moduleVar"] = LuaHighlightingData.MODULE_VAR
+            ourTags["constantVar"] = LuaHighlightingData.CONSTANT_VAR
+            ourTags["tableKey"] = LuaHighlightingData.TABLE_KEY
+            ourTags["metatableKey"] = LuaHighlightingData.METATABLE_KEY
         }
     }
 }
