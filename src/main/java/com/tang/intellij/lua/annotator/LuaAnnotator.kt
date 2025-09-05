@@ -119,11 +119,11 @@ class LuaAnnotator : Annotator {
             if (name != null && o.forwardDeclaration == null) {
                 if (isModuleFile) {
                     newInfoAnnotation(name, "Module function \"${o.name}\"") {
-                        it.textAttributes(LuaHighlightingData.INSTANCE_METHOD)
+                        it.textAttributes(LuaHighlightingData.FUNCTION_DECLARATION)
                     }
                 } else {
                     newInfoAnnotation(name, "Global function \"${o.name}\"") {
-                        it.textAttributes(LuaHighlightingData.GLOBAL_FUNCTION)
+                        it.textAttributes(LuaHighlightingData.FUNCTION_DECLARATION)
                     }
                 }
             }
@@ -133,9 +133,9 @@ class LuaAnnotator : Annotator {
             val id = o.id ?: return
             newInfoAnnotation(id, null) {
                 if (o.dot != null) {
-                    it.textAttributes(LuaHighlightingData.STATIC_METHOD)
+                    it.textAttributes(LuaHighlightingData.METHOD_DECLARATION)
                 } else {
-                    it.textAttributes(LuaHighlightingData.INSTANCE_METHOD)
+                    it.textAttributes(LuaHighlightingData.METHOD_DECLARATION)
                 }
             }
         }
@@ -170,10 +170,12 @@ class LuaAnnotator : Annotator {
                 val resolvedFile = res.containingFile
                 if (resolvedFile !is LuaPsiFile || resolvedFile.moduleName == null) {
                     newInfoAnnotation(o, "Global function : \"${res.name}\"") {
-                        it.textAttributes(LuaHighlightingData.GLOBAL_FUNCTION)
+                        it.textAttributes(LuaHighlightingData.FUNCTION_CALL)
                     }
                 } else {
-                    newInfoAnnotation(o, "Module function : \"${res.name}\"") {}
+                    newInfoAnnotation(o, "Module function : \"${res.name}\"") {
+                        it.textAttributes(LuaHighlightingData.FUNCTION_CALL)
+                    }
                 }
             } else {
                 if (id.textMatches(Constants.WORD_SELF)) {
@@ -213,6 +215,44 @@ class LuaAnnotator : Annotator {
                 }
             }
         }
+        
+        /**
+         * 检查是否为静态字段模式（如 UE.AActor.bAllowTickBeforeBeginPlay 或 UE.EAttachmentRule.SnapToTarget）
+         * 静态字段通常具有以下特征：
+         * 1. 前缀是大写字母开头的标识符（如 UE, AActor, EAttachmentRule）
+         * 2. 通过类名或枚举名访问的字段
+         */
+        private fun isEnumValuePattern(indexExpr: LuaIndexExpr): Boolean {
+            val prefix = indexExpr.prefixExpr
+            val fieldName = indexExpr.id?.text
+            
+            if (prefix is LuaIndexExpr && fieldName != null) {
+                // 检查是否为三级访问模式（如 UE.AActor.bAllowTickBeforeBeginPlay 或 UE.EAttachmentRule.SnapToTarget）
+                val secondLevelField = prefix.id?.text
+                val firstLevelPrefix = prefix.prefixExpr
+                
+                if (secondLevelField != null && firstLevelPrefix is LuaNameExpr) {
+                    val firstLevelName = firstLevelPrefix.name
+                    // 检查模式：第一级大写开头，第二级大写开头（类名或枚举名）
+                    return isCapitalizedIdentifier(firstLevelName) && 
+                           isCapitalizedIdentifier(secondLevelField)
+                }
+            } else if (prefix is LuaNameExpr && fieldName != null) {
+                // 检查是否为二级访问模式（如 SomeClass.staticField）
+                val prefixName = prefix.name
+                // 检查模式：前缀大写开头（类名或枚举名）
+                return isCapitalizedIdentifier(prefixName)
+            }
+            
+            return false
+        }
+        
+        /**
+         * 检查标识符是否为大写字母开头（枚举命名约定）
+         */
+        private fun isCapitalizedIdentifier(name: String): Boolean {
+            return name.isNotEmpty() && name[0].isUpperCase()
+        }
 
         override fun visitIndexExpr(o: LuaIndexExpr) {
             super.visitIndexExpr(o)
@@ -228,11 +268,11 @@ class LuaAnnotator : Annotator {
                     if (o.parent is LuaCallExpr) {
                         if (o.colon != null) {
                             newInfoAnnotation(id, null) {
-                                it.textAttributes(LuaHighlightingData.INSTANCE_METHOD)
+                                it.textAttributes(LuaHighlightingData.METHOD_CALL)
                             }
                         } else {
                             newInfoAnnotation(id, null) {
-                                it.textAttributes(LuaHighlightingData.STATIC_METHOD)
+                                it.textAttributes(LuaHighlightingData.FUNCTION_CALL)
                             }
                         }
                     } else {
@@ -240,8 +280,14 @@ class LuaAnnotator : Annotator {
                             newAnnotation(HighlightSeverity.ERROR, o, "Arguments expected") {
                             }
                         } else {
+                            // 检查是否为枚举值模式（如 UE.EAttachmentRule.SnapToTarget）
+                            val isEnumValue = isEnumValuePattern(o)
                             newInfoAnnotation(id, null) {
-                                it.textAttributes(LuaHighlightingData.FIELD)
+                                if (isEnumValue) {
+                                    it.textAttributes(LuaHighlightingData.ENUM_VALUE)
+                                } else {
+                                    it.textAttributes(LuaHighlightingData.FIELD)
+                                }
                             }
                         }
                     }
