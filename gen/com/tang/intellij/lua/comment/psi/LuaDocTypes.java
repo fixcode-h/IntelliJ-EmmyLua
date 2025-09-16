@@ -28,6 +28,7 @@ public interface LuaDocTypes {
   IElementType TAG_ALIAS = LuaParserDefinitionKt.createDocType("TAG_ALIAS");
   IElementType TAG_CLASS = LuaParserDefinitionKt.createDocType("TAG_CLASS");
   IElementType TAG_DEF = LuaParserDefinitionKt.createDocType("TAG_DEF");
+  IElementType TAG_ENUM = LuaParserDefinitionKt.createDocType("TAG_ENUM");
   IElementType TAG_FIELD = LuaParserDefinitionKt.createDocType("TAG_FIELD");
   IElementType TAG_GENERIC_LIST = LuaParserDefinitionKt.createDocType("TAG_GENERIC_LIST");
   IElementType TAG_LAN = LuaParserDefinitionKt.createDocType("TAG_LAN");
@@ -68,6 +69,7 @@ public interface LuaDocTypes {
   IElementType TAG_NAME = new LuaDocTokenType("TAG_NAME");
   IElementType TAG_NAME_ALIAS = new LuaDocTokenType("alias");
   IElementType TAG_NAME_CLASS = new LuaDocTokenType("class");
+  IElementType TAG_NAME_ENUM = new LuaDocTokenType("enum");
   IElementType TAG_NAME_FIELD = new LuaDocTokenType("field");
   IElementType TAG_NAME_GENERIC = new LuaDocTokenType("generic");
   IElementType TAG_NAME_LANGUAGE = new LuaDocTokenType("language");
@@ -144,6 +146,9 @@ public interface LuaDocTypes {
       }
       else if (type == TAG_DEF) {
         return new LuaDocTagDefImpl(node);
+      }
+      else if (type == TAG_ENUM) {
+        return new LuaDocTagEnumImpl(node);
       }
       else if (type == TAG_FIELD) {
         return new LuaDocTagFieldImpl(node);

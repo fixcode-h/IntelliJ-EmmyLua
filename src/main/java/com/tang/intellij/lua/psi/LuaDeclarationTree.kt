@@ -336,10 +336,15 @@ private abstract class LuaDeclarationTreeBase(val file: PsiFile) : LuaRecursiveV
         
         varList.forEachIndexed { index, expr ->
             if (expr is LuaNameExpr) {
-                // 避免递归调用find方法，使用默认的Global标志
-                val flags = DeclarationFlag.Global
-                val declaration = createDeclaration(expr.name, expr, flags)
-                curScope?.add(declaration)
+                // 使用现有的find方法来检查变量是否已经声明为local
+                val existingDeclaration = curScope?.find(expr)
+                
+                // 只有当变量不存在或者不是local变量时才标记为Global
+                if (existingDeclaration == null || !existingDeclaration.isLocal) {
+                    val flags = DeclarationFlag.Global
+                    val declaration = createDeclaration(expr.name, expr, flags)
+                    curScope?.add(declaration)
+                }
             } else if (expr is LuaIndexExpr) {
                 val name = expr.name
                 if (name != null) {

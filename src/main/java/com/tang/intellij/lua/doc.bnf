@@ -66,6 +66,7 @@
         TAG_NAME_PUBLIC = 'public'
         TAG_NAME_CLASS = 'class'
         TAG_NAME_FIELD = 'field'
+        TAG_NAME_ENUM = 'enum'
         TAG_NAME_TYPE = 'type'
         TAG_NAME_LANGUAGE = 'language'
         TAG_NAME_OVERLOAD = 'overload'
@@ -91,6 +92,7 @@ private doc_item ::= '@' (tag_param
     | tag_return
     | tag_class
     | tag_field
+    | tag_enum
     | tag_type
     | tag_lan
     | tag_overload
@@ -262,6 +264,22 @@ tag_class ::= (TAG_NAME_CLASS|TAG_NAME_MODULE) ID (EXTENDS class_name_ref)? comm
 
         superClassNameRef = 'class_name_ref'
         module = 'TAG_NAME_MODULE'
+    ]
+}
+
+tag_enum ::= TAG_NAME_ENUM ID comment_string? {
+    pin = 1
+    implements = [
+        "com.tang.intellij.lua.comment.psi.LuaDocPsiElement"
+        "com.intellij.psi.PsiNameIdentifierOwner"
+    ]
+    stubClass = "com.tang.intellij.lua.stubs.LuaDocTagEnumStub"
+    methods = [
+        getNameIdentifier
+        setName
+        getName
+        getTextOffset
+        getType
     ]
 }
 

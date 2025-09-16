@@ -27,6 +27,8 @@ import com.tang.intellij.lua.comment.psi.*
 import com.tang.intellij.lua.highlighting.LuaHighlightingData
 import com.tang.intellij.lua.psi.*
 import com.tang.intellij.lua.search.SearchContext
+import com.tang.intellij.lua.comment.LuaCommentUtil
+import com.tang.intellij.lua.comment.psi.LuaDocTagEnum
 
 /**
  * LuaAnnotator
@@ -217,34 +219,25 @@ class LuaAnnotator : Annotator {
         }
         
         /**
-         * 检查是否为静态字段模式（如 UE.AActor.bAllowTickBeforeBeginPlay 或 UE.EAttachmentRule.SnapToTarget）
-         * 静态字段通常具有以下特征：
-         * 1. 前缀是大写字母开头的标识符（如 UE, AActor, EAttachmentRule）
-         * 2. 通过类名或枚举名访问的字段
+         * 检查是否为枚举值模式
+         * 只检查前缀变量是否有@enum标记
          */
         private fun isEnumValuePattern(indexExpr: LuaIndexExpr): Boolean {
             val prefix = indexExpr.prefixExpr
-            val fieldName = indexExpr.id?.text
             
-            if (prefix is LuaIndexExpr && fieldName != null) {
-                // 检查是否为三级访问模式（如 UE.AActor.bAllowTickBeforeBeginPlay 或 UE.EAttachmentRule.SnapToTarget）
-                val secondLevelField = prefix.id?.text
-                val firstLevelPrefix = prefix.prefixExpr
-                
-                if (secondLevelField != null && firstLevelPrefix is LuaNameExpr) {
-                    val firstLevelName = firstLevelPrefix.name
-                    // 检查模式：第一级大写开头，第二级大写开头（类名或枚举名）
-                    return isCapitalizedIdentifier(firstLevelName) && 
-                           isCapitalizedIdentifier(secondLevelField)
+            return when (prefix) {
+                is LuaNameExpr -> hasEnumAnnotation(prefix)
+                is LuaIndexExpr -> {
+                    // 对于多级访问，检查最后一级的前缀
+                    val innerPrefix = prefix.prefixExpr
+                    if (innerPrefix is LuaNameExpr) {
+                        hasEnumAnnotation(innerPrefix)
+                    } else {
+                        false
+                    }
                 }
-            } else if (prefix is LuaNameExpr && fieldName != null) {
-                // 检查是否为二级访问模式（如 SomeClass.staticField）
-                val prefixName = prefix.name
-                // 检查模式：前缀大写开头（类名或枚举名）
-                return isCapitalizedIdentifier(prefixName)
+                else -> false
             }
-            
-            return false
         }
         
         /**
@@ -252,6 +245,31 @@ class LuaAnnotator : Annotator {
          */
         private fun isCapitalizedIdentifier(name: String): Boolean {
             return name.isNotEmpty() && name[0].isUpperCase()
+        }
+        
+        /**
+         * 检查变量是否有@enum标记
+         */
+        private fun hasEnumAnnotation(expr: LuaNameExpr): Boolean {
+            try {
+                // 查找变量的定义
+                val reference = expr.reference
+                val resolved = reference?.resolve()
+                
+                if (resolved is LuaCommentOwner) {
+                    val comment = LuaCommentUtil.findComment(resolved)
+                    if (comment != null) {
+                        // 检查是否有@enum标记
+                        val enumTags = comment.findTags(LuaDocTagEnum::class.java)
+                        return enumTags.isNotEmpty()
+                    }
+                }
+                
+                return false
+            } catch (e: Exception) {
+                // 捕获任何异常，避免插件崩溃
+                return false
+            }
         }
 
         override fun visitIndexExpr(o: LuaIndexExpr) {

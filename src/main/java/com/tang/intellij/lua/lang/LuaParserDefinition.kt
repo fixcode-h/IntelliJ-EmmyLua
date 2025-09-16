@@ -142,6 +142,7 @@ class LuaParserDefinition : ParserDefinition {
                 LuaDocTypes.TAG_NAME_MODULE,
                 LuaDocTypes.TAG_NAME_TYPE,
                 LuaDocTypes.TAG_NAME_FIELD,
+                LuaDocTypes.TAG_NAME_ENUM,
                 LuaDocTypes.TAG_NAME_LANGUAGE,
                 LuaDocTypes.TAG_NAME_OVERLOAD,
                 LuaDocTypes.TAG_NAME_PRIVATE,
@@ -208,6 +209,7 @@ fun createDocType(string: String): IElementType {
     return when (string) {
         "TAG_CLASS" -> LuaElementType.CLASS_DEF
         "TAG_FIELD" -> LuaElementType.CLASS_FIELD_DEF
+        "TAG_ENUM" -> LuaElementType.ENUM_DEF
         "TABLE_DEF" -> LuaElementType.DOC_TABLE_DEF
         "TABLE_FIELD" -> LuaElementType.DOC_TABLE_FIELD_DEF
         "TAG_ALIAS" -> LuaElementType.DOC_ALIAS
