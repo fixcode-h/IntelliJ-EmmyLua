@@ -30,7 +30,7 @@ import javax.swing.*;
 public class LuaIcons {
 
     private static Icon getIcon(String path) {
-        return IconLoader.getIcon(path, LuaIcons.class);
+        return IconLoader.getIcon(path, LuaIcons.class.getClassLoader());
     }
 
     public static final Icon FILE = getIcon("/icons/lua.png");

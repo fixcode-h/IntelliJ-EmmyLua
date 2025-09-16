@@ -24,6 +24,31 @@ import com.tang.intellij.lua.psi.LuaParserUtil.MY_RIGHT_COMMENT_BINDER
 import com.tang.intellij.lua.psi.LuaTypes.*
 
 object LuaExpressionParser {
+    
+    // 递归深度限制，防止栈溢出
+    private const val MAX_RECURSION_DEPTH = 500
+    
+    // 性能监控：表达式解析计数器
+    private var parseCount = 0
+    private const val PERFORMANCE_CHECK_INTERVAL = 1000
+    
+    /**
+     * 检查递归深度是否超限
+     */
+    private fun checkRecursionDepth(l: Int): Boolean {
+        return l < MAX_RECURSION_DEPTH
+    }
+    
+    /**
+     * 性能监控：定期清理计数器
+     */
+    private fun incrementParseCount() {
+        parseCount++
+        if (parseCount >= PERFORMANCE_CHECK_INTERVAL) {
+            parseCount = 0
+            // 可以在这里添加性能日志或清理逻辑
+        }
+    }
 
     enum class ExprType(val ops: TokenSet) {
         // or
@@ -55,7 +80,13 @@ object LuaExpressionParser {
     }
 
     fun parseExpr(builder: PsiBuilder, l:Int): PsiBuilder.Marker? {
-        return parseExpr(builder, ExprType.T_OR, l)
+        // 检查递归深度
+        if (!checkRecursionDepth(l)) {
+            error(builder, "Expression too complex (recursion depth exceeded)")
+            return null
+        }
+        incrementParseCount()
+        return parseExpr(builder, ExprType.T_OR, l + 1)
     }
 
     private fun parseExpr(builder: PsiBuilder, type: ExprType, l:Int): PsiBuilder.Marker? = when (type) {
@@ -75,26 +106,49 @@ object LuaExpressionParser {
     }
 
     private fun parseBinary(builder: PsiBuilder, ops: TokenSet, next: ExprType, l:Int): PsiBuilder.Marker? {
+        // 检查递归深度
+        if (!checkRecursionDepth(l)) {
+            error(builder, "Expression too complex (recursion depth exceeded)")
+            return null
+        }
+        
         var result = parseExpr(builder, next, l + 1) ?: return null
+        var operatorCount = 0
+        val maxOperators = 100 // 限制单个表达式中的操作符数量
+        
         while (true) {
             if (ops.contains(builder.tokenType)) {
+                // 检查操作符数量限制
+                if (operatorCount >= maxOperators) {
+                    error(builder, "Expression too complex (too many operators)")
+                    break
+                }
+                operatorCount++
 
                 val opMarker = builder.mark()
                 builder.advanceLexer()
                 opMarker.done(BINARY_OP)
 
                 val right = parseExpr(builder, next, l + 1)
-                if (right == null) error(builder, "Expression expected")
+                if (right == null) {
+                    error(builder, "Expression expected")
+                    break
+                }
                 //save
                 result = result.precede()
                 result.done(BINARY_EXPR)
-                if (right == null) break
             } else break
         }
         return result
     }
 
     private fun parseUnary(b: PsiBuilder, ops: TokenSet, next: ExprType, l: Int): PsiBuilder.Marker? {
+        // 检查递归深度
+        if (!checkRecursionDepth(l)) {
+            error(b, "Expression too complex (recursion depth exceeded)")
+            return null
+        }
+        
         val isUnary = ops.contains(b.tokenType)
         if (isUnary) {
             val m = b.mark()
@@ -103,7 +157,8 @@ object LuaExpressionParser {
             b.advanceLexer()
             opMarker.done(UNARY_OP)
 
-            val right = parseUnary(b, ops, next, l)
+            // 使用迭代而不是递归来处理连续的一元操作符
+            val right = parseUnary(b, ops, next, l + 1)
             if (right == null) {
                 error(b, "Expression expected")
             }

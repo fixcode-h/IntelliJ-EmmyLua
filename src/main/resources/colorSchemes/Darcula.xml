@@ -150,4 +150,11 @@
             <option name="FONT_TYPE" value="0"/>
         </value>
     </option>
+    <!-- 成员变量颜色配置 -->
+    <option name="LUA_FIELD">
+        <value>
+            <option name="FOREGROUND" value="87CEEB"/>
+            <option name="FONT_TYPE" value="0"/>
+        </value>
+    </option>
 </list>

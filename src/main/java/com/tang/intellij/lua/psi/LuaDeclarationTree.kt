@@ -294,6 +294,10 @@ private abstract class LuaDeclarationTreeBase(val file: PsiFile) : LuaRecursiveV
         // val first = if (psi is LuaExpr) find(psi) else null
         return Declaration(name, getPosition(psi), psi, flags, null)
     }
+    
+    private fun createDeclarationWithPrev(name: String, psi: PsiNamedElement, flags: Int, prevDeclaration: Declaration?): Declaration {
+        return Declaration(name, getPosition(psi), psi, flags, prevDeclaration)
+    }
 
     override fun find(expr: LuaExpr): Declaration? {
         if (expr is LuaIndexExpr || expr is LuaNameExpr) {
@@ -335,27 +339,63 @@ private abstract class LuaDeclarationTreeBase(val file: PsiFile) : LuaRecursiveV
         val valueList = o.valueExprList?.exprList
         
         varList.forEachIndexed { index, expr ->
-            if (expr is LuaNameExpr) {
-                // 使用现有的find方法来检查变量是否已经声明为local
-                val existingDeclaration = curScope?.find(expr)
-                
-                // 只有当变量不存在或者不是local变量时才标记为Global
-                if (existingDeclaration == null || !existingDeclaration.isLocal) {
-                    val flags = DeclarationFlag.Global
-                    val declaration = createDeclaration(expr.name, expr, flags)
-                    curScope?.add(declaration)
+            when (expr) {
+                is LuaNameExpr -> {
+                    // 优化：先检查当前作用域，再向上查找
+                    val existingDeclaration = findDeclarationInScope(expr)
+                    
+                    // 改进的逻辑：区分重新赋值和新声明
+                    if (existingDeclaration == null) {
+                        // 新的全局变量声明
+                        val flags = DeclarationFlag.Global
+                        val declaration = createDeclaration(expr.name, expr, flags)
+                        curScope?.add(declaration)
+                    } else if (!existingDeclaration.isLocal) {
+                        // 对已存在的全局变量重新赋值，更新引用
+                        val flags = DeclarationFlag.Global
+                        val declaration = createDeclarationWithPrev(expr.name, expr, flags, existingDeclaration as? Declaration)
+                        curScope?.add(declaration)
+                    }
+                    // 如果是local变量，不需要添加新的声明
                 }
-            } else if (expr is LuaIndexExpr) {
-                val name = expr.name
-                if (name != null) {
-                    // 避免递归调用find方法
-                    // val declaration = curScope?.find(expr.prefixExpr)
-                    // declaration?.addField(createDeclaration(name, expr, DeclarationFlag.ClassMember))
-                    // 暂时跳过索引表达式的处理以避免递归
+                is LuaIndexExpr -> {
+                    // 改进索引表达式处理
+                    handleIndexExprAssignment(expr)
                 }
             }
         }
         super.visitAssignStat(o)
+    }
+    
+    /**
+     * 优化的作用域查找方法
+     */
+    private fun findDeclarationInScope(expr: LuaNameExpr): LuaDeclarationTree.IDeclaration? {
+        // 首先在当前作用域查找
+        var scope = curScope
+        while (scope != null) {
+            val declaration = scope.find(expr)
+            if (declaration != null) {
+                return declaration
+            }
+            scope = scope.parent
+        }
+        return null
+    }
+    
+    /**
+     * 处理索引表达式的赋值
+     */
+    private fun handleIndexExprAssignment(expr: LuaIndexExpr) {
+        val name = expr.name
+        if (name != null && expr.prefixExpr is LuaNameExpr) {
+            val prefixExpr = expr.prefixExpr as LuaNameExpr
+            val parentDeclaration = findDeclarationInScope(prefixExpr)
+            if (parentDeclaration is Declaration) {
+                val fieldDeclaration = createDeclaration(name, expr, DeclarationFlag.ClassMember)
+                parentDeclaration.addField(fieldDeclaration)
+            }
+        }
     }
 
     protected open fun visitElementExt(element: PsiElement) {
