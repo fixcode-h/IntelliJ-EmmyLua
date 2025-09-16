@@ -341,3 +341,18 @@ fun getType(alias: LuaDocTagAlias): ITy {
     val ty = stub?.type ?: alias.ty?.getType()
     return ty ?: Ty.UNKNOWN
 }
+
+fun getNameIdentifier(tagEnum: LuaDocTagEnum): PsiElement {
+    return tagEnum.id
+}
+
+fun getName(tagEnum: LuaDocTagEnum): String {
+    val stub = tagEnum.stub
+    if (stub != null)
+        return stub.name
+    return tagEnum.id.text
+}
+
+fun getType(tagEnum: LuaDocTagEnum): ITy {
+    return TyPrimitive(TyPrimitiveKind.String, tagEnum.id.text)
+}

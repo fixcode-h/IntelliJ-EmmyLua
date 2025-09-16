@@ -27,6 +27,8 @@ import com.tang.intellij.lua.comment.psi.*
 import com.tang.intellij.lua.highlighting.LuaHighlightingData
 import com.tang.intellij.lua.psi.*
 import com.tang.intellij.lua.search.SearchContext
+import com.tang.intellij.lua.comment.LuaCommentUtil
+import com.tang.intellij.lua.comment.psi.LuaDocTagEnum
 
 /**
  * LuaAnnotator
@@ -119,11 +121,11 @@ class LuaAnnotator : Annotator {
             if (name != null && o.forwardDeclaration == null) {
                 if (isModuleFile) {
                     newInfoAnnotation(name, "Module function \"${o.name}\"") {
-                        it.textAttributes(LuaHighlightingData.INSTANCE_METHOD)
+                        it.textAttributes(LuaHighlightingData.FUNCTION_DECLARATION)
                     }
                 } else {
                     newInfoAnnotation(name, "Global function \"${o.name}\"") {
-                        it.textAttributes(LuaHighlightingData.GLOBAL_FUNCTION)
+                        it.textAttributes(LuaHighlightingData.FUNCTION_DECLARATION)
                     }
                 }
             }
@@ -133,9 +135,9 @@ class LuaAnnotator : Annotator {
             val id = o.id ?: return
             newInfoAnnotation(id, null) {
                 if (o.dot != null) {
-                    it.textAttributes(LuaHighlightingData.STATIC_METHOD)
+                    it.textAttributes(LuaHighlightingData.METHOD_DECLARATION)
                 } else {
-                    it.textAttributes(LuaHighlightingData.INSTANCE_METHOD)
+                    it.textAttributes(LuaHighlightingData.METHOD_DECLARATION)
                 }
             }
         }
@@ -170,10 +172,12 @@ class LuaAnnotator : Annotator {
                 val resolvedFile = res.containingFile
                 if (resolvedFile !is LuaPsiFile || resolvedFile.moduleName == null) {
                     newInfoAnnotation(o, "Global function : \"${res.name}\"") {
-                        it.textAttributes(LuaHighlightingData.GLOBAL_FUNCTION)
+                        it.textAttributes(LuaHighlightingData.FUNCTION_CALL)
                     }
                 } else {
-                    newInfoAnnotation(o, "Module function : \"${res.name}\"") {}
+                    newInfoAnnotation(o, "Module function : \"${res.name}\"") {
+                        it.textAttributes(LuaHighlightingData.FUNCTION_CALL)
+                    }
                 }
             } else {
                 if (id.textMatches(Constants.WORD_SELF)) {
@@ -213,6 +217,60 @@ class LuaAnnotator : Annotator {
                 }
             }
         }
+        
+        /**
+         * 检查是否为枚举值模式
+         * 只检查前缀变量是否有@enum标记
+         */
+        private fun isEnumValuePattern(indexExpr: LuaIndexExpr): Boolean {
+            val prefix = indexExpr.prefixExpr
+            
+            return when (prefix) {
+                is LuaNameExpr -> hasEnumAnnotation(prefix)
+                is LuaIndexExpr -> {
+                    // 对于多级访问，检查最后一级的前缀
+                    val innerPrefix = prefix.prefixExpr
+                    if (innerPrefix is LuaNameExpr) {
+                        hasEnumAnnotation(innerPrefix)
+                    } else {
+                        false
+                    }
+                }
+                else -> false
+            }
+        }
+        
+        /**
+         * 检查标识符是否为大写字母开头（枚举命名约定）
+         */
+        private fun isCapitalizedIdentifier(name: String): Boolean {
+            return name.isNotEmpty() && name[0].isUpperCase()
+        }
+        
+        /**
+         * 检查变量是否有@enum标记
+         */
+        private fun hasEnumAnnotation(expr: LuaNameExpr): Boolean {
+            try {
+                // 查找变量的定义
+                val reference = expr.reference
+                val resolved = reference?.resolve()
+                
+                if (resolved is LuaCommentOwner) {
+                    val comment = LuaCommentUtil.findComment(resolved)
+                    if (comment != null) {
+                        // 检查是否有@enum标记
+                        val enumTags = comment.findTags(LuaDocTagEnum::class.java)
+                        return enumTags.isNotEmpty()
+                    }
+                }
+                
+                return false
+            } catch (e: Exception) {
+                // 捕获任何异常，避免插件崩溃
+                return false
+            }
+        }
 
         override fun visitIndexExpr(o: LuaIndexExpr) {
             super.visitIndexExpr(o)
@@ -228,11 +286,11 @@ class LuaAnnotator : Annotator {
                     if (o.parent is LuaCallExpr) {
                         if (o.colon != null) {
                             newInfoAnnotation(id, null) {
-                                it.textAttributes(LuaHighlightingData.INSTANCE_METHOD)
+                                it.textAttributes(LuaHighlightingData.METHOD_CALL)
                             }
                         } else {
                             newInfoAnnotation(id, null) {
-                                it.textAttributes(LuaHighlightingData.STATIC_METHOD)
+                                it.textAttributes(LuaHighlightingData.FUNCTION_CALL)
                             }
                         }
                     } else {
@@ -240,8 +298,14 @@ class LuaAnnotator : Annotator {
                             newAnnotation(HighlightSeverity.ERROR, o, "Arguments expected") {
                             }
                         } else {
+                            // 检查是否为枚举值模式（如 UE.EAttachmentRule.SnapToTarget）
+                            val isEnumValue = isEnumValuePattern(o)
                             newInfoAnnotation(id, null) {
-                                it.textAttributes(LuaHighlightingData.FIELD)
+                                if (isEnumValue) {
+                                    it.textAttributes(LuaHighlightingData.ENUM_VALUE)
+                                } else {
+                                    it.textAttributes(LuaHighlightingData.FIELD)
+                                }
                             }
                         }
                     }

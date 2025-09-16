@@ -49,6 +49,7 @@ public class LuaPsiTreeUtil {
         }
     }
 
+    @SuppressWarnings("unchecked")
     public static <T extends PsiElement> void walkTopLevelInFile(PsiElement element, Class<T> cls, Processor<T> processor) {
         if (element == null || processor == null)
             return;
@@ -58,7 +59,7 @@ public class LuaPsiTreeUtil {
 
         for(PsiElement child = parent; child != null; child = child.getPrevSibling()) {
             if (cls.isInstance(child)) {
-                if (!processor.process(cls.cast(child))) {
+                if (!processor.process((T) child)) {
                     break;
                 }
             }
@@ -73,7 +74,8 @@ public class LuaPsiTreeUtil {
         return t;
     }
 
-    public static <T extends PsiElement> T getParentOfType(@Nullable PsiElement element, @NotNull Class<T> aClass, @NotNull Class... skips) {
+    @SuppressWarnings("unchecked")
+    public static <T extends PsiElement> T getParentOfType(@Nullable PsiElement element, @NotNull Class<T> aClass, @NotNull Class<? extends PsiElement>... skips) {
         if (element == null) {
             return null;
         } else {
@@ -87,13 +89,15 @@ public class LuaPsiTreeUtil {
                 element = element.getParent();
             }
 
-            return aClass.cast(element);
+            return (T) element;
         }
     }
 
 
-    private static final Class[] WS = {PsiWhiteSpace.class};
-    private static final Class[] WS_COMMENTS = {PsiWhiteSpace.class, PsiComment.class};
+    @SuppressWarnings("unchecked")
+    private static final Class<? extends PsiElement>[] WS = new Class[]{PsiWhiteSpace.class};
+    @SuppressWarnings("unchecked")
+    private static final Class<? extends PsiElement>[] WS_COMMENTS = new Class[]{PsiWhiteSpace.class, PsiComment.class};
 
     public static PsiElement skipWhitespacesBackward(@Nullable PsiElement element) {
         return PsiTreeUtil.skipSiblingsBackward(element, WS);

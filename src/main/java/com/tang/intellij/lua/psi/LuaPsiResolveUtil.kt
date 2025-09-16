@@ -24,6 +24,75 @@ import com.intellij.util.Processor
 import com.tang.intellij.lua.Constants
 import com.tang.intellij.lua.psi.search.LuaShortNamesManager
 import com.tang.intellij.lua.search.SearchContext
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
+
+/**
+ * 解析结果缓存条目
+ */
+data class ResolveResultCacheEntry(val result: PsiElement?, val timestamp: Long = System.currentTimeMillis())
+
+/**
+ * 解析结果缓存管理器
+ */
+object ResolveResultCache {
+    private val cache = ConcurrentHashMap<String, ResolveResultCacheEntry>()
+    private val TTL_MILLIS = TimeUnit.MINUTES.toMillis(3) // 3分钟TTL
+    private const val MAX_CACHE_SIZE = 5000
+    private var lastCleanupTime = System.currentTimeMillis()
+    private val cleanupInterval = TimeUnit.MINUTES.toMillis(1)
+    
+    fun get(key: String): PsiElement? {
+        // 定期清理过期条目
+        if (System.currentTimeMillis() - lastCleanupTime > cleanupInterval) {
+            cleanExpired()
+            lastCleanupTime = System.currentTimeMillis()
+        }
+        
+        val entry = cache[key]
+        return if (entry != null && !isExpired(entry)) {
+            entry.result
+        } else {
+            cache.remove(key)
+            null
+        }
+    }
+    
+    fun put(key: String, result: PsiElement?) {
+        // 检查缓存大小限制
+        if (cache.size >= MAX_CACHE_SIZE) {
+            cleanOldestEntries(cache.size / 4) // 清理25%的条目
+        }
+        cache[key] = ResolveResultCacheEntry(result)
+    }
+    
+    fun clear() {
+        cache.clear()
+    }
+    
+    private fun isExpired(entry: ResolveResultCacheEntry): Boolean {
+        return System.currentTimeMillis() - entry.timestamp > TTL_MILLIS
+    }
+    
+    private fun cleanExpired() {
+        val now = System.currentTimeMillis()
+        cache.entries.removeIf { (_, entry) -> now - entry.timestamp > TTL_MILLIS }
+    }
+    
+    private fun cleanOldestEntries(count: Int) {
+        val sortedEntries = cache.entries.sortedBy { it.value.timestamp }
+        var removed = 0
+        for ((key, _) in sortedEntries) {
+            if (removed >= count) break
+            cache.remove(key)
+            removed++
+        }
+    }
+    
+    fun createCacheKey(refName: String, fileUrl: String, offset: Int): String {
+        return "$refName:$fileUrl:$offset"
+    }
+}
 
 fun resolveLocal(ref: LuaNameExpr, context: SearchContext? = null) = resolveLocal(ref.name, ref, context)
 
@@ -33,14 +102,24 @@ fun resolveLocal(refName:String, ref: PsiElement, context: SearchContext? = null
 }
 
 fun resolveInFile(refName:String, pin: PsiElement, context: SearchContext?): PsiElement? {
-    var ret: PsiElement? = null
-    LuaDeclarationTree.get(pin.containingFile).walkUp(pin) { decl ->
-        if (decl.name == refName)
-            ret = decl.firstDeclaration.psi
-        ret == null
+    // 创建缓存键
+    val containingFile = pin.containingFile
+    val fileUrl = containingFile.virtualFile?.url ?: containingFile.name
+    val cacheKey = ResolveResultCache.createCacheKey(refName, fileUrl, pin.textOffset)
+    
+    // 尝试从缓存获取结果
+    val cachedResult = ResolveResultCache.get(cacheKey)
+    if (cachedResult != null || ResolveResultCache.get(cacheKey) == null) {
+        // 如果缓存中有结果（包括null结果），直接返回
+        if (cachedResult != null && cachedResult.isValid) {
+            return cachedResult
+        }
     }
-
-    if (ret == null && refName == Constants.WORD_SELF) {
+    
+    var ret: PsiElement? = null
+    
+    // 优化：先检查常见的self引用情况
+    if (refName == Constants.WORD_SELF) {
         val methodDef = PsiTreeUtil.getStubOrPsiParentOfType(pin, LuaClassMethodDef::class.java)
         if (methodDef != null && !methodDef.isStatic) {
             val methodName = methodDef.classMethodName
@@ -51,6 +130,22 @@ fun resolveInFile(refName:String, pin: PsiElement, context: SearchContext?): Psi
                 expr
         }
     }
+    
+    // 如果不是self或者没找到，进行常规查找
+    if (ret == null) {
+        val declarationTree = LuaDeclarationTree.get(containingFile)
+        declarationTree.walkUp(pin) { decl ->
+            if (decl.name == refName) {
+                ret = decl.firstDeclaration.psi
+                false // 找到后停止遍历
+            } else {
+                true // 继续遍历
+            }
+        }
+    }
+    
+    // 缓存结果
+    ResolveResultCache.put(cacheKey, ret)
     return ret
 }
 
@@ -85,6 +180,16 @@ fun isUpValue(ref: LuaNameExpr, context: SearchContext): Boolean {
  * @return PsiElement
  */
 fun resolve(nameExpr: LuaNameExpr, context: SearchContext): PsiElement? {
+    // 创建全局解析缓存键
+    val fileUrl = nameExpr.containingFile.virtualFile?.url ?: nameExpr.containingFile.name
+    val globalCacheKey = "global:${nameExpr.name}:${nameExpr.moduleName ?: Constants.WORD_G}:$fileUrl:${nameExpr.textOffset}"
+    
+    // 尝试从缓存获取全局解析结果
+    val cachedGlobalResult = ResolveResultCache.get(globalCacheKey)
+    if (cachedGlobalResult != null && cachedGlobalResult.isValid) {
+        return cachedGlobalResult
+    }
+    
     //search local
     var resolveResult = resolveInFile(nameExpr.name, nameExpr, context)
 
@@ -97,6 +202,9 @@ fun resolve(nameExpr: LuaNameExpr, context: SearchContext): PsiElement? {
             resolveResult = it
             false
         })
+        
+        // 缓存全局解析结果
+        ResolveResultCache.put(globalCacheKey, resolveResult)
     }
 
     return resolveResult

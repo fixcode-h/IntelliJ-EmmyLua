@@ -179,9 +179,13 @@ class LuaColorSettingsPage : ColorSettingsPage {
                 AttributesDescriptor("Comments//EmmyDoc//Keyword", LuaHighlightingData.DOC_KEYWORD),
                 AttributesDescriptor("Region//Region header", LuaHighlightingData.REGION_HEADER),
                 AttributesDescriptor("Region//Region description", LuaHighlightingData.REGION_DESC),
-                AttributesDescriptor("Class members//Field", LuaHighlightingData.FIELD),
+                AttributesDescriptor("Class Members//Field", LuaHighlightingData.FIELD),
                 AttributesDescriptor("Class Members//Instance method", LuaHighlightingData.INSTANCE_METHOD),
                 AttributesDescriptor("Class Members//Static method", LuaHighlightingData.STATIC_METHOD),
+                AttributesDescriptor("Functions//Function declaration", LuaHighlightingData.FUNCTION_DECLARATION),
+                AttributesDescriptor("Functions//Method declaration", LuaHighlightingData.METHOD_DECLARATION),
+                AttributesDescriptor("Functions//Function call", LuaHighlightingData.FUNCTION_CALL),
+                AttributesDescriptor("Functions//Method call", LuaHighlightingData.METHOD_CALL),
                 AttributesDescriptor("Std api", LuaHighlightingData.STD_API))
 
         @NonNls

@@ -93,6 +93,12 @@ public class LuaDocVisitor extends PsiElementVisitor {
     visitTag(o);
   }
 
+  public void visitTagEnum(@NotNull LuaDocTagEnum o) {
+    visitPsiElement(o);
+    // visitPsiNameIdentifierOwner(o);
+    // visitTag(o);
+  }
+
   public void visitTagField(@NotNull LuaDocTagField o) {
     visitLuaClassField(o);
     // visitPsiNameIdentifierOwner(o);

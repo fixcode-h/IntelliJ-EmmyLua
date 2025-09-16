@@ -194,8 +194,29 @@ local unluaDebugger = {
                 if mt then
                     local name = rawget(mt, '__name')
                     if name and type(name) == 'string' then
-                        -- 让调试器正常展开这个 table
-                        variable:query(obj, depth, true)
+                        local visitedTables = rawget(_G, 'emmyVisitedTables') or {}
+                        rawset(_G, 'emmyVisitedTables', visitedTables)
+                        
+                        -- 检查是否已经访问过这个table（循环引用检测）
+                        if visitedTables[obj] then
+                            -- 发现循环引用，不再递归
+                            variable.value = "<circular reference>"
+                            variable.valueType = 7
+                        else
+                            -- 标记当前table为已访问
+                            visitedTables[obj] = true
+                            
+                            -- 手动遍历 table 而不是调用 query
+                            for key, value in pairs(obj) do
+                                local childNode = emmy.createNode()
+                                childNode.name = tostring(key)
+                                childNode:query(value, depth - 1, true)
+                                variable:addChild(childNode)
+                            end
+                            
+                            -- 遍历完成后，从访问记录中移除（允许在其他分支中访问）
+                            visitedTables[obj] = nil
+                        end
                         -- 将 table 的类型名也显示为UE对象名
                         variable.valueTypeName = name
                         return true

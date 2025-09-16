@@ -98,20 +98,63 @@ class ExpressionUtil {
                 }
                 // /
                 LuaTypes.DIV -> {
-                    n = l.nValue / r.nValue
                     isValid = l.kind == ComputeKind.Number && r.kind == ComputeKind.Number
-                    isValid = isValid && r.nValue != 0f
+                    if (isValid) {
+                        if (r.nValue == 0f) {
+                            // 除零错误，返回无效结果
+                            isValid = false
+                        } else {
+                            try {
+                                n = l.nValue / r.nValue
+                                // 检查结果是否为无穷大或NaN
+                                if (!n.isFinite()) {
+                                    isValid = false
+                                }
+                            } catch (e: ArithmeticException) {
+                                isValid = false
+                            }
+                        }
+                    }
                 }
                 // //
                 LuaTypes.DOUBLE_DIV -> {
-                    n = l.nValue / r.nValue
-                    n = n.toInt().toFloat()
                     isValid = l.kind == ComputeKind.Number && r.kind == ComputeKind.Number
+                    if (isValid) {
+                        if (r.nValue == 0f) {
+                            // 除零错误，返回无效结果
+                            isValid = false
+                        } else {
+                            try {
+                                val temp = l.nValue / r.nValue
+                                if (temp.isFinite()) {
+                                    n = temp.toInt().toFloat()
+                                } else {
+                                    isValid = false
+                                }
+                            } catch (e: ArithmeticException) {
+                                isValid = false
+                            }
+                        }
+                    }
                 }
                 // %
                 LuaTypes.MOD -> {
-                    n = l.nValue % r.nValue
                     isValid = l.kind == ComputeKind.Number && r.kind == ComputeKind.Number
+                    if (isValid) {
+                        if (r.nValue == 0f) {
+                            // 模零错误，返回无效结果
+                            isValid = false
+                        } else {
+                            try {
+                                n = l.nValue % r.nValue
+                                if (!n.isFinite()) {
+                                    isValid = false
+                                }
+                            } catch (e: ArithmeticException) {
+                                isValid = false
+                            }
+                        }
+                    }
                 }
                 // ..
                 LuaTypes.CONCAT -> {
@@ -121,8 +164,20 @@ class ExpressionUtil {
                         isValid = l.kind == ComputeKind.Number
                     }
                     k = ComputeKind.String
-                    if (isValid)
-                        s = l.string + r.string
+                    if (isValid) {
+                        try {
+                            val leftStr = l.string
+                            val rightStr = r.string
+                            // 检查字符串长度，防止内存溢出
+                            if (leftStr.length + rightStr.length > 10000) {
+                                isValid = false
+                            } else {
+                                s = leftStr + rightStr
+                            }
+                        } catch (e: OutOfMemoryError) {
+                            isValid = false
+                        }
+                    }
                 }
             }
 
