@@ -137,9 +137,9 @@
         <!-- Hidden: Lua Remote(Mobdebug) -->
         <!--<programRunner implementation="com.tang.intellij.lua.debugger.remote.LuaMobDebuggerRunner"/>-->
         <!--<configurationType implementation="com.tang.intellij.lua.debugger.remote.LuaMobConfigurationType"/>-->
-        <!-- Hidden: Lua Application -->
-        <!--<programRunner implementation="com.tang.intellij.lua.debugger.app.LuaAppRunner"/>-->
-        <!--<configurationType implementation="com.tang.intellij.lua.debugger.app.LuaAppConfigurationType"/>-->
+        <!-- Lua Application -->
+        <programRunner implementation="com.tang.intellij.lua.debugger.app.LuaAppRunner"/>
+        <configurationType implementation="com.tang.intellij.lua.debugger.app.LuaAppConfigurationType"/>
         <programRunner implementation="com.tang.intellij.lua.debugger.emmy.EmmyDebuggerRunner"/>
         <configurationType implementation="com.tang.intellij.lua.debugger.emmy.EmmyDebugConfigurationType"/>
         <programRunner implementation="com.tang.intellij.lua.debugger.emmy.attach.EmmyAttachDebugRunner"/>
