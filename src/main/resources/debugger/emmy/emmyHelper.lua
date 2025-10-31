@@ -1,18 +1,3 @@
----@meta
-
--- Copyright (c) 2017. tangzx(love.tangzx@qq.com)
---
--- Licensed under the Apache License, Version 2.0 (the "License");
--- you may not use this file except in compliance with the License.
--- You may obtain a copy of the License at
---
--- http://www.apache.org/licenses/LICENSE-2.0
---
--- Unless required by applicable law or agreed to in writing, software
--- distributed under the License is distributed on an "AS IS" BASIS,
--- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
--- See the License for the specific language governing permissions and
--- limitations under the License.
 
 ---@class emmy
 ---@field createNode fun(): Variable
@@ -23,6 +8,21 @@ local emmy = {}
 ---@field name string
 ---@field value string
 ---@field valueTypeName string
+
+
+---@enum LuaValueType
+local LuaValueType = {
+    ["nil"] = 0,           -- nil 类型
+    ["boolean"] = 1,       -- boolean 类型
+    ["lightuserdata"] = 2, -- lightuserdata 类型
+    ["number"] = 3,        -- number 类型
+    ["string"] = 4,        -- string 类型
+    ["table"] = 5,         -- table 类型
+    ["function"] = 6,      -- function 类型
+    ["userdata"] = 7,      -- userdata 类型
+    ["thread"] = 8,        -- thread 类型
+    ["GROUP"] = 9          -- 特殊分组类型 C# or C++
+}
 
 local toluaHelper = {
     ---@param variable Variable
@@ -179,43 +179,116 @@ local cocosLuaDebugger = {
     end
 }
 
-local processedForToTable = setmetatable({}, { __mode = 'k' })
-rawset(_G, 'processedForToTable', processedForToTable)
+-- 基于 __name 的处理器系统
+local UserdataProcessorBase = {}
+UserdataProcessorBase.__index = UserdataProcessorBase
+
+function UserdataProcessorBase:new()
+    local obj = {}
+    setmetatable(obj, self)
+    return obj
+end
+
+-- 通用的 __tostring 处理函数
+function UserdataProcessorBase:processToString(variable, obj)
+    local mt = getmetatable(obj)
+    if not mt then return false end
+    
+    local toStringFunc = rawget(mt, '__tostring')
+    if toStringFunc and type(toStringFunc) == 'function' then
+        variable.value = tostring(toStringFunc(obj))
+        variable.valueType = 7
+        return true
+    end
+end
+
+function UserdataProcessorBase:process(variable, obj, name, depth)
+    self:processToString(variable, obj)
+
+    self:processSpecific(variable, obj, name, depth)
+
+    if self:processMetatable(depth) then
+        self:processMetatable(variable, obj, depth)
+    end
+    return true
+end
+
+
+function UserdataProcessorBase:processSpecific(variable, obj, name, depth)
+    -- 子类可覆写此方法处理特定类型的逻辑
+end
+
+function UserdataProcessorBase:shouldProcessMetatable(depth)
+    return depth > 1
+end
+
+function UserdataProcessorBase:processMetatable(variable, obj, depth)
+    local parent = variable
+    for property, val in pairs(mt) do
+        local v = emmy.createNode()
+        v.name = property
+        v:query(obj[property], depth - 1, true)
+        parent:addChild(v)
+    end
+end
+
+local TArrayProcessor = UserdataProcessorBase:new()
+-- 通用的 ToTable 处理函数
+function TArrayProcessor:processToTable(variable, obj, name, depth)
+    local mt = getmetatable(obj)
+    if not mt then return false end
+
+    local toTableFunc = rawget(mt, 'ToTable')
+    if toTableFunc and type(toTableFunc) == 'function' then
+        local resultNode = emmy.createNode()
+        local resultTable = toTableFunc(obj)
+        resultNode.name = "ValueTable"
+        resultNode.value = resultTable
+        resultNode.valueType = 5
+        resultNode.valueTypeName = 'table'
+        resultNode:query(resultTable, depth - 1, true)
+        variable:addChild(resultNode)
+        return true
+    end
+end
+function TArrayProcessor:processSpecific(variable, obj, name, depth)
+    self:processToTable(variable, obj, name, depth)
+end
+
+-- 处理器注册表
+local userdataProcessors = {
+    ['TArray'] = TArrayProcessor,
+    ['TMap'] = TArrayProcessor,
+    ['TSet'] = TArrayProcessor,
+}
+
+-- 获取处理器的函数
+local function getUserdataProcessor(typeName)
+    local processor = userdataProcessors[typeName]
+    if processor then
+        return processor
+    end
+    -- 返回默认的基类处理器
+    return UserdataProcessorBase:new()
+end
 
 
 local unluaDebugger = {
     queryVariable = function(variable, obj, typeName, depth)
         -- 检查是否为 table 类型，并且看起来像一个 UnLua 代理对象
         if typeName == 'table' then
-            -- 使用 rawget 避免触发元方法，安全地获取 Object 字段
             local uObject = rawget(obj, 'Object')
             if uObject and type(uObject) == 'userdata' then
                 local mt = getmetatable(uObject)
                 if mt then
                     local name = rawget(mt, '__name')
                     if name and type(name) == 'string' then
-                        local visitedTables = rawget(_G, 'emmyVisitedTables') or {}
-                        rawset(_G, 'emmyVisitedTables', visitedTables)
-                        
-                        -- 检查是否已经访问过这个table（循环引用检测）
-                        if visitedTables[obj] then
-                            -- 发现循环引用，不再递归
-                            variable.value = "<circular reference>"
-                            variable.valueType = 7
-                        else
-                            -- 标记当前table为已访问
-                            visitedTables[obj] = true
-                            
-                            -- 手动遍历 table 而不是调用 query
-                            for key, value in pairs(obj) do
-                                local childNode = emmy.createNode()
-                                childNode.name = tostring(key)
-                                childNode:query(value, depth - 1, true)
-                                variable:addChild(childNode)
-                            end
-                            
-                            -- 遍历完成后，从访问记录中移除（允许在其他分支中访问）
-                            visitedTables[obj] = nil
+                        -- 手动遍历 table 而不是调用 query
+                        for key, value in pairs(obj) do
+                            local childNode = emmy.createNode()
+                            childNode.name = tostring(key)
+                            childNode:query(value, depth - 1, true)
+                            variable:addChild(childNode)
                         end
                         -- 将 table 的类型名也显示为UE对象名
                         variable.valueTypeName = name
@@ -224,48 +297,17 @@ local unluaDebugger = {
                 end
             end
         elseif typeName == 'userdata' then
-            if processedForToTable[variable] then
-                return false
-            end
             local mt = getmetatable(obj)
             if not mt then return false end
 
             local name = rawget(mt, '__name')
             if not name or type(name) ~= 'string' then
-                return
+                return false
             end
-
-            processedForToTable[variable] = true
             variable.valueTypeName = name
 
-            local toStringFunc = rawget(mt, '__tostring')
-            if toStringFunc and type(toStringFunc) == 'function' then
-                variable.value = tostring(toStringFunc(obj))
-                variable.valueType = 7
-            end
-
-            local toTableFunc = rawget(mt, 'ToTable')
-            if toTableFunc and type(toTableFunc) == 'function' then
-                local resultNode = emmy.createNode()
-                local resultTable = toTableFunc(obj)
-                resultNode.name = name.."_Value"
-                resultNode.value = resultTable
-                resultNode.valueType = 5
-                resultNode.valueTypeName = 'table'
-                resultNode:query(resultTable, depth - 1, true)
-                variable:addChild(resultNode)
-            end
-
-            if depth > 1 then
-                local parent = variable
-                for property, val in pairs(mt) do
-                    local v = emmy.createNode()
-                    v.name = property
-                    v:query(obj[property], depth - 1, true)
-                    parent:addChild(v)
-                end
-            end
-            return true
+            local processor = getUserdataProcessor(name)
+            return processor:process(variable, obj, name, depth)
         end
         return false
     end
