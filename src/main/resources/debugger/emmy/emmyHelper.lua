@@ -193,13 +193,22 @@ end
 function UserdataProcessorBase:processToString(variable, obj)
     local mt = getmetatable(obj)
     if not mt then return false end
-    
+
     local toStringFunc = rawget(mt, '__tostring')
     if toStringFunc and type(toStringFunc) == 'function' then
-        variable.value = tostring(toStringFunc(obj))
+        local ok, s = pcall(function() return toStringFunc(obj) end)
+        if ok then
+            variable.value = tostring(s)
+        else
+            variable.value = tostring(obj)
+        end
         variable.valueType = 7
+        if not variable.valueTypeName then
+            variable.valueTypeName = 'userdata'
+        end
         return true
     end
+    return false
 end
 
 function UserdataProcessorBase:process(variable, obj, name, depth)
@@ -207,7 +216,7 @@ function UserdataProcessorBase:process(variable, obj, name, depth)
 
     self:processSpecific(variable, obj, name, depth)
 
-    if self:processMetatable(depth) then
+    if self:shouldProcessMetatable(depth) then
         self:processMetatable(variable, obj, depth)
     end
     return true
@@ -223,11 +232,19 @@ function UserdataProcessorBase:shouldProcessMetatable(depth)
 end
 
 function UserdataProcessorBase:processMetatable(variable, obj, depth)
+    local mt = getmetatable(obj)
+    if not mt then return end
     local parent = variable
-    for property, val in pairs(mt) do
+    for property, _ in pairs(mt) do
         local v = emmy.createNode()
-        v.name = property
-        v:query(obj[property], depth - 1, true)
+        v.name = tostring(property)
+        local ok, val = pcall(function() return obj[property] end)
+        if ok then
+            v:query(val, depth - 1, true)
+        else
+            v.value = "<unreadable>"
+            v.valueTypeName = "metatable"
+        end
         parent:addChild(v)
     end
 end
