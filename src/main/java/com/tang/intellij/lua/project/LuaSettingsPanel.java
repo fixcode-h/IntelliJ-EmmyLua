@@ -66,10 +66,6 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
     private JComboBox<LuaLanguageLevel> languageLevel;
     private JTextField requireFunctionNames;
     private JTextField tooLargerFileThreshold;
-    private JTextField ueProjectPathField;
-    private JButton browseUEProjectButton;
-    private JButton autoDetectUEProjectButton;
-    private JCheckBox enableUEIntelliSenseCheckBox;
     private JTextField ueProcessNamesField;
     private JTextField debugProcessBlacklistField;
     private JTextField customEmmyHelperPathField;
@@ -107,9 +103,6 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
         languageLevel.setModel(lanLevelModel);
         lanLevelModel.setSelectedItem(settings.getLanguageLevel());
 
-        //UE project settings
-        ueProjectPathField.setText(settings.getUeProjectPath());
-        enableUEIntelliSenseCheckBox.setSelected(settings.getEnableUEIntelliSense());
         // 将进程名称数组转换为逗号分隔的字符串
         String[] processNames = settings.getUeProcessNames();
         if (processNames != null && processNames.length > 0) {
@@ -147,48 +140,6 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
                 customEmmyHelperPathField.setText(selectedFile.getPath());
             }
         });
-
-        //browse button action
-        browseUEProjectButton.addActionListener(e -> {
-            FileChooserDescriptor descriptor = new FileChooserDescriptor(true, false, false, false, false, false)
-                    .withFileFilter(file -> file.getName().endsWith(".uproject"));
-            descriptor.setTitle("Select UE Project File");
-            descriptor.setDescription("Choose the .uproject file for your Unreal Engine project");
-            
-            VirtualFile selectedFile = FileChooser.chooseFile(descriptor, null, null);
-            if (selectedFile != null) {
-                ueProjectPathField.setText(selectedFile.getPath());
-            }
-        });
-
-        //auto detect button action
-        autoDetectUEProjectButton.addActionListener(e -> {
-            // 在后台线程中执行自动检测，避免阻塞UI
-            ApplicationManager.getApplication().executeOnPooledThread(() -> {
-                String detectedPath = settings.autoDetectUProjectPath();
-                
-                // 在UI线程中更新界面
-                ApplicationManager.getApplication().invokeLater(() -> {
-                    if (detectedPath != null) {
-                        ueProjectPathField.setText(detectedPath);
-                        // 显示成功消息
-                        Messages.showInfoMessage(
-                            "已自动检测到 .uproject 文件：\n" + detectedPath,
-                            "自动检测成功"
-                        );
-                    } else {
-                        // 显示未找到消息
-                        Messages.showWarningDialog(
-                            "未能在当前项目及其父目录中找到 .uproject 文件。\n" +
-                            "请确保：\n" +
-                            "1. 当前项目类型已设置为 'Unreal Engine'\n" +
-                            "2. 项目目录或其父目录包含 .uproject 文件",
-                            "自动检测失败"
-                        );
-                    }
-                });
-            });
-        });
     }
 
     @NotNull
@@ -225,8 +176,6 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
                 settings.getAttachDebugCaptureStd() != captureStd.isSelected() ||
                 settings.getAttachDebugDefaultCharsetName() != charsetComboBox.getSelectedItem() ||
                 settings.getLanguageLevel() != languageLevel.getSelectedItem() ||
-                !StringUtil.equals(settings.getUeProjectPath(), ueProjectPathField.getText()) ||
-                settings.getEnableUEIntelliSense() != enableUEIntelliSenseCheckBox.isSelected() ||
                 !Arrays.equals(settings.getUeProcessNames(), getProcessNamesFromTextField()) ||
                 !Arrays.equals(settings.getDebugProcessBlacklist(), getDebugProcessBlacklistFromTextField()) ||
                 !StringUtil.equals(settings.getCustomEmmyHelperPath(), customEmmyHelperPathField.getText()) ||
@@ -255,10 +204,6 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
         settings.setAttachDebugCaptureOutput(captureOutputDebugString.isSelected());
         settings.setAttachDebugCaptureStd(captureStd.isSelected());
         settings.setAttachDebugDefaultCharsetName((String) Objects.requireNonNull(charsetComboBox.getSelectedItem()));
-        
-        //UE project settings
-        settings.setUeProjectPath(ueProjectPathField.getText());
-        settings.setEnableUEIntelliSense(enableUEIntelliSenseCheckBox.isSelected());
         
         //Custom EmmyHelper path
         settings.setCustomEmmyHelperPath(customEmmyHelperPathField.getText());
@@ -349,9 +294,6 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
         charsetComboBox.setSelectedItem(settings.getAttachDebugDefaultCharsetName());
         languageLevel.setSelectedItem(settings.getLanguageLevel());
         
-        // Reset UE project fields
-        ueProjectPathField.setText(settings.getUeProjectPath());
-        enableUEIntelliSenseCheckBox.setSelected(settings.getEnableUEIntelliSense());
         // 将进程名称数组转换为逗号分隔的字符串
         String[] processNames = settings.getUeProcessNames();
         if (processNames != null && processNames.length > 0) {

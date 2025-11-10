@@ -44,12 +44,8 @@ class LuaIntelliSenseChecker : ProjectManagerListener {
         
         if (!ideaFolder.exists()) return
         
-        // Check project type and settings
-        if (settings.projectType == LuaProjectType.UNREAL_ENGINE) {
-            if (settings.enableUEIntelliSense) {
-                checkUEIntelliSense(project, ideaFolder, settings)
-            }
-        } else {
+        // Check project type
+        if (settings.projectType != LuaProjectType.UNREAL_ENGINE) {
             // For standard Lua projects, check if it looks like a UE project
             if (isUnrealEngineProject(projectPath)) {
                 suggestUEProjectType(project)
@@ -57,38 +53,6 @@ class LuaIntelliSenseChecker : ProjectManagerListener {
         }
     }
     
-    private fun checkUEIntelliSense(project: Project, ideaFolder: File, settings: LuaSettings) {
-        // Auto-detect UE project path if not set or invalid
-        if (settings.ueProjectPath.isEmpty()) {
-            val detectedPath = settings.autoDetectUProjectPath()
-            if (detectedPath != null) {
-                settings.ueProjectPath = detectedPath
-                showAutoDetectedUEProjectNotification(project, detectedPath)
-            }
-        } else {
-            // Validate existing UE project path
-            val ueProjectFile = File(settings.ueProjectPath)
-            if (!ueProjectFile.exists() || !ueProjectFile.name.endsWith(".uproject")) {
-                // Try auto-detection if current path is invalid
-                val detectedPath = settings.autoDetectUProjectPath()
-                if (detectedPath != null) {
-                    settings.ueProjectPath = detectedPath
-                    showAutoDetectedUEProjectNotification(project, detectedPath)
-                } else {
-                    showInvalidUEProjectPathNotification(project)
-                    return
-                }
-            }
-        }
-        
-        // Check if UE.lua and UnLua.lua exist in .idea folder
-        val ueLuaFile = File(ideaFolder, "UE.lua")
-        val unLuaFile = File(ideaFolder, "UnLua.lua")
-        
-        if (!ueLuaFile.exists() || !unLuaFile.exists()) {
-            showGenerateUEIntelliSenseNotification(project, ideaFolder)
-        }
-    }
 
 
 
@@ -124,13 +88,6 @@ class LuaIntelliSenseChecker : ProjectManagerListener {
                 val settings = LuaSettings.instance
                 settings.projectType = LuaProjectType.UNREAL_ENGINE
                 
-                // Auto-detect UE project path when setting project type
-                val detectedPath = settings.autoDetectUProjectPath()
-                if (detectedPath != null) {
-                    settings.ueProjectPath = detectedPath
-                    showAutoDetectedUEProjectNotification(project, detectedPath)
-                }
-                
                 notification.expire()
                 
                 // Re-check after setting project type
@@ -140,103 +97,4 @@ class LuaIntelliSenseChecker : ProjectManagerListener {
         
         notification.notify(project)
     }
-
-    private fun showAutoDetectedUEProjectNotification(project: Project, detectedPath: String) {
-        val notificationGroup = NotificationGroupManager.getInstance()
-            .getNotificationGroup("EmmyLua.UEProject")
-        
-        val notification = notificationGroup.createNotification(
-            "UE Project Auto-Detected",
-            "Automatically detected UE project file: $detectedPath",
-            NotificationType.INFORMATION
-        )
-        
-        notification.notify(project)
-    }
-
-    private fun showInvalidUEProjectPathNotification(project: Project) {
-        val notificationGroup = NotificationGroupManager.getInstance()
-            .getNotificationGroup("EmmyLua.UEProject")
-        
-        val notification = notificationGroup.createNotification(
-            "Invalid UE Project Path",
-            "The specified UE project path is invalid. Please check your settings and ensure the .uproject file exists.",
-            NotificationType.WARNING
-        )
-        
-        notification.notify(project)
-    }
-    
-    private fun showGenerateUEIntelliSenseNotification(project: Project, ideaFolder: File) {
-        val notificationGroup = NotificationGroupManager.getInstance()
-            .getNotificationGroup("EmmyLua.UEIntelliSense")
-        
-        val notification = notificationGroup.createNotification(
-            "UE Lua IntelliSense",
-            "Missing Unreal Engine Lua code hint files. Generate UE.lua and UnLua.lua for better code completion?",
-            NotificationType.INFORMATION
-        )
-        
-        notification.addAction(object : com.intellij.notification.NotificationAction("Generate") {
-            override fun actionPerformed(e: com.intellij.openapi.actionSystem.AnActionEvent, notification: com.intellij.notification.Notification) {
-                generateUEIntelliSenseFiles(project, ideaFolder)
-                notification.expire()
-            }
-        })
-        
-        notification.addAction(object : com.intellij.notification.NotificationAction("Disable") {
-            override fun actionPerformed(e: com.intellij.openapi.actionSystem.AnActionEvent, notification: com.intellij.notification.Notification) {
-                val settings = LuaSettings.instance
-                settings.enableUEIntelliSense = false
-                notification.expire()
-            }
-        })
-        
-        notification.notify(project)
-    }
-
-
-    
-    private fun generateUEIntelliSenseFiles(project: Project, ideaFolder: File) {
-        try {
-            val exporter = UEIntelliSenseExporter()
-            val settings = LuaSettings.instance
-            exporter.generateIntelliSenseFiles(project, ideaFolder, settings.ueProjectPath)
-            
-            showSuccessNotification(project, "Successfully generated UE.lua and UnLua.lua files!")
-            
-        } catch (e: Exception) {
-            showErrorNotification(project, "Failed to generate UE IntelliSense files: ${e.message}")
-        }
-    }
-
-
-
-    private fun showSuccessNotification(project: Project, message: String) {
-        val notificationGroup = NotificationGroupManager.getInstance()
-            .getNotificationGroup("EmmyLua.Success")
-        
-        val notification = notificationGroup.createNotification(
-            "Lua IntelliSense",
-            message,
-            NotificationType.INFORMATION
-        )
-        
-        notification.notify(project)
-    }
-
-    private fun showErrorNotification(project: Project, message: String) {
-        val notificationGroup = NotificationGroupManager.getInstance()
-            .getNotificationGroup("EmmyLua.Error")
-        
-        val notification = notificationGroup.createNotification(
-            "Lua IntelliSense Error",
-            message,
-            NotificationType.ERROR
-        )
-        
-        notification.notify(project)
-    }
-
-
 }
