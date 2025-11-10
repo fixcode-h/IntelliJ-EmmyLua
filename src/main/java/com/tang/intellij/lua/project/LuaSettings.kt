@@ -20,12 +20,9 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.PersistentStateComponent
 import com.intellij.openapi.components.State
 import com.intellij.openapi.components.Storage
-import com.intellij.openapi.project.Project
-import com.intellij.openapi.project.ProjectManager
 import com.intellij.util.xmlb.XmlSerializerUtil
 import com.tang.intellij.lua.Constants
 import com.tang.intellij.lua.lang.LuaLanguageLevel
-import java.io.File
 import java.nio.charset.Charset
 
 /**
