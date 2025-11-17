@@ -190,15 +190,17 @@ object ResolveResultCache {
     
     /**
      * 获取缓存统计信息
+     * 注意：不检查每个元素的有效性，避免需要 read access
      */
     fun getStats(): CacheStats {
-        val validEntries = cache.values.count { it.get() != null }
-        val invalidEntries = cache.size - validEntries
+        // 统计已被GC清理的弱引用数量（不访问PSI）
+        val nullRefCount = cache.values.count { it.resultRef.get() == null }
+        val estimatedValid = cache.size - nullRefCount
         
         return CacheStats(
             size = cache.size,
-            validEntries = validEntries,
-            invalidEntries = invalidEntries,
+            validEntries = estimatedValid,
+            invalidEntries = nullRefCount,
             hits = hits,
             misses = misses,
             hitRate = if (hits + misses > 0) hits.toDouble() / (hits + misses) else 0.0
