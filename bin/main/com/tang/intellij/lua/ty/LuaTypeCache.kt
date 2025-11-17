@@ -195,22 +195,20 @@ class LuaTypeCache(private val project: Project) {
     }
     
     /**
-     * 创建缓存键（优化：避免在索引时调用 containingFile）
+     * 创建缓存键（完全避免PSI操作）
      * 
-     * 使用 System.identityHashCode 和 textOffset 作为键，
-     * 避免触发 containingFile 的递归调用
+     * 关键原则：
+     * - ❌ 不能调用 psi.containingFile (触发文件加载)
+     * - ❌ 不能调用 psi.textOffset (触发节点加载)
+     * - ❌ 不能调用任何会触发 getNode() 的方法
+     * - ✅ 只使用对象的身份哈希码
+     * 
+     * PSI元素在内存中是单例的，identityHashCode足以唯一标识
      */
     private fun createKey(psi: LuaTypeGuessable): String {
-        return try {
-            // 使用对象身份哈希码 + textOffset 作为唯一标识
-            // 避免调用 containingFile，防止在索引时栈溢出
-            val identityHash = System.identityHashCode(psi)
-            val offset = psi.textOffset
-            "$identityHash:$offset"
-        } catch (e: Exception) {
-            // 如果出错，使用默认键
-            "error:${System.identityHashCode(psi)}"
-        }
+        // 只使用 identityHashCode，完全避免触发PSI操作
+        // 这在对象生命周期内是稳定且唯一的
+        return System.identityHashCode(psi).toString()
     }
     
     /**

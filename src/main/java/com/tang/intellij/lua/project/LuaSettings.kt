@@ -63,8 +63,10 @@ class LuaSettings : PersistentStateComponent<LuaSettings> {
 
     /**
      * (KB)
+     * 文件大小阈值：5MB = 5120 KB
+     * 超过此大小的文件将禁用代码分析功能以提升性能
      */
-    var tooLargerFileThreshold = 1024
+    var tooLargerFileThreshold = 5120
 
     var attachDebugDefaultCharsetName = "UTF-8"
 
