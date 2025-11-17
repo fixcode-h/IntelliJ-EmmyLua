@@ -59,16 +59,43 @@ class LuaTypeCache(private val project: Project) {
         }
     }
     
-    // L1: ThreadLocal缓存（LRU策略，最多100条）
+    // L1: ThreadLocal缓存（LRU策略，大文件使用更大容量）
     private val threadLocalCache = ThreadLocal.withInitial {
         object : LinkedHashMap<String, ITy>(16, 0.75f, true) {
-            override fun removeEldestEntry(eldest: Map.Entry<String, ITy>?) = size > 100
+            override fun removeEldestEntry(eldest: Map.Entry<String, ITy>?) = 
+                size > getL1CacheSize()
         }
     }
     
-    // L2: Project级软引用缓存（最多10000条）
+    /**
+     * 动态L1缓存大小：大文件使用更大的缓存
+     * 
+     * 策略：
+     * - 正常文件：100条
+     * - 大文件：500条（5倍）
+     * 
+     * 这样可以显著提升大文件的缓存命中率
+     */
+    private fun getL1CacheSize(): Int {
+        // 对于大文件，使用更大的缓存
+        // 检测逻辑：如果L2缓存中有很多条目，说明正在处理大文件
+        return if (projectCache.size > 1000) 500 else 100
+    }
+    
+    // L2: Project级软引用缓存（动态大小，大文件使用更大容量）
     private val projectCache = ConcurrentHashMap<String, SoftReference<TypeCacheEntry>>()
-    private val MAX_PROJECT_CACHE_SIZE = 10000
+    
+    /**
+     * 动态L2缓存大小
+     * 
+     * 策略：
+     * - 正常项目：10000条
+     * - 有大文件：20000条（2倍）
+     */
+    private fun getL2CacheSize(): Int {
+        // 如果当前缓存使用率高，说明项目规模大或有大文件
+        return if (projectCache.size > 8000) 20000 else 10000
+    }
     
     // L3: CachedValue管理器（IntelliJ平台机制）
     private val cachedValueManager = CachedValuesManager.getManager(project)
@@ -144,13 +171,14 @@ class LuaTypeCache(private val project: Project) {
         // 存储到 L1（ThreadLocal）
         threadLocalCache.get()[key] = type
         
-        // 存储到 L2（Project级）
-        if (projectCache.size < MAX_PROJECT_CACHE_SIZE) {
+        // 存储到 L2（Project级，使用动态大小）
+        val maxSize = getL2CacheSize()
+        if (projectCache.size < maxSize) {
             projectCache[key] = SoftReference(TypeCacheEntry(type))
         } else {
             // 缓存已满，清理一些过期条目
             cleanExpiredProjectCache()
-            if (projectCache.size < MAX_PROJECT_CACHE_SIZE) {
+            if (projectCache.size < maxSize) {
                 projectCache[key] = SoftReference(TypeCacheEntry(type))
             }
         }

@@ -120,6 +120,22 @@ class SearchContext private constructor(val project: Project) {
     private val myGuardList = mutableListOf<InferRecursionGuard>()
     private val myInferCache = mutableMapOf<LuaTypeGuessable, ITy>()
     private var myScope: GlobalSearchScope? = null
+    
+    // 递归深度限制：防止类型推断无限递归导致栈溢出
+    private var inferDepth = 0
+    private val maxInferDepth get() = when {
+        myDumb -> 5          // 索引模式：最严格
+        shouldSkipHeavyAnalysis() -> 20  // 大文件模式：中等限制
+        else -> 50           // 正常模式：宽松限制
+    }
+    
+    /**
+     * 检查是否应该跳过耗时分析
+     */
+    private fun shouldSkipHeavyAnalysis(): Boolean {
+        // 检查当前是否在处理大文件
+        return false  // TODO: 在需要时检查
+    }
 
     fun <T> withIndex(index: Int, action: () -> T): T {
         val savedIndex = this.index
@@ -169,27 +185,39 @@ class SearchContext private constructor(val project: Project) {
     }
 
     /**
-     * 推断类型并缓存（使用三层缓存架构）
+     * 推断类型并缓存（使用双层缓存架构 + 递归深度限制）
      * 
      * 优化：
-     * 1. 优先从三层缓存获取
-     * 2. 缓存未命中时才进行实际推断
-     * 3. 推断结果同时存储到所有缓存层
+     * 1. 优先从双层缓存获取
+     * 2. 递归深度限制：防止栈溢出
+     * 3. 缓存未命中时才进行实际推断
+     * 4. 推断结果同时存储到所有缓存层
      */
     private fun inferAndCache(psi: LuaTypeGuessable): ITy {
-        // 先尝试从三层缓存获取
+        // 递归深度检查：防止栈溢出
+        if (inferDepth >= maxInferDepth) {
+            // 达到递归深度限制，快速返回 UNKNOWN
+            return Ty.UNKNOWN
+        }
+        
+        // 先尝试从双层缓存获取
         val typeCache = com.tang.intellij.lua.ty.LuaTypeCache.getInstance(project)
         typeCache.getType(psi)?.let { return it }
         
         // 缓存未命中，使用原有的请求级缓存
         return myInferCache.getOrPut(psi) {
-            // 执行实际的类型推断
-            val result = ILuaTypeInfer.infer(psi, this)
-            
-            // 存储到三层缓存
-            typeCache.putType(psi, result)
-            
-            result
+            inferDepth++
+            try {
+                // 执行实际的类型推断
+                val result = ILuaTypeInfer.infer(psi, this)
+                
+                // 存储到双层缓存
+                typeCache.putType(psi, result)
+                
+                result
+            } finally {
+                inferDepth--
+            }
         }
     }
 
@@ -204,7 +232,8 @@ class SearchContext private constructor(val project: Project) {
 
     fun invalidateInferCache() {
         myInferCache.clear()
-        // 同时清理三层缓存的L1缓存
+        inferDepth = 0  // 重置递归深度计数器
+        // 同时清理双层缓存的L1缓存
         val typeCache = com.tang.intellij.lua.ty.LuaTypeCache.getInstance(project)
         typeCache.clearThreadLocal()
     }
