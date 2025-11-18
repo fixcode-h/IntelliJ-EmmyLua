@@ -49,9 +49,8 @@ class LuaClassMemberIndex : IntStubIndexExtension<LuaClassMember>() {
                 }
             }
         } catch (e: Exception) {
-            // 索引损坏或不同步时返回空集合，避免插件崩溃
-            // 同时通知用户重建索引
-            LuaIndexNotification.notifyIndexError(project, indexKey = "lua.index.class.member")
+            // 索引不同步时返回空集合（常见于外部工具修改文件的场景）
+            // IntelliJ 会在后台自动重新索引，无需用户干预
             emptyList()
         }
     }
@@ -61,14 +60,32 @@ class LuaClassMemberIndex : IntStubIndexExtension<LuaClassMember>() {
         
         // 递归保护：追踪正在处理的类，避免无限递归
         private val processingClasses = ThreadLocal.withInitial { mutableSetOf<String>() }
+        
+        // 记录失败的 key，避免重复尝试访问损坏的索引
+        private val failedKeys = java.util.concurrent.ConcurrentHashMap.newKeySet<Int>()
 
         private fun process(key: String, context: SearchContext, processor: Processor<LuaClassMember>): Boolean {
             if (context.isDumb)
                 return false
             
-            // 缓存验证：在访问Stub数据前验证文件完整性
+            val keyHash = key.hashCode()
+            
+            // 如果这个 key 之前访问失败过，直接跳过避免重复尝试
+            if (failedKeys.contains(keyHash)) {
+                return true
+            }
+            
+            // 访问 Stub 索引，捕获可能的异常
             try {
-                val all = StubIndex.getElements(StubKeys.CLASS_MEMBER, key.hashCode(), context.project, context.scope, LuaClassMember::class.java)
+                val all = try {
+                    StubIndex.getElements(StubKeys.CLASS_MEMBER, keyHash, context.project, context.scope, LuaClassMember::class.java)
+                } catch (e: Throwable) {
+                    // 索引不同步时的异常（常见于 UE Blueprint 自动生成的文件）
+                    // 这是正常现象，IntelliJ 会自动重新索引
+                    // 标记这个 key 为临时失败状态，避免重复访问
+                    failedKeys.add(keyHash)
+                    return true
+                }
                 
                 // 过滤掉无效的元素
                 val validElements = all.filter { element ->
@@ -81,12 +98,36 @@ class LuaClassMemberIndex : IntStubIndexExtension<LuaClassMember>() {
                 }
                 
                 return ContainerUtil.process(validElements, processor)
-            } catch (e: Exception) {
-                // 如果访问Stub索引失败，通知用户并返回true继续处理其他索引
-                // 尝试从异常消息中提取文件名
-                val fileName = extractFileNameFromException(e)
-                LuaIndexNotification.notifyIndexError(context.project, fileName, "lua.index.class.member")
+            } catch (e: Throwable) {
+                // 静默处理异常，避免影响其他功能
+                // 索引会在后台自动更新，这些临时错误会自动修复
+                failedKeys.add(keyHash)
                 return true
+            }
+        }
+        
+        /**
+         * 清除失败的 key 缓存
+         * 当索引更新完成后，这些 key 可能已经可以正常访问了
+         */
+        fun clearFailedKeys() {
+            failedKeys.clear()
+        }
+        
+        /**
+         * 清除特定 key 的失败状态
+         */
+        fun clearFailedKey(key: Int) {
+            failedKeys.remove(key)
+        }
+        
+        /**
+         * 定期清理失败缓存（后台任务）
+         * 避免缓存持续增长
+         */
+        fun trimFailedKeys() {
+            if (failedKeys.size > 1000) {
+                failedKeys.clear()
             }
         }
 
@@ -200,17 +241,6 @@ class LuaClassMemberIndex : IntStubIndexExtension<LuaClassMember>() {
         fun indexStub(indexSink: IndexSink, className: String, memberName: String) {
             indexSink.occurrence(StubKeys.CLASS_MEMBER, className.hashCode())
             indexSink.occurrence(StubKeys.CLASS_MEMBER, "$className*$memberName".hashCode())
-        }
-        
-        /**
-         * 从异常消息中提取文件名
-         */
-        private fun extractFileNameFromException(e: Exception): String? {
-            val message = e.message ?: return null
-            // 尝试匹配 "file = file://..." 或 "file://..." 模式
-            val filePattern = Regex("""file\s*=\s*file://([^,\s]+)""")
-            val match = filePattern.find(message)
-            return match?.groupValues?.get(1)
         }
     }
 }

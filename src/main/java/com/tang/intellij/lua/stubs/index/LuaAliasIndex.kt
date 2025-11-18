@@ -32,7 +32,12 @@ class LuaAliasIndex : StringStubIndexExtension<LuaDocTagAlias>() {
         fun find(name: String, context: SearchContext): LuaDocTagAlias? {
             if (context.isDumb)
                 return null
-            return StubIndex.getElements(StubKeys.ALIAS, name, context.project, context.scope, LuaDocTagAlias::class.java).firstOrNull()
+            return try {
+                StubIndex.getElements(StubKeys.ALIAS, name, context.project, context.scope, LuaDocTagAlias::class.java).firstOrNull()
+            } catch (e: Throwable) {
+                // 索引不同步时静默处理
+                null
+            }
         }
         
         fun processAllKeys(project: Project, processor: Processor<String>): Boolean {

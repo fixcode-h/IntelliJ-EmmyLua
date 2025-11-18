@@ -119,8 +119,15 @@ class LuaCompletionContributor : CompletionContributor() {
                 .afterLeaf(psiElement(LuaTypes.FUNCTION))
         private val IN_CLASS_METHOD_NAME = psiElement().andOr(IN_FUNC_NAME, AFTER_FUNCTION)
 
+        // 排除在定义局部变量名称时的补全（但保留在赋值表达式中的补全）
+        // local some = value  -- "some" 不补全，"value" 需要补全
         private val IN_NAME_EXPR = psiElement(LuaTypes.ID)
                 .withParent(LuaNameExpr::class.java)
+                .andNot(
+                    psiElement()
+                        .inside(psiElement(LuaTypes.NAME_LIST))  // 在变量名列表中
+                        .inside(LuaLocalDef::class.java)          // 在 local 定义中
+                )
 
         private val SHOW_OVERRIDE = psiElement()
                 .withParent(LuaClassMethodName::class.java)

@@ -96,20 +96,33 @@ class LocalAndGlobalCompletionProvider(private val mask: Int) : ClassMemberCompl
 
         //local
         if (has(LOCAL_FUN) || has(LOCAL_VAR)) {
-            LuaDeclarationTree.get(cur.containingFile).walkUpLocal(cur) {
-                val nameDef = it.psi
-                val name = it.name
-                if (nameDef is LuaPsiElement &&
-                        completionResultSet.prefixMatcher.prefixMatches(name) &&
-                        localNamesSet.add(name)) {
-                    session.addWord(name)
-                    try {
-                        addCompletion(name, session, nameDef)
-                    } catch (e: Exception) {
-                        // 捕获单个补全项的异常，继续处理其他项
+            try {
+                var localCount = 0
+                LuaDeclarationTree.get(cur.containingFile).walkUpLocal(cur) {
+                    // 性能优化：定期检查是否被取消（每50次检查一次，减少开销）
+                    if (localCount++ % 50 == 0) {
+                        com.intellij.openapi.progress.ProgressManager.checkCanceled()
                     }
+                    
+                    val nameDef = it.psi
+                    val name = it.name
+                    if (nameDef is LuaPsiElement &&
+                            completionResultSet.prefixMatcher.prefixMatches(name) &&
+                            localNamesSet.add(name)) {
+                        session.addWord(name)
+                        try {
+                            addCompletion(name, session, nameDef)
+                        } catch (e: Exception) {
+                            // 捕获单个补全项的异常，继续处理其他项
+                        }
+                    }
+                    true
                 }
-                true
+            } catch (e: com.intellij.openapi.progress.ProcessCanceledException) {
+                // 用户取消操作，重新抛出
+                throw e
+            } catch (e: Exception) {
+                // 其他异常静默处理
             }
         }
 
@@ -118,9 +131,12 @@ class LocalAndGlobalCompletionProvider(private val mask: Int) : ClassMemberCompl
         if (has(GLOBAL_FUN) || has(GLOBAL_VAR)) {
             try {
                 addClass(TyClass.G, TyClass.G, project, MemberCompletionMode.Dot, completionResultSet, completionResultSet.prefixMatcher, null)
+            } catch (e: com.intellij.openapi.progress.ProcessCanceledException) {
+                // 用户取消操作，重新抛出
+                throw e
             } catch (e: Exception) {
                 // 捕获异常，确保关键字补全仍能执行
-                // 常见异常：StackOverflowError, ProcessCanceledException等
+                // 常见异常：StackOverflowError等
             }
         }
         //key words
