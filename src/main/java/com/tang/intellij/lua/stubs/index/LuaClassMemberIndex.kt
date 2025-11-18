@@ -16,6 +16,7 @@
 
 package com.tang.intellij.lua.stubs.index
 
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.psi.search.GlobalSearchScope
 import com.intellij.psi.stubs.IndexSink
@@ -48,14 +49,18 @@ class LuaClassMemberIndex : IntStubIndexExtension<LuaClassMember>() {
                     false
                 }
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             // 索引不同步时返回空集合（常见于外部工具修改文件的场景）
             // IntelliJ 会在后台自动重新索引，无需用户干预
+            if (LOG.isDebugEnabled) {
+                LOG.debug("Failed to get stub index for key=$s: ${e.message}")
+            }
             emptyList()
         }
     }
 
     companion object {
+        private val LOG = Logger.getInstance(LuaClassMemberIndex::class.java)
         val instance = LuaClassMemberIndex()
         
         // 递归保护：追踪正在处理的类，避免无限递归
@@ -63,6 +68,9 @@ class LuaClassMemberIndex : IntStubIndexExtension<LuaClassMember>() {
         
         // 记录失败的 key，避免重复尝试访问损坏的索引
         private val failedKeys = java.util.concurrent.ConcurrentHashMap.newKeySet<Int>()
+        
+        // 记录失败的文件信息，用于诊断
+        private val failedFiles = java.util.concurrent.ConcurrentHashMap<String, Int>()
 
         private fun process(key: String, context: SearchContext, processor: Processor<LuaClassMember>): Boolean {
             if (context.isDumb)
@@ -82,6 +90,55 @@ class LuaClassMemberIndex : IntStubIndexExtension<LuaClassMember>() {
                 } catch (e: Throwable) {
                     // 索引不同步时的异常（常见于 UE Blueprint 自动生成的文件）
                     // 这是正常现象，IntelliJ 会自动重新索引
+                    
+                    // 记录详细诊断信息（仅在 DEBUG 模式下）
+                    if (LOG.isDebugEnabled) {
+                        LOG.debug("=== Stub Index Error Diagnostics ===")
+                        LOG.debug("Key: $key (hash: $keyHash)")
+                        LOG.debug("Project: ${context.project.name}")
+                        LOG.debug("Exception: ${e.javaClass.simpleName}: ${e.message}")
+                        
+                        // 尝试从异常消息中提取文件信息
+                        val exceptionMsg = e.message ?: e.toString()
+                        val filePattern = Regex("file://([^,]+)")
+                        val fileMatch = filePattern.find(exceptionMsg)
+                        if (fileMatch != null) {
+                            val filePath = fileMatch.groupValues[1]
+                            val fileName = filePath.substringAfterLast('/')
+                            LOG.debug("Problematic file: $fileName")
+                            LOG.debug("Full path: $filePath")
+                            
+                            // 检查文件模式
+                            when {
+                                fileName.startsWith("BP_") && fileName.endsWith("_C.lua") -> {
+                                    LOG.debug("Pattern: UE Blueprint generated file")
+                                }
+                                fileName.contains("_C.lua") -> {
+                                    LOG.debug("Pattern: Possible C++ generated file")
+                                }
+                                else -> {
+                                    LOG.debug("Pattern: Unknown")
+                                }
+                            }
+                        }
+                        
+                        LOG.debug("Stack trace (first 3 frames):")
+                        e.stackTrace.take(3).forEach { frame ->
+                            LOG.debug("  at ${frame.className}.${frame.methodName}(${frame.fileName}:${frame.lineNumber})")
+                        }
+                        LOG.debug("====================================")
+                    }
+                    
+                    // 统计失败文件（用于内部监控）
+                    val exceptionMsg = e.message ?: e.toString()
+                    val filePattern = Regex("file://([^,]+)")
+                    val fileMatch = filePattern.find(exceptionMsg)
+                    if (fileMatch != null) {
+                        val filePath = fileMatch.groupValues[1]
+                        val fileName = filePath.substringAfterLast('/')
+                        failedFiles.merge(fileName, 1) { old, _ -> old + 1 }
+                    }
+                    
                     // 标记这个 key 为临时失败状态，避免重复访问
                     failedKeys.add(keyHash)
                     return true
@@ -99,8 +156,10 @@ class LuaClassMemberIndex : IntStubIndexExtension<LuaClassMember>() {
                 
                 return ContainerUtil.process(validElements, processor)
             } catch (e: Throwable) {
-                // 静默处理异常，避免影响其他功能
-                // 索引会在后台自动更新，这些临时错误会自动修复
+                // 外层异常处理（仅在 DEBUG 模式记录详细信息）
+                if (LOG.isDebugEnabled) {
+                    LOG.debug("Unexpected error processing key=$key: ${e.message}", e)
+                }
                 failedKeys.add(keyHash)
                 return true
             }
@@ -111,7 +170,17 @@ class LuaClassMemberIndex : IntStubIndexExtension<LuaClassMember>() {
          * 当索引更新完成后，这些 key 可能已经可以正常访问了
          */
         fun clearFailedKeys() {
+            if (LOG.isDebugEnabled) {
+                LOG.debug("Clearing failed keys cache (${failedKeys.size} entries)")
+                if (failedFiles.isNotEmpty()) {
+                    LOG.debug("Failed files summary:")
+                    failedFiles.entries.sortedByDescending { it.value }.take(10).forEach { (file, count) ->
+                        LOG.debug("  $file: $count times")
+                    }
+                }
+            }
             failedKeys.clear()
+            failedFiles.clear()
         }
         
         /**
