@@ -36,8 +36,23 @@ class LuaClassMemberIndex : IntStubIndexExtension<LuaClassMember>() {
     override fun getKey() = StubKeys.CLASS_MEMBER
 
     @Deprecated("This method is deprecated in the parent class")
-    override fun get(s: Int, project: Project, scope: GlobalSearchScope): Collection<LuaClassMember> =
-            StubIndex.getElements(StubKeys.CLASS_MEMBER, s, project, scope, LuaClassMember::class.java)
+    override fun get(s: Int, project: Project, scope: GlobalSearchScope): Collection<LuaClassMember> {
+        return try {
+            val elements = StubIndex.getElements(StubKeys.CLASS_MEMBER, s, project, scope, LuaClassMember::class.java)
+            // 过滤掉无效的元素，防止访问已失效的 PSI
+            elements.filter { element ->
+                try {
+                    val containingFile = element.containingFile
+                    containingFile != null && containingFile.isValid
+                } catch (e: Exception) {
+                    false
+                }
+            }
+        } catch (e: Exception) {
+            // 索引损坏或不同步时返回空集合，避免插件崩溃
+            emptyList()
+        }
+    }
 
     companion object {
         val instance = LuaClassMemberIndex()
