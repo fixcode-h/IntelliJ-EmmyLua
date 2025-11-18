@@ -21,7 +21,10 @@ import com.intellij.notification.NotificationAction
 import com.intellij.notification.NotificationType
 import com.intellij.notification.Notifications
 import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.vfs.VfsUtilCore
+import com.intellij.openapi.vfs.VirtualFileManager
 import com.intellij.util.indexing.FileBasedIndex
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -112,11 +115,30 @@ object LuaIndexNotification {
             notifiedProjects.remove(project)
             
             // 触发索引重建
-            FileBasedIndex.getInstance().scheduleRebuild("用户请求重建 Lua 索引", object : Throwable() {
-                override fun toString(): String {
-                    return "Lua index corruption detected, user requested rebuild"
+            ApplicationManager.getApplication().invokeLater {
+                ApplicationManager.getApplication().runWriteAction {
+                    val fileBasedIndex = FileBasedIndex.getInstance()
+                    
+                    // 标记所有 Lua 文件需要重新索引
+                    project.basePath?.let { basePath ->
+                        val vfsManager = VirtualFileManager.getInstance()
+                        val baseDir = vfsManager.findFileByUrl("file://$basePath")
+                        
+                        baseDir?.let { dir ->
+                            VfsUtilCore.iterateChildrenRecursively(
+                                dir,
+                                { file -> file.isDirectory || file.extension == "lua" },
+                                { file ->
+                                    if (!file.isDirectory && file.extension == "lua") {
+                                        fileBasedIndex.requestReindex(file)
+                                    }
+                                    true
+                                }
+                            )
+                        }
+                    }
                 }
-            })
+            }
             
             // 显示成功通知
             val successNotification = Notification(
