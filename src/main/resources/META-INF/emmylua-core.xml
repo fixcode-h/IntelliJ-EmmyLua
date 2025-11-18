@@ -25,6 +25,7 @@
         
         <!-- notification groups -->
         <notificationGroup id="LuaPanda Version Check" displayType="BALLOON" key="notification.group.luapanda.version.check"/>
+        <notificationGroup id="Lua Index Error" displayType="BALLOON"/>
 
         <!-- file template provider -->
         <fileTemplateGroup implementation="com.tang.intellij.lua.actions.LuaFileTemplateProvider"/>

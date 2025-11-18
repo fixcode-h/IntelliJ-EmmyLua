@@ -50,6 +50,8 @@ class LuaClassMemberIndex : IntStubIndexExtension<LuaClassMember>() {
             }
         } catch (e: Exception) {
             // 索引损坏或不同步时返回空集合，避免插件崩溃
+            // 同时通知用户重建索引
+            LuaIndexNotification.notifyIndexError(project, indexKey = "lua.index.class.member")
             emptyList()
         }
     }
@@ -80,7 +82,10 @@ class LuaClassMemberIndex : IntStubIndexExtension<LuaClassMember>() {
                 
                 return ContainerUtil.process(validElements, processor)
             } catch (e: Exception) {
-                // 如果访问Stub索引失败，返回true继续处理其他索引
+                // 如果访问Stub索引失败，通知用户并返回true继续处理其他索引
+                // 尝试从异常消息中提取文件名
+                val fileName = extractFileNameFromException(e)
+                LuaIndexNotification.notifyIndexError(context.project, fileName, "lua.index.class.member")
                 return true
             }
         }
@@ -195,6 +200,17 @@ class LuaClassMemberIndex : IntStubIndexExtension<LuaClassMember>() {
         fun indexStub(indexSink: IndexSink, className: String, memberName: String) {
             indexSink.occurrence(StubKeys.CLASS_MEMBER, className.hashCode())
             indexSink.occurrence(StubKeys.CLASS_MEMBER, "$className*$memberName".hashCode())
+        }
+        
+        /**
+         * 从异常消息中提取文件名
+         */
+        private fun extractFileNameFromException(e: Exception): String? {
+            val message = e.message ?: return null
+            // 尝试匹配 "file = file://..." 或 "file://..." 模式
+            val filePattern = Regex("""file\s*=\s*file://([^,\s]+)""")
+            val match = filePattern.find(message)
+            return match?.groupValues?.get(1)
         }
     }
 }
