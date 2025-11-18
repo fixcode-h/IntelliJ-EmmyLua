@@ -1,5 +1,6 @@
 out
 build
+bin
 temp
 publish_tmp
 .idea

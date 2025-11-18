@@ -113,21 +113,38 @@ open class ClassMemberCompletionProvider : LuaCompletionProvider() {
                            completionResultSet: CompletionResultSet,
                            prefixMatcher: PrefixMatcher,
                            handlerProcessor: HandlerProcessor?) {
-        val context = SearchContext.get(project)
-        luaType.lazyInit(context)
-        luaType.processMembers(context) { curType, member ->
-            ProgressManager.checkCanceled()
-            member.name?.let {
-                if (prefixMatcher.prefixMatches(it) && curType.isVisibleInScope(project, contextTy, member.visibility)) {
-                    addMember(completionResultSet,
-                            member,
-                            curType,
-                            luaType,
-                            completionMode,
-                            project,
-                            handlerProcessor)
+        try {
+            val context = SearchContext.get(project)
+            luaType.lazyInit(context)
+            
+            var memberCount = 0
+            luaType.processMembers(context) { curType, member ->
+                // 性能优化：定期检查是否被取消（每50次检查一次，减少开销）
+                if (memberCount++ % 50 == 0) {
+                    ProgressManager.checkCanceled()
+                }
+                
+                member.name?.let {
+                    if (prefixMatcher.prefixMatches(it) && curType.isVisibleInScope(project, contextTy, member.visibility)) {
+                        try {
+                            addMember(completionResultSet,
+                                    member,
+                                    curType,
+                                    luaType,
+                                    completionMode,
+                                    project,
+                                    handlerProcessor)
+                        } catch (e: Exception) {
+                            // 单个成员补全失败，继续处理其他成员
+                        }
+                    }
                 }
             }
+        } catch (e: com.intellij.openapi.progress.ProcessCanceledException) {
+            // 用户取消操作，重新抛出
+            throw e
+        } catch (e: Throwable) {
+            // 其他异常静默处理
         }
     }
 

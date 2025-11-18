@@ -101,6 +101,33 @@ class LuaCompletionContributor : CompletionContributor() {
                         suggestWords = false
                         context.dummyIdentifier = ""
                     }
+                    // 检查是否在 local 关键字后面（定义变量名）
+                    // local Demo|  -- 这里应该禁用补全
+                    var prevLeaf = com.intellij.psi.util.PsiTreeUtil.prevLeaf(element, true)
+                    while (prevLeaf != null && prevLeaf.node.elementType == com.intellij.psi.TokenType.WHITE_SPACE) {
+                        prevLeaf = com.intellij.psi.util.PsiTreeUtil.prevLeaf(prevLeaf, true)
+                    }
+                    // 如果前面是 local 或者在 local 定义的变量列表中
+                    if (prevLeaf != null && prevLeaf.node.elementType == LuaTypes.LOCAL) {
+                        // 完全禁用补全
+                        context.dummyIdentifier = ""
+                        return
+                    }
+                    // 检查是否在 local 变量列表中的逗号后面
+                    // local a, Demo|
+                    if (prevLeaf != null && prevLeaf.node.elementType == LuaTypes.COMMA) {
+                        // 向上查找是否在 LocalDef 中
+                        val parent = com.intellij.psi.util.PsiTreeUtil.getParentOfType(element, LuaLocalDef::class.java)
+                        if (parent != null) {
+                            context.dummyIdentifier = ""
+                            return
+                        }
+                    }
+                    // 禁用在 = 号后面的单词补全
+                    // local a = |  -- 这里不要从文件中提取单词补全
+                    if (type == LuaTypes.ASSIGN) {
+                        suggestWords = false
+                    }
                 }
             }
         }
@@ -119,8 +146,32 @@ class LuaCompletionContributor : CompletionContributor() {
                 .afterLeaf(psiElement(LuaTypes.FUNCTION))
         private val IN_CLASS_METHOD_NAME = psiElement().andOr(IN_FUNC_NAME, AFTER_FUNCTION)
 
+        // 排除在定义局部变量名称时的补全（但保留在赋值表达式中的补全）
+        // local some = value  -- "some" 不补全，"value" 需要补全
+        // local a, b = c, d   -- "a", "b" 不补全，"c", "d" 需要补全
         private val IN_NAME_EXPR = psiElement(LuaTypes.ID)
                 .withParent(LuaNameExpr::class.java)
+                .andNot(
+                    // 方式1：检查是否在 NAME_LIST 中且在 LuaLocalDef 中
+                    psiElement()
+                        .inside(psiElement(LuaTypes.NAME_LIST))
+                        .inside(LuaLocalDef::class.java)
+                ).andNot(
+                    // 方式2：检查前面是否直接跟着 local 关键字（处理输入时 PSI 未完全构建的情况）
+                    psiElement()
+                        .afterLeafSkipping(
+                            psiElement().whitespace(),  // 跳过空格
+                            psiElement(LuaTypes.LOCAL)   // 前面是 local 关键字
+                        )
+                ).andNot(
+                    // 方式3：检查前面是否是逗号（在 local a, b 中输入 b 时）
+                    psiElement()
+                        .afterLeafSkipping(
+                            psiElement().whitespace(),
+                            psiElement(LuaTypes.COMMA)
+                        )
+                        .inside(LuaLocalDef::class.java)
+                )
 
         private val SHOW_OVERRIDE = psiElement()
                 .withParent(LuaClassMethodName::class.java)

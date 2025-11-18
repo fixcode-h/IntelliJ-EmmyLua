@@ -35,8 +35,13 @@ class LuaSuperClassIndex : StringStubIndexExtension<LuaDocTagClass>() {
         val instance = LuaSuperClassIndex()
 
         fun process(s: String, project: Project, scope: GlobalSearchScope, processor: Processor<LuaDocTagClass>): Boolean {
-            val c = StubIndex.getElements(StubKeys.SUPER_CLASS, s, project, scope, LuaDocTagClass::class.java)
-            return ContainerUtil.process(c, processor)
+            return try {
+                val c = StubIndex.getElements(StubKeys.SUPER_CLASS, s, project, scope, LuaDocTagClass::class.java)
+                ContainerUtil.process(c, processor)
+            } catch (e: Throwable) {
+                // 索引不同步时静默处理
+                true
+            }
         }
     }
 }

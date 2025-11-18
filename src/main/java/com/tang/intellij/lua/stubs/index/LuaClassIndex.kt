@@ -58,7 +58,6 @@ class LuaClassIndex : StringStubIndexExtension<LuaDocTagClass>() {
         }
 
         fun process(key: String, project: Project, scope: GlobalSearchScope, processor: Processor<LuaDocTagClass>): Boolean {
-            // 缓存验证：在访问Stub数据前验证文件完整性
             try {
                 val collection = StubIndex.getElements(StubKeys.CLASS, key, project, scope, LuaDocTagClass::class.java)
                 
@@ -73,8 +72,9 @@ class LuaClassIndex : StringStubIndexExtension<LuaDocTagClass>() {
                 }
                 
                 return ContainerUtil.process(validElements, processor)
-            } catch (e: Exception) {
-                // 如果访问Stub索引失败，返回true继续处理
+            } catch (e: Throwable) {
+                // 索引不同步时静默处理（常见于外部工具修改文件的场景）
+                // IntelliJ 会在后台自动重新索引
                 return true
             }
         }

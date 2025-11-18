@@ -235,13 +235,10 @@ fun resolveInFile(refName:String, pin: PsiElement, context: SearchContext?): Psi
     val fileUrl = containingFile.virtualFile?.url ?: containingFile.name
     val cacheKey = ResolveResultCache.createCacheKey(refName, fileUrl, pin.textOffset)
     
-    // 尝试从缓存获取结果
+    // 尝试从缓存获取结果（get方法会自动清理无效缓存）
     val cachedResult = ResolveResultCache.get(cacheKey)
-    if (cachedResult != null || ResolveResultCache.get(cacheKey) == null) {
-        // 如果缓存中有结果（包括null结果），直接返回
-        if (cachedResult != null && cachedResult.isValid) {
-            return cachedResult
-        }
+    if (cachedResult != null && cachedResult.isValid) {
+        return cachedResult
     }
     
     var ret: PsiElement? = null
@@ -272,8 +269,10 @@ fun resolveInFile(refName:String, pin: PsiElement, context: SearchContext?): Psi
         }
     }
     
-    // 缓存结果
-    ResolveResultCache.put(cacheKey, ret)
+    // 只有当结果有效时才缓存
+    if (ret != null && ret.isValid) {
+        ResolveResultCache.put(cacheKey, ret)
+    }
     return ret
 }
 
@@ -331,8 +330,11 @@ fun resolve(nameExpr: LuaNameExpr, context: SearchContext): PsiElement? {
             false
         })
         
-        // 缓存全局解析结果
-        ResolveResultCache.put(globalCacheKey, resolveResult)
+        // 只有当结果有效且不是当前元素时才缓存全局解析结果
+        val finalResult = resolveResult
+        if (finalResult != null && finalResult.isValid && finalResult !== nameExpr) {
+            ResolveResultCache.put(globalCacheKey, finalResult)
+        }
     }
 
     return resolveResult
