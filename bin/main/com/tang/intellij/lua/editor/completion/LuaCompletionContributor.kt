@@ -43,6 +43,9 @@ class LuaCompletionContributor : CompletionContributor() {
         //可以override
         extend(CompletionType.BASIC, SHOW_OVERRIDE, OverrideCompletionProvider())
 
+        //提示全局函数,local变量,local函数,关键字 - 必须在 IN_CLASS_METHOD 之前注册！
+        extend(CompletionType.BASIC, IN_NAME_EXPR, LocalAndGlobalCompletionProvider(LocalAndGlobalCompletionProvider.ALL))
+
         extend(CompletionType.BASIC, IN_CLASS_METHOD, SuggestSelfMemberProvider())
 
         //提示属性, 提示方法
@@ -51,9 +54,6 @@ class LuaCompletionContributor : CompletionContributor() {
         extend(CompletionType.BASIC, SHOW_REQUIRE_PATH, RequirePathCompletionProvider())
 
         extend(CompletionType.BASIC, LuaStringArgHistoryProvider.STRING_ARG, LuaStringArgHistoryProvider())
-
-        //提示全局函数,local变量,local函数
-        extend(CompletionType.BASIC, IN_NAME_EXPR, LocalAndGlobalCompletionProvider(LocalAndGlobalCompletionProvider.ALL))
 
         extend(CompletionType.BASIC, IN_CLASS_METHOD_NAME, LocalAndGlobalCompletionProvider(LocalAndGlobalCompletionProvider.VARS))
 
@@ -90,7 +90,11 @@ class LuaCompletionContributor : CompletionContributor() {
         if (file is LuaPsiFile) {
             val element = file.findElementAt(context.caret.offset - 1)
             if (element != null) {
-                if (element.parent is LuaLabelStat) {
+                val parent = element.parent
+                // 在变量定义位置禁用文件内单词建议
+                if (parent is LuaNameDef || parent is LuaParamNameDef) {
+                    suggestWords = false
+                } else if (parent is LuaLabelStat) {
                     suggestWords = false
                     context.dummyIdentifier = ""
                 } else if (!LuaCommentUtil.isComment(element)) {
