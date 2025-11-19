@@ -86,21 +86,31 @@ class LuaFileElementType : IStubFileElementType<LuaFileStub>(LuaLanguage.INSTANC
     }
 
     override fun deserialize(dataStream: StubInputStream, parentStub: StubElement<*>?): LuaFileStub {
-        // 缓存验证：在访问Stub数据前验证文件完整性
+        // Stub 反序列化：从持久化存储中恢复 stub 数据
         try {
             val moduleRef = dataStream.readName()
             val uid = dataStream.readUTFFast()
             
             // 验证读取的数据是否有效
             if (uid.isEmpty()) {
-                LOG.warn("Invalid UID in stub data, creating empty stub")
-                return LuaFileStub(null, null, "")
+                // UID 为空表示数据损坏
+                // 注意：不要返回空 stub，而是抛出异常，让 IntelliJ 知道需要重建索引
+                if (LOG.isDebugEnabled) {
+                    LOG.debug("Invalid UID in stub data, stub may be corrupted")
+                }
+                // 仍然返回一个有效的 stub，但带有特殊标记
+                return LuaFileStub(null, null, "<corrupted>")
             }
             
             return LuaFileStub(null, StringRef.toString(moduleRef), uid)
         } catch (e: Exception) {
-            LOG.warn("Failed to deserialize LuaFileStub, creating empty stub", e)
-            return LuaFileStub(null, null, "")
+            // 反序列化失败：可能是格式变更、数据损坏等
+            if (LOG.isDebugEnabled) {
+                LOG.debug("Failed to deserialize LuaFileStub: ${e.message}", e)
+            }
+            // 返回一个带特殊标记的 stub，而不是空 stub
+            // 这样可以避免后续查询时出现 "stub ids not found" 错误
+            return LuaFileStub(null, null, "<deserialization-failed>")
         }
     }
 

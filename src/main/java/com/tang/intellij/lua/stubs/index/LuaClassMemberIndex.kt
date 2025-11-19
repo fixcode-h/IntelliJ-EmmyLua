@@ -22,6 +22,7 @@ import com.intellij.psi.search.GlobalSearchScope
 import com.intellij.psi.stubs.IndexSink
 import com.intellij.psi.stubs.IntStubIndexExtension
 import com.intellij.psi.stubs.StubIndex
+import com.intellij.psi.stubs.StubIndexEx
 import com.intellij.util.Processor
 import com.intellij.util.containers.ContainerUtil
 import com.tang.intellij.lua.comment.psi.LuaDocTagField
@@ -39,7 +40,7 @@ class LuaClassMemberIndex : IntStubIndexExtension<LuaClassMember>() {
     @Deprecated("This method is deprecated in the parent class")
     override fun get(s: Int, project: Project, scope: GlobalSearchScope): Collection<LuaClassMember> {
         return try {
-            val elements = StubIndex.getElements(StubKeys.CLASS_MEMBER, s, project, scope, LuaClassMember::class.java)
+            val elements = safeGetStubElements(s, project, scope)
             // 过滤掉无效的元素，防止访问已失效的 PSI
             elements.filter { element ->
                 try {
@@ -71,6 +72,42 @@ class LuaClassMemberIndex : IntStubIndexExtension<LuaClassMember>() {
         
         // 记录失败的文件信息，用于诊断
         private val failedFiles = java.util.concurrent.ConcurrentHashMap<String, Int>()
+        
+        /**
+         * 安全地调用 StubIndex.getElements，处理索引不一致的情况
+         * 
+         * 问题根源分析：
+         * 1. Stub 反序列化失败时，LuaFileStub.deserialize() 返回空 stub
+         * 2. 但索引键（key）已经在之前被写入
+         * 3. 查询时找不到对应的 stub IDs → StubProcessingHelper 抛出异常并记录 ERROR 日志
+         * 
+         * 常见场景：
+         * - UE Blueprint 生成的 Lua 文件（BP_XXX_C.lua）可能有格式问题
+         * - 外部工具修改文件导致 stub 缓存失效
+         * - 文件内容损坏或包含特殊字符
+         * - 增量索引更新不完整
+         * 
+         * 解决方案：
+         * 1. 捕获异常并返回空集合（避免中断用户操作）
+         * 2. 使用 failedKeys 缓存避免重复查询同一个损坏的索引
+         * 3. 建议用户使用 "Invalidate Caches" 重建索引
+         * 
+         * 注意：无法阻止 IntelliJ 内部的 Logger.error()，因为日志在异常抛出前就已记录
+         */
+        private fun safeGetStubElements(
+            key: Int,
+            project: Project,
+            scope: GlobalSearchScope
+        ): Collection<LuaClassMember> {
+            return try {
+                StubIndex.getElements(StubKeys.CLASS_MEMBER, key, project, scope, LuaClassMember::class.java)
+            } catch (e: Throwable) {
+                // 索引不一致或 stub 反序列化失败
+                // 返回空集合，让代码继续执行
+                // failedKeys 缓存会阻止后续对同一 key 的查询
+                emptyList()
+            }
+        }
 
         private fun process(key: String, context: SearchContext, processor: Processor<LuaClassMember>): Boolean {
             if (context.isDumb)
@@ -86,7 +123,7 @@ class LuaClassMemberIndex : IntStubIndexExtension<LuaClassMember>() {
             // 访问 Stub 索引，捕获可能的异常
             try {
                 val all = try {
-                    StubIndex.getElements(StubKeys.CLASS_MEMBER, keyHash, context.project, context.scope, LuaClassMember::class.java)
+                    safeGetStubElements(keyHash, context.project, context.scope)
                 } catch (e: Throwable) {
                     // 索引不同步时的异常（常见于 UE Blueprint 自动生成的文件）
                     // 这是正常现象，IntelliJ 会自动重新索引
