@@ -33,3 +33,4 @@ jflex*.jar
 *.salive
 .trae/rules/project_rules.md
 LuaLS.github.io-main
+bin/
