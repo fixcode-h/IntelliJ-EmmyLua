@@ -73,9 +73,9 @@ class LuaCompletionContributor : CompletionContributor() {
         extend(CompletionType.BASIC, IN_CLASS_METHOD_NAME, 
                LocalAndGlobalCompletionProvider(LocalAndGlobalCompletionProvider.VARS))
         
-        // local 变量名定义位置：根据类型推断建议变量名
-        extend(CompletionType.BASIC, psiElement(LuaTypes.ID).withParent(LuaNameDef::class.java), 
-               SuggestLocalNameProvider())
+        // local 变量名定义位置：已禁用智能推荐（避免干扰用户输入）
+        // extend(CompletionType.BASIC, psiElement(LuaTypes.ID).withParent(LuaNameDef::class.java), 
+        //        SuggestLocalNameProvider())
         
         
         // ========== 特殊场景补全 ==========
@@ -108,6 +108,14 @@ class LuaCompletionContributor : CompletionContributor() {
     }
 
     override fun fillCompletionVariants(parameters: CompletionParameters, result: CompletionResultSet) {
+        // 优先检查：如果当前位置是 local 变量定义处，直接停止所有补全
+        // 使用基于 Token 的判断（比依赖 PSI 树更可靠，尤其是在代码不完整时）
+        val element = parameters.position
+        if (isInLocalVariableNamePosition(element)) {
+            result.stopHere()  // 告诉 IDE 停止处理后续的 Contributor
+            return  // 不执行 super.fillCompletionVariants，完全阻止补全
+        }
+        
         val session = CompletionSession(parameters, result)
         parameters.editor.putUserData(CompletionSession.KEY, session)
         super.fillCompletionVariants(parameters, result)
