@@ -1,0 +1,131 @@
+name: Build and Release on Push to Main
+
+# 触发工作流的事件
+on:
+  push:
+    branches:
+      - main
+
+# 全局环境变量
+env:
+  PLUGIN_XML_PATH: src/main/resources/META-INF/plugin.xml
+
+# 工作流运行的任务
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Calculate New Version
+        id: versioning
+        run: |
+          TRACKING_FILE="version.properties"
+          INITIAL_COMMIT="3639f63474c46a89fb15be2bd4cc4fac356d8e8c"
+          
+          if [ -f "$TRACKING_FILE" ]; then
+            source $TRACKING_FILE
+            LAST_COMMIT_HASH=$LAST_COMMIT
+            COMMIT_COUNT=$(git rev-list --count $LAST_COMMIT_HASH..${{ github.sha }})
+            
+            IFS='.' read -r -a V <<< "$LAST_VERSION"
+            MAJOR=${V[0]}; MINOR=${V[1]}; PATCH=${V[2]}
+            
+            CURRENT_YEAR=$(date +'%Y'); LAST_RELEASE_YEAR=$(date -d "$LAST_RELEASE_DATE" +'%Y')
+            
+            if [ "$CURRENT_YEAR" -gt "$LAST_RELEASE_YEAR" ]; then
+              MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0
+            else
+              if [ "$COMMIT_COUNT" -gt 15 ]; then
+                MINOR=$((MINOR + 1)); PATCH=0
+              else
+                PATCH=$((PATCH + 1))
+              fi
+            fi
+            NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+          else
+            NEW_VERSION=$(grep -oP '(?<=<version>).*?(?=</version>)' ${{ env.PLUGIN_XML_PATH }})
+            LAST_COMMIT_HASH=$INITIAL_COMMIT
+          fi
+          
+          echo "最终版本号为: $NEW_VERSION"
+          echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
+          echo "LAST_COMMIT_HASH=$LAST_COMMIT_HASH" >> $GITHUB_ENV
+
+      - name: Generate Release Notes
+        id: generate_notes
+        run: |
+          LOG_MD=$(git log ${{ env.LAST_COMMIT_HASH }}..${{ github.sha }} --pretty=format:'* %s (%h)' \
+            | grep -vE "Merge branch|Merge remote-tracking branch|Update auto-release.yml")
+          
+          if [ -z "$LOG_MD" ]; then
+            LOG_MD="* 本次更新没有包含新的有效代码提交。"
+          fi
+          
+          {
+            echo 'changelog<<EOF'
+            echo "$LOG_MD"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      # 第六步：执行 Gradle 打包命令
+      - name: Build with Gradle
+        run: ./gradlew buildPlugin -x buildSearchableOptions -PpluginVersion=${{ env.NEW_VERSION }}
+
+      # 第七步：创建 GitHub Release 并上传构建产物
+      - name: Create Release and Upload Asset
+        uses: softprops/action-gh-release@v2
+        with:
+          body: |
+            ## 自动构建产物 (v${{ env.NEW_VERSION }})
+            **✨ 本次更新包含以下提交:**
+            ${{ steps.generate_notes.outputs.changelog }}
+          tag_name: v${{ env.NEW_VERSION }}
+          name: Auto Build - v${{ env.NEW_VERSION }}
+          prerelease: false
+          files: build/distributions/*.zip
+
+      # 第八步：更新版本跟踪文件并提交回仓库 (已修复 Git 冲突问题)
+      - name: Update and Commit Version Tracking File
+        run: |
+          # 1. 配置 Git 用户信息
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+
+          # 2. 【核心修复】先拉取远程最新代码并 Rebase
+          # 即使远程有新提交，这一步会把你的工作区同步到最新状态
+          git pull --rebase origin main || echo "Rebase conflict, proceeding to overwrite..."
+
+          # 3. 强制写入本次构建的版本信息
+          # 无论刚才拉下来什么内容，都以本次构建生成的版本号为准
+          echo "LAST_VERSION=${{ env.NEW_VERSION }}" > version.properties
+          echo "LAST_COMMIT=${{ github.sha }}" >> version.properties
+          echo "LAST_RELEASE_DATE=$(date +'%Y-%m-%d')" >> version.properties
+
+          # 4. 提交更改
+          git add version.properties
+          
+          # 检查是否有变更（防止空提交报错）
+          if git diff --staged --quiet; then
+            echo "No changes to version.properties detected."
+          else
+            git commit -m "chore(release): 自动更新版本至 ${{ env.NEW_VERSION }}" -m "[skip ci]"
+            
+            # 5. 推送（带重试机制）
+            # 如果刚才这几毫秒内又有人提交了，再拉一次再推
+            git push origin main || (git pull --rebase origin main && git push origin main)
+          fi
