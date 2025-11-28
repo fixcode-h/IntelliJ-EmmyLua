@@ -20,6 +20,7 @@ import com.intellij.execution.Executor
 import com.intellij.execution.configurations.ConfigurationFactory
 import com.intellij.execution.configurations.ConfigurationType
 import com.intellij.execution.configurations.RunConfiguration
+import com.intellij.execution.configurations.RunConfigurationSingletonPolicy
 import com.intellij.execution.configurations.RunProfileState
 import com.intellij.execution.runners.ExecutionEnvironment
 import com.intellij.execution.runners.RunConfigurationWithSuppressedDefaultRunAction
@@ -68,8 +69,12 @@ class EmmyAttachDebuggerConfigurationFactory(val type: EmmyAttachConfigurationTy
     override fun createTemplateConfiguration(project: Project): RunConfiguration {
         return EmmyAttachDebugConfiguration(project, this)
     }
-    
+
     override fun getName(): String = "Emmy Attach Debugger"
+    
+    override fun getSingletonPolicy(): RunConfigurationSingletonPolicy {
+        return RunConfigurationSingletonPolicy.MULTIPLE_INSTANCE  // 允许多个实例并行运行
+    }
 }
 
 /**
@@ -78,16 +83,12 @@ class EmmyAttachDebuggerConfigurationFactory(val type: EmmyAttachConfigurationTy
 class EmmyAttachDebugConfiguration(project: Project, factory: EmmyAttachDebuggerConfigurationFactory) 
     : LuaRunConfiguration(project, factory), RunConfigurationWithSuppressedDefaultRunAction {
     
-    init {
-        name = "Emmy Attach Debug"
-    }
-    
     var pid: Int = 0  // 默认为0，通过进程选择对话框选择
     var processName: String = ""
     var winArch = EmmyWinArch.X64
     var captureLog: Boolean = false
     var autoAttachSingleProcess: Boolean = true
-    var filterUEProcesses: Boolean = false
+    var filterUEProcesses: Boolean = true  // 默认勾选过滤虚幻引擎进程
     var threadFilterBlacklist: List<String> = listOf("winlogon", "csrss", "wininit", "services")
     var logLevel: LogLevel = LogLevel.NORMAL  // 默认日志等级为1级（普通日志）
     var defaultName = ""
@@ -143,7 +144,7 @@ class EmmyAttachDebugConfiguration(project: Project, factory: EmmyAttachDebugger
         val autoAttachStr = JDOMExternalizerUtil.readField(element, "AUTO_ATTACH_SINGLE_PROCESS")
         autoAttachSingleProcess = autoAttachStr?.toBoolean() ?: true
         val filterUEStr = JDOMExternalizerUtil.readField(element, "FILTER_UE_PROCESSES")
-        filterUEProcesses = filterUEStr?.toBoolean() ?: false
+        filterUEProcesses = filterUEStr?.toBoolean() ?: true  // 默认勾选过滤虚幻引擎进程
         val blacklistStr = JDOMExternalizerUtil.readField(element, "THREAD_FILTER_BLACKLIST")
         threadFilterBlacklist = if (blacklistStr.isNullOrEmpty()) listOf() else blacklistStr.split(",")
         val logLevelStr = JDOMExternalizerUtil.readField(element, "LOG_LEVEL")
