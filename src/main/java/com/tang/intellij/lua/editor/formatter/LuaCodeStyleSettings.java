@@ -31,16 +31,16 @@ public class LuaCodeStyleSettings extends CustomCodeStyleSettings {
     public boolean SPACE_AROUND_BINARY_OPERATOR = true;
     public boolean SPACE_INSIDE_INLINE_TABLE = true;
 
-    public boolean ALIGN_TABLE_FIELD_ASSIGN = false;
+    public boolean ALIGN_TABLE_FIELD_ASSIGN = true;  // 默认勾选：对齐等号
 
     // 表格格式化设置
-    public boolean ALIGN_TABLE_FIELDS = false;
+    public boolean ALIGN_TABLE_FIELDS = true;  // 默认勾选：对齐表字段
     public boolean WRAP_TABLE_FIELDS = false;
     public boolean SPACE_BETWEEN_TABLE_FIELDS = true;
     public boolean SPACE_AFTER_COMMA_IN_TABLE = true;
 
     // 注释对齐设置
-    public boolean ALIGN_LINE_COMMENTS = false;
+    public boolean ALIGN_LINE_COMMENTS = true;  // 默认勾选：对齐行注释
     public boolean SPACE_BEFORE_LINE_COMMENT = true;
 
     // require语句设置
@@ -92,7 +92,7 @@ public class LuaCodeStyleSettings extends CustomCodeStyleSettings {
         }
     }
 
-    public int VARIABLE_ALIGNMENT_OPTION = VariableAlignmentOption.DO_NOT_ALIGN.getValue();
+    public int VARIABLE_ALIGNMENT_OPTION = VariableAlignmentOption.ALIGN_CONTIGUOUS_BLOCKS.getValue();  // 默认：对齐连续块中的变量
 
     LuaCodeStyleSettings(CodeStyleSettings container) {
         super(LuaLanguage.INSTANCE.getID(), container);
