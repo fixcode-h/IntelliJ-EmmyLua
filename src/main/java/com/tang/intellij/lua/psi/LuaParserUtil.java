@@ -116,6 +116,14 @@ public class LuaParserUtil extends GeneratedParserUtilBase {
     private static TokenSet THEN_SKIPS2 = TokenSet.create(ELSE, ELSEIF);
     private static TokenSet BRACE_L_SET = TokenSet.create(LCURLY, LBRACK, LPAREN);
     private static TokenSet BRACE_R_SET = TokenSet.create(RCURLY, RBRACK, RPAREN);
+    
+    /**
+     * 恢复集合：一旦遇到这些词，立即停止当前 Block 的贪婪匹配
+     * 主要用于防止因缺少 end 导致后续代码被错误折叠
+     * 包含 FUNCTION 关键字：当遇到新函数定义时，即使上一个函数缺少 end，
+     * 也要强制结束当前 Block 的解析，保护后续代码不被吞噬
+     */
+    private static TokenSet RECOVERY_SET = TokenSet.create(FUNCTION);
 
     private static boolean matchStart(boolean advanced, PsiBuilder builder, int level, IElementType begin) {
         if (begin == DO) {
@@ -186,24 +194,68 @@ public class LuaParserUtil extends GeneratedParserUtilBase {
         IElementType type = builder.getTokenType();
 
         while (true) {
+            // 1. 基础结束条件：文件末尾
             if (type == null || builder.eof()) {
                 return false;
             }
 
+            // 2. 【核心优化】止损策略：防止吞噬后续代码
+            // 如果遇到了 FUNCTION 关键字，且它不是当前我们正在等待的结束符（types），
+            // 那么大概率是用户开始写下一个函数了，但上一个函数忘了写 end。
+            // 此时直接返回 false，强制结束当前 Block 的解析，防止吞噬后续代码。
+            //
+            // 注：这会牺牲掉 "function A() function B() end end" 这种嵌套定义的折叠支持，
+            // 但换来的是编辑过程中极其稳定的体验。对于 LazyBlock 来说，这是绝对值得的 trade-off。
+            if (RECOVERY_SET.contains(type) && !types.contains(type)) {
+                return false;
+            }
+
+            // 3. 循环匹配逻辑
             while (!skips.contains(type)) {
+                // 3.1 找到了预期的结束符 (如 end, until, elseif...) -> 成功
                 if (types.contains(type)) {
                     if (level != 0)
                         builder.advanceLexer();
                     return true;
                 }
-                // bug fix https://github.com/EmmyLua/IntelliJ-EmmyLua/issues/276
-                // todo: optimize it
-                if (type == UNTIL)
+
+                // 3.2 尝试解析嵌套结构 (如内部的 if, do, repeat)
+                // bug fix: https://github.com/EmmyLua/IntelliJ-EmmyLua/issues/276
+                if (type == UNTIL) {
                     return true;
+                }
+
+                // 注意：由于我们在步骤 2 已经拦截了 FUNCTION，
+                // 如果 matchStart 里包含 FUNCTION 的处理，这里实际上不会再进入嵌套函数的解析。
+                // 这正是我们想要的效果：视嵌套函数为平级结构，从而保护后续代码。
                 boolean isMatched = matchStart(false, builder, level + 1, type);
-                if (!isMatched)
-                    break;
-                type = builder.getTokenType();
+                
+                if (isMatched) {
+                    // 如果嵌套结构成功解析（例如内部的 if ... end），重新获取 type 继续循环
+                    type = builder.getTokenType();
+                    
+                    // 【二次检查】防止 matchStart 消耗完后，紧接着就是一个 FUNCTION
+                    // 例如： if cond then ... end function B() ...
+                    if (RECOVERY_SET.contains(type) && !types.contains(type)) {
+                        return false;
+                    }
+                } else {
+                    // 3.3 如果不是嵌套结构，准备消耗当前 Token
+                    
+                    // 【三次检查】在暴力 advance 之前，最后确认一次
+                    // 虽然步骤 2 已经检查过，但为了逻辑严密防止漏网之鱼（如 skips 逻辑变动）
+                    if (RECOVERY_SET.contains(type)) {
+                        return false;
+                    }
+                    
+                    builder.advanceLexer();
+                    type = builder.getTokenType();
+                }
+                
+                // 循环内检查 EOF
+                if (type == null || builder.eof()) {
+                    return false;
+                }
             }
 
             builder.advanceLexer();
