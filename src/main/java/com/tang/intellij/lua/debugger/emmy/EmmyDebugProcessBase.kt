@@ -56,13 +56,16 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
         // 在后台线程执行文件读取操作，避免EDT违规
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
+                // 清理旧会话的断点状态，确保新会话从干净状态开始
+                resetBreakpointState()
+                
                 // send init
                 val code = readPluginResource("debugger/emmy/emmyHelper.lua")
                 if (code != null) {
                     val extList = LuaFileManager.extensions
                     transporter?.send(InitMessage(code, extList))
                 }
-                // send bps
+                // send bps - 重新同步所有断点到调试器端
                 val breakpoints = XDebuggerManager.getInstance(session.project)
                     .breakpointManager
                     .getBreakpoints(LuaLineBreakpointType::class.java)
@@ -76,6 +79,33 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
             } catch (e: Exception) {
                 error("发送初始化请求失败: ${e.message}")
             }
+        }
+    }
+    
+    /**
+     * 重置断点状态，用于新调试会话开始时清理旧状态
+     * 这确保了：
+     * 1. ID计数器从0开始，避免ID无限增长
+     * 2. 断点映射被清空，避免残留的旧断点数据
+     * 3. 所有断点的userData中的ID被清除，确保重新注册时获得正确的新ID
+     */
+    private fun resetBreakpointState() {
+        // 清空本地断点映射
+        breakpoints.clear()
+        // 重置ID计数器
+        idCounter = 0
+        
+        // 清除所有断点的旧ID userData
+        // 这很重要，因为断点对象是IDE持久化的，userData会跨会话保留
+        try {
+            val allBreakpoints = XDebuggerManager.getInstance(session.project)
+                .breakpointManager
+                .getBreakpoints(LuaLineBreakpointType::class.java)
+            allBreakpoints.forEach { breakpoint ->
+                breakpoint.putUserData(ID, null)
+            }
+        } catch (e: Exception) {
+            // 忽略清理userData时的异常，不影响主流程
         }
     }
     
