@@ -20,12 +20,9 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.PersistentStateComponent
 import com.intellij.openapi.components.State
 import com.intellij.openapi.components.Storage
-import com.intellij.openapi.project.Project
-import com.intellij.openapi.project.ProjectManager
 import com.intellij.util.xmlb.XmlSerializerUtil
 import com.tang.intellij.lua.Constants
 import com.tang.intellij.lua.lang.LuaLanguageLevel
-import java.io.File
 import java.nio.charset.Charset
 
 /**
@@ -81,26 +78,13 @@ class LuaSettings : PersistentStateComponent<LuaSettings> {
      */
     var languageLevel = LuaLanguageLevel.LUA53
 
-    /**
-     * Project type for Lua development
-     */
-    var projectType = LuaProjectType.UNREAL_ENGINE
 
-    /**
-     * UE project file path (.uproject)
-     */
-    var ueProjectPath = ""
 
     /**
      * Custom type registry script path (appended to emmyHelper.lua)
      * 自定义类型注册脚本路径（追加到 emmyHelper.lua 末尾执行）
      */
     var customTypeRegistryPath = ""
-
-    /**
-     * Enable UE IntelliSense generation
-     */
-    var enableUEIntelliSense = true
 
     /**
      * UE进程名称列表，用于调试器进程过滤
@@ -187,66 +171,6 @@ class LuaSettings : PersistentStateComponent<LuaSettings> {
         set(value) {
             debugProcessBlacklist = value.split(";").filter { it.isNotBlank() }.toTypedArray()
         }
-
-    /**
-     * 自动检测当前项目中的.uproject文件路径
-     * 仅在判定为Lua项目且IDEA打开时在后台执行查找
-     */
-    fun autoDetectUProjectPath(): String? {
-        // 检查是否为Lua项目且启用了UE智能感知
-        if (projectType != LuaProjectType.UNREAL_ENGINE) {
-            return null
-        }
-        
-        // 获取当前打开的项目
-        val openProjects = ProjectManager.getInstance().openProjects
-        if (openProjects.isEmpty()) {
-            return null
-        }
-        
-        // 遍历所有打开的项目，查找.uproject文件
-        for (project in openProjects) {
-            val projectPath = project.basePath ?: continue
-            val uprojectPath = findUProjectFileRecursively(File(projectPath))
-            if (uprojectPath != null) {
-                return uprojectPath
-            }
-        }
-        
-        return null
-    }
-    
-    /**
-     * 递归向上查找.uproject文件
-     * 仅在每个文件夹的根目录查找
-     */
-    private fun findUProjectFileRecursively(directory: File): String? {
-        var currentDir = directory
-        
-        // 向上递归查找，最多查找10层以避免无限循环
-        var depth = 0
-        while (currentDir.exists() && currentDir.isDirectory && depth < 10) {
-            // 在当前目录查找.uproject文件
-            val uprojectFiles = currentDir.listFiles { file ->
-                file.isFile && file.name.endsWith(".uproject")
-            }
-            
-            if (uprojectFiles != null && uprojectFiles.isNotEmpty()) {
-                // 返回第一个找到的.uproject文件的绝对路径
-                return uprojectFiles[0].absolutePath
-            }
-            
-            // 移动到父目录
-            val parentDir = currentDir.parentFile
-            if (parentDir == null || parentDir == currentDir) {
-                break
-            }
-            currentDir = parentDir
-            depth++
-        }
-        
-        return null
-    }
 
     companion object {
 
