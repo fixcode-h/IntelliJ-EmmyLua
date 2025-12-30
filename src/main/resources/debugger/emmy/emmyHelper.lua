@@ -3,6 +3,89 @@
 -- 整合各子模块，提供统一的 API 接口
 -------------------------------------------------------------------------------
 
+-------------------------------------------------------------------------------
+-- EmmyLog: 日志系统
+-- 提供统一的日志输出接口，支持日志级别和全局开关
+-------------------------------------------------------------------------------
+
+---@class EmmyLog
+---@field enableLog boolean 全局日志开关
+---@field minLogLevel number 最低日志级别
+local EmmyLog = {
+    enableLog = true,  -- 全局开关，默认开启
+    minLogLevel = 3,   -- 默认 Info 级别
+}
+
+---@enum LogLevel
+EmmyLog.LogLevel = {
+    Debug = 2,
+    Info = 3,
+    Display = 4,
+    Short = 5,
+    CallerInfo = 6,
+    Warning = 7,
+    Error = 8,
+    Fatal = 9
+}
+
+-- 日志标识
+_G.EmmyLuaLogType = "[EmmyLua]"
+
+--- 日志级别名称映射
+local LogLevelNames = {
+    [2] = "DEBUG",
+    [3] = "INFO",
+    [4] = "DISPLAY",
+    [5] = "SHORT",
+    [6] = "CALLER",
+    [7] = "WARN",
+    [8] = "ERROR",
+    [9] = "FATAL"
+}
+
+--- 输出日志
+---@param level number 日志级别
+---@param ... any 日志内容
+function EmmyLog.log(level, ...)
+    if not EmmyLog.enableLog then
+        return
+    end
+    if level < EmmyLog.minLogLevel then
+        return
+    end
+    local levelName = LogLevelNames[level] or "UNKNOWN"
+    print(_G.EmmyLuaLogType, levelName, ...)
+end
+
+--- Debug 级别日志
+---@param ... any 日志内容
+function EmmyLog.debug(...)
+    EmmyLog.log(EmmyLog.LogLevel.Debug, ...)
+end
+
+--- Info 级别日志
+---@param ... any 日志内容
+function EmmyLog.info(...)
+    EmmyLog.log(EmmyLog.LogLevel.Info, ...)
+end
+
+--- Warning 级别日志
+---@param ... any 日志内容
+function EmmyLog.warn(...)
+    EmmyLog.log(EmmyLog.LogLevel.Warning, ...)
+end
+
+--- Error 级别日志
+---@param ... any 日志内容
+function EmmyLog.error(...)
+    EmmyLog.log(EmmyLog.LogLevel.Error, ...)
+end
+
+-- 注册到全局变量
+rawset(_G, 'EmmyLog', EmmyLog)
+
+-------------------------------------------------------------------------------
+
 ---@class emmy
 ---@field createNode fun(): Variable
 ---@field registerProcessor fun(typeName: string, processor: UserdataProcessor): void
@@ -736,24 +819,56 @@ local unluaDebugger = {
     
     -- 动态注册 API（委托给子模块）
     registerProcessor = function(typeName, processor)
-        HandlerRegistry:register(typeName, processor)
+        local ok, err = pcall(function()
+            HandlerRegistry:register(typeName, processor)
+        end)
+        if not ok then
+            EmmyLog.error("registerProcessor failed:", typeName, err)
+        end
+        return ok
     end,
     
     unregisterProcessor = function(typeName)
-        HandlerRegistry:unregister(typeName)
+        local ok, err = pcall(function()
+            HandlerRegistry:unregister(typeName)
+        end)
+        if not ok then
+            EmmyLog.error("unregisterProcessor failed:", typeName, err)
+        end
+        return ok
     end,
     
     getProcessorBase = function()
-        return HandlerRegistry:getProcessorBase()
+        local ok, result = pcall(function()
+            return HandlerRegistry:getProcessorBase()
+        end)
+        if not ok then
+            EmmyLog.error("getProcessorBase failed:", result)
+            return nil
+        end
+        return result
     end,
     
     -- 代理表识别函数注册 API
     registerProxyRecognizer = function(recognizer, priority)
-        ProxyRegistry:register(recognizer, priority)
+        local ok, err = pcall(function()
+            ProxyRegistry:register(recognizer, priority)
+        end)
+        if not ok then
+            EmmyLog.error("registerProxyRecognizer failed:", err)
+        end
+        return ok
     end,
     
     unregisterProxyRecognizer = function(recognizer)
-        return ProxyRegistry:unregister(recognizer)
+        local ok, result = pcall(function()
+            return ProxyRegistry:unregister(recognizer)
+        end)
+        if not ok then
+            EmmyLog.error("unregisterProxyRecognizer failed:", result)
+            return false
+        end
+        return result
     end
 }
 
