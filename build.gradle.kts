@@ -267,6 +267,12 @@ project(":") {
                 jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.fromTarget(buildVersionData.jvmTarget))
             }
         }
+        
+        // 确保 instrumentCode 在 Java 和 Kotlin 编译之后运行
+        // 解决 "Class to bind does not exist" 警告
+        named("instrumentCode") {
+            dependsOn("compileJava", "compileKotlin")
+        }
 
         patchPluginXml {// 明确声明输入，确保 Gradle 理解任务依赖关系
             inputs.dir("src/main/resources/debugger")

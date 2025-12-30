@@ -92,9 +92,10 @@ class LuaSettings : PersistentStateComponent<LuaSettings> {
     var ueProjectPath = ""
 
     /**
-     * Custom Lua file path for emmyHelper.lua
+     * Custom type registry script path (appended to emmyHelper.lua)
+     * 自定义类型注册脚本路径（追加到 emmyHelper.lua 末尾执行）
      */
-    var customEmmyHelperPath = ""
+    var customTypeRegistryPath = ""
 
     /**
      * Enable UE IntelliSense generation
@@ -134,6 +135,15 @@ class LuaSettings : PersistentStateComponent<LuaSettings> {
      * 文件名替换占位符（默认为 ${FILE_NAME}）
      */
     var fileNamePlaceholder: String = "\${FILE_NAME}"
+
+    /**
+     * 开发模式：从项目源码目录自动读取 Lua 调试脚本
+     * 启用后，emmyHelper.lua 等文件将从项目的 src/main/resources 目录读取，而非从插件 JAR 包中读取
+     * 这样修改 Lua 脚本后无需重新打包插件即可生效
+     * 
+     * 开发模式会自动检测项目根目录下的 src/main/resources 目录
+     */
+    var enableDevMode: Boolean = false
 
     override fun getState(): LuaSettings {
         return this

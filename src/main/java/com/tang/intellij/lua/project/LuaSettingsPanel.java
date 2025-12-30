@@ -72,12 +72,13 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
     private JCheckBox enableUEIntelliSenseCheckBox;
     private JTextField ueProcessNamesField;
     private JTextField debugProcessBlacklistField;
-    private JTextField customEmmyHelperPathField;
-    private JButton browseCustomEmmyHelperButton;
+    private JTextField customTypeRegistryPathField;
+    private JButton browseCustomTypeRegistryButton;
     private JCheckBox enableCustomFileTemplateCheckBox;
     private JTextArea customFileTemplateTextArea;
     private JCheckBox enableFileNameReplacementCheckBox;
     private JTextField fileNamePlaceholderField;
+    private JCheckBox enableDevModeCheckBox;
 
     public LuaSettingsPanel() {
         this.settings = LuaSettings.Companion.getInstance();
@@ -126,25 +127,28 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
             debugProcessBlacklistField.setText("");
         }
         
-        // 自定义EmmyHelper.lua路径设置
-        customEmmyHelperPathField.setText(settings.getCustomEmmyHelperPath());
+        // 自定义类型注册脚本路径设置
+        customTypeRegistryPathField.setText(settings.getCustomTypeRegistryPath());
         
         // 文件模板设置
         enableCustomFileTemplateCheckBox.setSelected(settings.getEnableCustomFileTemplate());
         customFileTemplateTextArea.setText(settings.getCustomFileTemplate());
         enableFileNameReplacementCheckBox.setSelected(settings.getEnableFileNameReplacement());
         fileNamePlaceholderField.setText(settings.getFileNamePlaceholder());
+        
+        // 开发模式设置
+        enableDevModeCheckBox.setSelected(settings.getEnableDevMode());
 
-        //browse custom emmy helper button action
-        browseCustomEmmyHelperButton.addActionListener(e -> {
+        //browse custom type registry button action
+        browseCustomTypeRegistryButton.addActionListener(e -> {
             FileChooserDescriptor descriptor = new FileChooserDescriptor(true, false, false, false, false, false)
                     .withFileFilter(file -> file.getName().endsWith(".lua"));
-            descriptor.setTitle("Select Custom EmmyHelper.lua File");
-            descriptor.setDescription("Choose a custom Lua file to use as EmmyHelper");
+            descriptor.setTitle("Select Custom Type Registry Script");
+            descriptor.setDescription("Choose a Lua file containing custom type registrations (will be appended to emmyHelper.lua)");
             
             VirtualFile selectedFile = FileChooser.chooseFile(descriptor, null, null);
             if (selectedFile != null) {
-                customEmmyHelperPathField.setText(selectedFile.getPath());
+                customTypeRegistryPathField.setText(selectedFile.getPath());
             }
         });
 
@@ -229,11 +233,12 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
                 settings.getEnableUEIntelliSense() != enableUEIntelliSenseCheckBox.isSelected() ||
                 !Arrays.equals(settings.getUeProcessNames(), getProcessNamesFromTextField()) ||
                 !Arrays.equals(settings.getDebugProcessBlacklist(), getDebugProcessBlacklistFromTextField()) ||
-                !StringUtil.equals(settings.getCustomEmmyHelperPath(), customEmmyHelperPathField.getText()) ||
+                !StringUtil.equals(settings.getCustomTypeRegistryPath(), customTypeRegistryPathField.getText()) ||
                 settings.getEnableCustomFileTemplate() != enableCustomFileTemplateCheckBox.isSelected() ||
                 !StringUtil.equals(settings.getCustomFileTemplate(), customFileTemplateTextArea.getText()) ||
                 settings.getEnableFileNameReplacement() != enableFileNameReplacementCheckBox.isSelected() ||
                 !StringUtil.equals(settings.getFileNamePlaceholder(), fileNamePlaceholderField.getText()) ||
+                settings.getEnableDevMode() != enableDevModeCheckBox.isSelected() ||
                 !Arrays.equals(settings.getAdditionalSourcesRoot(), additionalRoots.getRoots(), String::compareTo);
     }
 
@@ -260,14 +265,18 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
         settings.setUeProjectPath(ueProjectPathField.getText());
         settings.setEnableUEIntelliSense(enableUEIntelliSenseCheckBox.isSelected());
         
-        //Custom EmmyHelper path
-        settings.setCustomEmmyHelperPath(customEmmyHelperPathField.getText());
+        //Custom type registry path
+        settings.setCustomTypeRegistryPath(customTypeRegistryPathField.getText());
         
         // 文件模板设置
         settings.setEnableCustomFileTemplate(enableCustomFileTemplateCheckBox.isSelected());
         settings.setCustomFileTemplate(customFileTemplateTextArea.getText());
         settings.setEnableFileNameReplacement(enableFileNameReplacementCheckBox.isSelected());
         settings.setFileNamePlaceholder(fileNamePlaceholderField.getText());
+        
+        // 开发模式设置
+        settings.setEnableDevMode(enableDevModeCheckBox.isSelected());
+        
         // 将逗号分隔的字符串转换为进程名称数组
         String processNamesText = ueProcessNamesField.getText().trim();
         if (processNamesText.isEmpty()) {
@@ -360,14 +369,17 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
             ueProcessNamesField.setText("");
         }
         
-        // Reset custom EmmyHelper path
-        customEmmyHelperPathField.setText(settings.getCustomEmmyHelperPath());
+        // Reset custom type registry path
+        customTypeRegistryPathField.setText(settings.getCustomTypeRegistryPath());
         
         // Reset 文件模板设置
         enableCustomFileTemplateCheckBox.setSelected(settings.getEnableCustomFileTemplate());
         customFileTemplateTextArea.setText(settings.getCustomFileTemplate());
         enableFileNameReplacementCheckBox.setSelected(settings.getEnableFileNameReplacement());
         fileNamePlaceholderField.setText(settings.getFileNamePlaceholder());
+        
+        // Reset 开发模式设置
+        enableDevModeCheckBox.setSelected(settings.getEnableDevMode());
     }
 
     private int getTooLargerFileThreshold() {

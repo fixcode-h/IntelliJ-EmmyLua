@@ -33,7 +33,7 @@ public class LuaIcons {
         return IconLoader.getIcon(path, LuaIcons.class);
     }
 
-    public static final Icon FILE = getIcon("/icons/lua.png");
+    public static final Icon FILE = getIcon("/icons/lua.svg");
     public static final Icon CSHARP = getIcon("/icons/csharp.png");
     public static final Icon CPP = getIcon("/icons/cpp.png");
     public static final Icon CLASS = AllIcons.Nodes.Class;

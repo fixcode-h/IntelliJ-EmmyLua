@@ -396,24 +396,6 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
      */
     private fun readPluginResource(path: String): String? {
         return try {
-            // 如果是emmyHelper.lua文件，优先使用用户设置的自定义路径
-            if (path == "debugger/emmy/emmyHelper.lua") {
-                val settings = LuaSettings.instance
-                val customPath = settings.customEmmyHelperPath
-                if (!customPath.isNullOrBlank()) {
-                    val customFile = File(customPath)
-                    if (customFile.exists() && customFile.isFile()) {
-                        val content = customFile.readText()
-                        logWithLevel("✅ 成功从自定义路径读取EmmyHelper: $customPath", LogLevel.DEBUG)
-                        logWithLevel("📝 内容长度: ${content.length} 字符", LogLevel.DEBUG)
-                        logWithLevel("📋 内容预览: ${content.take(200)}...", LogLevel.DEBUG)
-                        return content
-                    } else {
-                        logWithLevel("⚠️ 自定义EmmyHelper路径无效，回退到默认路径: $customPath", LogLevel.DEBUG)
-                    }
-                }
-            }
-            
             // 首先尝试使用类加载器从JAR包中读取
             val classLoader = LuaFileUtil::class.java.classLoader
             val resource = classLoader.getResource(path)
@@ -422,7 +404,6 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
                 logWithLevel("✅ 成功从类加载器读取资源: $path", LogLevel.DEBUG)
                 logWithLevel("📄 资源URL: ${resource}", LogLevel.DEBUG)
                 logWithLevel("📝 内容长度: ${content.length} 字符", LogLevel.DEBUG)
-                logWithLevel("📋 内容预览: ${content.take(200)}...", LogLevel.DEBUG)
                 content
             } else {
                 // 如果类加载器无法找到，尝试使用LuaFileUtil的方法
@@ -431,7 +412,6 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
                     val content = File(filePath).readText()
                     logWithLevel("✅ 成功从文件系统读取资源: $filePath", LogLevel.DEBUG)
                     logWithLevel("📝 内容长度: ${content.length} 字符", LogLevel.DEBUG)
-                    logWithLevel("📋 内容预览: ${content.take(200)}...", LogLevel.DEBUG)
                     content
                 } else {
                     logWithLevel("❌ 无法找到资源: $path", LogLevel.ERROR, ConsoleViewContentType.ERROR_OUTPUT)
@@ -454,12 +434,12 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
         // 在后台线程执行文件读取操作，避免EDT违规
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
-                // 1. 发送初始化脚本（emmyHelper.lua）
-                val code = readPluginResource("debugger/emmy/emmyHelper.lua")
+                // 1. 发送初始化脚本（合并后的 emmyHelper）
+                val code = readAndMergeEmmyHelperFiles()
                 if (code != null) {
                     val extensions = com.tang.intellij.lua.psi.LuaFileManager.extensions
                     transporter?.send(InitMessage(code, extensions))
-                    logWithLevel("📤 发送InitReq消息（emmyHelper.lua）", LogLevel.DEBUG)
+                    logWithLevel("📤 发送InitReq消息（合并后的emmyHelper）", LogLevel.DEBUG)
                 } else {
                     logWithLevel("❌ 无法读取emmyHelper.lua文件", LogLevel.ERROR, ConsoleViewContentType.ERROR_OUTPUT)
                 }
@@ -485,6 +465,59 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
                 this@EmmyAttachDebugProcess.error("初始化请求失败: ${e.message}")
             }
         }
+    }
+    
+    /**
+     * 读取 emmyHelper.lua 文件并拼接用户自定义脚本
+     * 
+     * emmyHelper.lua 已整合所有子模块（ProxyRegistry、HandlerRegistry、TypeMatcher）
+     * 只需读取单一文件，然后追加 customTypeRegistryPath 指定的用户自定义脚本
+     */
+    private fun readAndMergeEmmyHelperFiles(): String? {
+        val stringBuilder = StringBuilder()
+        
+        // 1. 读取主入口文件（已包含所有子模块）
+        val mainContent = readPluginResource("debugger/emmy/emmyHelper.lua")
+        if (mainContent != null) {
+            stringBuilder.append(mainContent)
+            stringBuilder.append("\n\n")
+            logWithLevel("✅ 已加载 emmyHelper.lua（已整合所有子模块）", LogLevel.DEBUG)
+        } else {
+            logWithLevel("❌ 无法读取 emmyHelper.lua", LogLevel.ERROR)
+            return null
+        }
+        
+        // 2. 读取类型注册脚本（用户自定义或内置默认）
+        val settings = LuaSettings.instance
+        val customPath = settings.customTypeRegistryPath
+        if (!customPath.isNullOrBlank()) {
+            // 使用用户自定义脚本
+            val customFile = File(customPath)
+            if (customFile.exists() && customFile.isFile) {
+                try {
+                    val customContent = customFile.readText()
+                    stringBuilder.append("-- ========== Custom Type Registry: ${customFile.name} ==========\n")
+                    stringBuilder.append(customContent)
+                    stringBuilder.append("\n")
+                    logWithLevel("✅ 已追加自定义类型注册脚本: $customPath", LogLevel.DEBUG)
+                } catch (e: Exception) {
+                    logWithLevel("⚠️ 读取自定义类型注册脚本失败: ${e.message}", LogLevel.DEBUG)
+                }
+            } else {
+                logWithLevel("⚠️ 自定义类型注册脚本路径无效: $customPath", LogLevel.DEBUG)
+            }
+        } else {
+            // 使用内置默认脚本
+            val defaultContent = readPluginResource("debugger/emmy/emmyHelper_ue.lua")
+            if (defaultContent != null) {
+                stringBuilder.append("-- ========== Default Type Registry: emmyHelper_ue.lua ==========\n")
+                stringBuilder.append(defaultContent)
+                stringBuilder.append("\n")
+                logWithLevel("✅ 已加载内置默认类型注册脚本: emmyHelper_ue.lua", LogLevel.DEBUG)
+            }
+        }
+        
+        return stringBuilder.toString()
     }
 }
 

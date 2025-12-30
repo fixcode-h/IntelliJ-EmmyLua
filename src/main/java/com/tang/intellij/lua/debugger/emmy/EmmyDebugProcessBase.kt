@@ -59,8 +59,8 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
                 // 清理旧会话的断点状态，确保新会话从干净状态开始
                 resetBreakpointState()
                 
-                // send init
-                val code = readPluginResource("debugger/emmy/emmyHelper.lua")
+                // send init - 读取并合并所有 emmyHelper 相关文件
+                val code = readAndMergeEmmyHelperFiles()
                 if (code != null) {
                     val extList = LuaFileManager.extensions
                     transporter?.send(InitMessage(code, extList))
@@ -110,50 +110,99 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
     }
     
     /**
-     * 读取插件资源文件内容，支持JAR包和文件系统
+     * 读取 emmyHelper.lua 文件并拼接用户自定义脚本
+     * 
+     * emmyHelper.lua 已整合所有子模块（ProxyRegistry、HandlerRegistry、TypeMatcher）
+     * 只需读取单一文件，然后追加 customTypeRegistryPath 指定的用户自定义脚本
+     */
+    private fun readAndMergeEmmyHelperFiles(): String? {
+        val stringBuilder = StringBuilder()
+        
+        // 1. 读取主入口文件（已包含所有子模块）
+        val mainContent = readPluginResource("debugger/emmy/emmyHelper.lua")
+        if (mainContent != null) {
+            stringBuilder.append(mainContent)
+            stringBuilder.append("\n\n")
+        } else {
+            return null
+        }
+        
+        // 2. 读取类型注册脚本（用户自定义或内置默认）
+        val settings = LuaSettings.instance
+        val customPath = settings.customTypeRegistryPath
+        if (!customPath.isNullOrBlank()) {
+            // 使用用户自定义脚本
+            val customFile = File(customPath)
+            if (customFile.exists() && customFile.isFile) {
+                try {
+                    val customContent = customFile.readText()
+                    stringBuilder.append("-- ========== Custom Type Registry: ${customFile.name} ==========\n")
+                    stringBuilder.append(customContent)
+                    stringBuilder.append("\n")
+                } catch (e: Exception) {
+                    // 忽略读取失败
+                }
+            }
+        } else {
+            // 使用内置默认脚本
+            val defaultContent = readPluginResource("debugger/emmy/emmyHelper_ue.lua")
+            if (defaultContent != null) {
+                stringBuilder.append("-- ========== Default Type Registry: emmyHelper_ue.lua ==========\n")
+                stringBuilder.append(defaultContent)
+                stringBuilder.append("\n")
+            }
+        }
+        
+        return stringBuilder.toString()
+    }
+    
+    /**
+     * 读取插件资源文件内容，支持开发模式、JAR包和文件系统
+     * 
+     * 开发模式路径自动检测逻辑：
+     * 1. 获取当前项目根目录 (session.project.basePath)
+     * 2. 检查是否存在 src/main/resources 目录
+     * 3. 如果存在且开发模式已启用，则从该目录读取
+     * 4. 否则回退到从 JAR 包读取
      */
     private fun readPluginResource(path: String): String? {
-        return try {
-            // 如果是emmyHelper.lua文件，优先使用用户设置的自定义路径
-            if (path == "debugger/emmy/emmyHelper.lua") {
-                val settings = LuaSettings.instance
-                val customPath = settings.customEmmyHelperPath
-                if (!customPath.isNullOrBlank()) {
-                    val customFile = File(customPath)
-                    if (customFile.exists() && customFile.isFile()) {
-                        val content = customFile.readText()
-                        println("✅ 成功从自定义路径读取EmmyHelper: $customPath")
-                        println("📝 内容长度: ${content.length} 字符")
-                        println("📋 内容预览: ${content.take(200)}...")
-                        return content
-                    } else {
-                        println("⚠️ 自定义EmmyHelper路径无效，回退到默认路径: $customPath")
+        val settings = LuaSettings.instance
+        
+        // 开发模式：自动检测项目源码目录
+        if (settings.enableDevMode) {
+            val projectBasePath = session.project.basePath
+            if (projectBasePath != null) {
+                // 尝试标准 Maven/Gradle 项目结构
+                val resourceDir = File(projectBasePath, "src/main/resources")
+                if (resourceDir.exists() && resourceDir.isDirectory) {
+                    val devFile = File(resourceDir, path)
+                    if (devFile.exists() && devFile.isFile) {
+                        return try {
+                            val content = devFile.readText()
+                            println("✅ [开发模式] 从项目源码读取: ${devFile.absolutePath}")
+                            content
+                        } catch (e: Exception) {
+                            println("⚠️ [开发模式] 读取失败: ${devFile.absolutePath}, ${e.message}")
+                            null
+                        }
                     }
                 }
             }
-            
+        }
+        
+        return try {
             // 首先尝试使用类加载器从JAR包中读取
             val classLoader = LuaFileUtil::class.java.classLoader
             val resource = classLoader.getResource(path)
             if (resource != null) {
                 val content = resource.readText()
-                println("✅ 成功从类加载器读取资源: $path")
-                println("📄 资源URL: ${resource}")
-                println("📝 内容长度: ${content.length} 字符")
-                println("📋 内容预览: ${content.take(200)}...")
                 content
             } else {
                 // 如果类加载器无法找到，尝试使用LuaFileUtil的方法
                 val filePath = LuaFileUtil.getPluginVirtualFile(path)
                 if (filePath != null && !filePath.startsWith("jar:")) {
-                    val content = File(filePath).readText()
-                    println("✅ 成功从文件系统读取资源: $filePath")
-                    println("📝 内容长度: ${content.length} 字符")
-                    println("📋 内容预览: ${content.take(200)}...")
-                    content
+                    File(filePath).readText()
                 } else {
-                    println("❌ 无法找到资源: $path")
-                    println("🔍 LuaFileUtil返回路径: $filePath")
                     null
                 }
             }
