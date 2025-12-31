@@ -40,20 +40,20 @@ data class ProcessInfo(
      */
     fun getDisplayText(): String {
         val icon = UEProcessClassifier.getProcessTypeIcon(ueProcessType)
-        val typeText = if (ueProcessType != UEProcessType.NON_UE) {
-            " [${ueProcessType.displayName}]"
-        } else {
-            ""
-        }
         
-        // 添加窗口标题信息
-        val titleText = if (title.isNotEmpty() && title != name) {
-            " - $title"
+        return if (ueProcessType != UEProcessType.NON_UE) {
+            // UE进程：显示类型标识和窗口标题
+            val typeText = " [${ueProcessType.displayName}]"
+            val titleText = if (title.isNotEmpty() && title != name) {
+                " - $title"
+            } else {
+                ""
+            }
+            "$icon $pid$typeText:$titleText".trim()
         } else {
-            ""
+            // 非UE进程：显示进程名称和可执行文件路径
+            "$pid: $name ($path)"
         }
-        
-        return "$icon $pid $typeText: $titleText".trim()
     }
     
     /**

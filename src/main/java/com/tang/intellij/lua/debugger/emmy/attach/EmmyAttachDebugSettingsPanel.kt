@@ -142,9 +142,10 @@ class EmmyAttachDebugSettingsPanel(private val project: Project) : SettingsEdito
      */
     private fun selectProcess() {
         val autoAttachSingle = autoAttachSingleCheckBox.isSelected
+        val filterUEProcesses = filterUEProcessesCheckBox.isSelected
 
         val selectedProcess = processSelector.showProcessSelectionDialog(
-            "", autoAttachSingle
+            "", autoAttachSingle, filterUEProcesses
         )
 
         selectedProcess?.let { process ->

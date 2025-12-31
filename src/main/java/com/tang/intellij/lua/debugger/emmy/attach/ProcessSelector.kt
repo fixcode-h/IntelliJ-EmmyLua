@@ -44,12 +44,19 @@ class ProcessSelector(private val project: Project) {
 
     /**
      * 获取系统进程列表
+     * @param processName 进程名称过滤
+     * @param autoAttachSingleProcess 是否自动附加单个进程
+     * @param filterUEProcesses 是否只显示UE进程（true=只显示UE进程，false=显示所有进程）
      */
     fun getProcessList(
         processName: String = "",
-        autoAttachSingleProcess: Boolean = true
+        autoAttachSingleProcess: Boolean = true,
+        filterUEProcesses: Boolean = true
     ): List<ProcessInfo> {
-                  return try {
+        // 调试日志
+        println("[EmmyDebug] getProcessList called: filterUEProcesses=$filterUEProcesses")
+        
+        return try {
              // 验证调试器工具
              val validationError = DebuggerPathUtils.validateDebuggerTools()
              if (validationError != null) {
@@ -68,7 +75,7 @@ class ProcessSelector(private val project: Project) {
             
             // 使用CP936编码解析输出(中文系统)
             val outputStr = String(output, Charset.forName("CP936"))
-            parseProcessList(outputStr, processName, emptyList())
+            parseProcessList(outputStr, processName, emptyList(), filterUEProcesses)
         } catch (e: Exception) {
             throw Exception("获取进程列表失败: ${e.message}")
         }
@@ -76,11 +83,13 @@ class ProcessSelector(private val project: Project) {
 
     /**
      * 解析进程列表输出
+     * @param filterUEProcesses 是否只显示UE进程（true=只显示UE进程，false=显示所有进程）
      */
     private fun parseProcessList(
         output: String,
         processName: String,
-        threadFilterBlacklist: List<String>
+        threadFilterBlacklist: List<String>,
+        filterUEProcesses: Boolean = true
     ): List<ProcessInfo> {
         val lines = output.split("\r\n")
         val processes = mutableListOf<ProcessInfo>()
@@ -103,7 +112,15 @@ class ProcessSelector(private val project: Project) {
                 val isBlacklisted = processInfo.isInBlacklist(debugProcessBlacklist)
                 // 过滤掉构建工具进程
                 val isBuildTool = processInfo.ueProcessType == UEProcessType.BUILD_TOOL
-                val shouldInclude = isUEProcess && !isBlacklisted && !isBuildTool
+                
+                // 根据 filterUEProcesses 配置决定过滤逻辑
+                val shouldInclude = if (filterUEProcesses) {
+                    // 勾选：只显示UE进程，排除黑名单和构建工具
+                    isUEProcess && !isBlacklisted && !isBuildTool
+                } else {
+                    // 不勾选：显示所有进程，但仍排除黑名单
+                    !isBlacklisted
+                }
 
                 if (shouldInclude) {
                     processes.add(processInfo)
@@ -122,10 +139,12 @@ class ProcessSelector(private val project: Project) {
 
     /**
      * 显示进程选择对话框
+     * @param filterUEProcesses 是否只显示UE进程（true=只显示UE进程，false=显示所有进程）
      */
     fun showProcessSelectionDialog(
         processName: String = "",
-        autoAttachSingleProcess: Boolean = true
+        autoAttachSingleProcess: Boolean = true,
+        filterUEProcesses: Boolean = true
     ): ProcessInfo? {
         return ProgressManager.getInstance().run(object : Task.WithResult<ProcessInfo?, Exception>(
             project, "获取进程列表...", true
@@ -134,7 +153,7 @@ class ProcessSelector(private val project: Project) {
                 indicator.text = "正在获取系统进程列表..."
                 
                 val processes = try {
-                    getProcessList(processName, autoAttachSingleProcess)
+                    getProcessList(processName, autoAttachSingleProcess, filterUEProcesses)
                 } catch (e: Exception) {
                     ApplicationManager.getApplication().invokeLater {
                         Messages.showErrorDialog(project, e.message, "错误")
