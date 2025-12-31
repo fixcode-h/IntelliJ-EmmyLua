@@ -110,50 +110,55 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
     }
     
     /**
-     * 读取 emmyHelper.lua 文件并拼接用户自定义脚本
+     * 读取 emmyHelper.lua 文件并将类型注册脚本插入到指定位置
      * 
      * emmyHelper.lua 已整合所有子模块（ProxyRegistry、HandlerRegistry、TypeMatcher）
-     * 只需读取单一文件，然后追加 customTypeRegistryPath 指定的用户自定义脚本
+     * 类型注册脚本（emmyHelper_ue.lua 或用户自定义）会被插入到 emmyHelperInit 函数体内
      */
     private fun readAndMergeEmmyHelperFiles(): String? {
-        val stringBuilder = StringBuilder()
+        // 占位符标记
+        val placeholder = "-- [EMMY_HELPER_INIT_CONTENT]"
         
         // 1. 读取主入口文件（已包含所有子模块）
         val mainContent = readPluginResource("debugger/emmy/emmyHelper.lua")
-        if (mainContent != null) {
-            stringBuilder.append(mainContent)
-            stringBuilder.append("\n\n")
-        } else {
+        if (mainContent == null) {
             return null
         }
         
         // 2. 读取类型注册脚本（用户自定义或内置默认）
         val settings = LuaSettings.instance
         val customPath = settings.customTypeRegistryPath
-        if (!customPath.isNullOrBlank()) {
+        val typeRegistryContent: String? = if (!customPath.isNullOrBlank()) {
             // 使用用户自定义脚本
             val customFile = File(customPath)
             if (customFile.exists() && customFile.isFile) {
                 try {
-                    val customContent = customFile.readText()
-                    stringBuilder.append("-- ========== Custom Type Registry: ${customFile.name} ==========\n")
-                    stringBuilder.append(customContent)
-                    stringBuilder.append("\n")
+                    "-- ========== Custom Type Registry: ${customFile.name} ==========\n" +
+                    customFile.readText()
                 } catch (e: Exception) {
-                    // 忽略读取失败
+                    null
                 }
+            } else {
+                null
             }
         } else {
             // 使用内置默认脚本
             val defaultContent = readPluginResource("debugger/emmy/emmyHelper_ue.lua")
             if (defaultContent != null) {
-                stringBuilder.append("-- ========== Default Type Registry: emmyHelper_ue.lua ==========\n")
-                stringBuilder.append(defaultContent)
-                stringBuilder.append("\n")
+                "-- ========== Default Type Registry: emmyHelper_ue.lua ==========\n" +
+                defaultContent
+            } else {
+                null
             }
         }
         
-        return stringBuilder.toString()
+        // 3. 将类型注册脚本插入到占位符位置
+        return if (typeRegistryContent != null) {
+            mainContent.replace(placeholder, typeRegistryContent)
+        } else {
+            // 如果没有类型注册脚本，移除占位符
+            mainContent.replace(placeholder, "-- No type registry script loaded")
+        }
     }
     
     /**

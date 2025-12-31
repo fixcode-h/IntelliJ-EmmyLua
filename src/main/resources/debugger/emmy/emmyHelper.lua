@@ -72,13 +72,13 @@ end
 --- Warning 级别日志
 ---@param ... any 日志内容
 function EmmyLog.warn(...)
-    EmmyLog.log(EmmyLog.LogLevel.Warning, ...)
+    EmmyLog.log(EmmyLog.LogLevel.Info, ...)
 end
 
 --- Error 级别日志
 ---@param ... any 日志内容
 function EmmyLog.error(...)
-    EmmyLog.log(EmmyLog.LogLevel.Error, ...)
+    EmmyLog.log(EmmyLog.LogLevel.Info, ...)
 end
 
 -- 注册到全局变量
@@ -887,13 +887,32 @@ else
     emmy = unluaDebugger
 end
 
+rawset(_G, 'emmyHelper', emmy)
+
 -- 设置 HandlerRegistry 的 emmy 引用（用于 createNode）
 -- 只在框架选择后设置一次，确保 emmy 对象已包含 createNode 方法
 HandlerRegistry:setEmmy(emmy)
 
-rawset(_G, 'emmyHelper', emmy)
+-------------------------------------------------------------------------------
+-- __emmyDebuggerExtInit: 扩展初始化函数（内部使用）
+-- emmyHelper_ue.lua 的内容将被插入到此函数体内
+-------------------------------------------------------------------------------
+local function __emmyDebuggerExtInit()
+    do
+        -- [EMMY_HELPER_INIT_CONTENT]
+    end
+end
+
+local success, err = pcall(__emmyDebuggerExtInit)
+if not success then
+    EmmyLog.error("[EmmyHelper]", "__emmyDebuggerExtInit failed:", tostring(err))
+end
+
 
 local emmyHelperInit = rawget(_G, 'emmyHelperInit')
 if emmyHelperInit then
-    emmyHelperInit()
+    local ok, initErr = pcall(emmyHelperInit)
+    if not ok then
+        EmmyLog.error("[EmmyHelper]", "emmyHelperInit failed:", tostring(initErr))
+    end
 end
