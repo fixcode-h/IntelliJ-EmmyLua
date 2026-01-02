@@ -25,6 +25,7 @@ import com.intellij.openapi.options.SearchableConfigurable;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.project.ProjectManager;
 import com.intellij.openapi.util.text.StringUtil;
+import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.util.ArrayUtil;
 import com.intellij.util.FileContentUtil;
@@ -67,8 +68,10 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
     private JTextField tooLargerFileThreshold;
     private JTextField ueProcessNamesField;
     private JTextField debugProcessBlacklistField;
-    private JTextField customTypeRegistryPathField;
-    private JButton browseCustomTypeRegistryButton;
+    private JTextField customHelperPathField;
+    private JButton browseCustomHelperPathButton;
+    private JTextField customHelperExtNameField;
+    private JButton browseCustomHelperExtNameButton;
     private JCheckBox enableCustomFileTemplateCheckBox;
     private JTextArea customFileTemplateTextArea;
     private JCheckBox enableFileNameReplacementCheckBox;
@@ -119,8 +122,11 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
             debugProcessBlacklistField.setText("");
         }
         
-        // 自定义类型注册脚本路径设置
-        customTypeRegistryPathField.setText(settings.getCustomTypeRegistryPath());
+        // 自定义 Helper 目录路径设置
+        customHelperPathField.setText(settings.getCustomHelperPath());
+        
+        // 自定义 Helper 扩展脚本名称设置
+        customHelperExtNameField.setText(settings.getCustomHelperExtName());
         
         // 文件模板设置
         enableCustomFileTemplateCheckBox.setSelected(settings.getEnableCustomFileTemplate());
@@ -131,16 +137,39 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
         // 开发模式设置
         enableDevModeCheckBox.setSelected(settings.getEnableDevMode());
 
-        //browse custom type registry button action
-        browseCustomTypeRegistryButton.addActionListener(e -> {
-            FileChooserDescriptor descriptor = new FileChooserDescriptor(true, false, false, false, false, false)
-                    .withFileFilter(file -> file.getName().endsWith(".lua"));
-            descriptor.setTitle("Select Custom Type Registry Script");
-            descriptor.setDescription("Choose a Lua file containing custom type registrations (will be appended to emmyHelper.lua)");
+        //browse custom helper path button action (选择目录)
+        browseCustomHelperPathButton.addActionListener(e -> {
+            FileChooserDescriptor descriptor = new FileChooserDescriptor(false, true, false, false, false, false);
+            descriptor.setTitle("Select Custom Helper Directory");
+            descriptor.setDescription("Choose a directory containing custom helper Lua scripts");
             
             VirtualFile selectedFile = FileChooser.chooseFile(descriptor, null, null);
             if (selectedFile != null) {
-                customTypeRegistryPathField.setText(selectedFile.getPath());
+                customHelperPathField.setText(selectedFile.getPath());
+            }
+        });
+        
+        //browse custom helper ext name button action (从 customHelperPath 目录选择文件)
+        browseCustomHelperExtNameButton.addActionListener(e -> {
+            String helperPath = customHelperPathField.getText().trim();
+            VirtualFile rootDir = null;
+            if (!helperPath.isEmpty()) {
+                rootDir = LocalFileSystem.getInstance().findFileByPath(helperPath);
+            }
+            
+            FileChooserDescriptor descriptor = new FileChooserDescriptor(true, false, false, false, false, false)
+                    .withFileFilter(file -> file.getName().endsWith(".lua"));
+            descriptor.setTitle("Select Custom Helper Extension Script");
+            descriptor.setDescription("Choose a Lua file from the custom helper directory");
+            if (rootDir != null && rootDir.isDirectory()) {
+                descriptor.setRoots(rootDir);
+            }
+            
+            VirtualFile selectedFile = FileChooser.chooseFile(descriptor, null, rootDir);
+            if (selectedFile != null) {
+                // 只保存文件名（不含扩展名）
+                String fileName = selectedFile.getNameWithoutExtension();
+                customHelperExtNameField.setText(fileName);
             }
         });
     }
@@ -181,7 +210,8 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
                 settings.getLanguageLevel() != languageLevel.getSelectedItem() ||
                 !Arrays.equals(settings.getUeProcessNames(), getProcessNamesFromTextField()) ||
                 !Arrays.equals(settings.getDebugProcessBlacklist(), getDebugProcessBlacklistFromTextField()) ||
-                !StringUtil.equals(settings.getCustomTypeRegistryPath(), customTypeRegistryPathField.getText()) ||
+                !StringUtil.equals(settings.getCustomHelperPath(), customHelperPathField.getText()) ||
+                !StringUtil.equals(settings.getCustomHelperExtName(), customHelperExtNameField.getText()) ||
                 settings.getEnableCustomFileTemplate() != enableCustomFileTemplateCheckBox.isSelected() ||
                 !StringUtil.equals(settings.getCustomFileTemplate(), customFileTemplateTextArea.getText()) ||
                 settings.getEnableFileNameReplacement() != enableFileNameReplacementCheckBox.isSelected() ||
@@ -209,8 +239,11 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
         settings.setAttachDebugCaptureStd(captureStd.isSelected());
         settings.setAttachDebugDefaultCharsetName((String) Objects.requireNonNull(charsetComboBox.getSelectedItem()));
         
-        //Custom type registry path
-        settings.setCustomTypeRegistryPath(customTypeRegistryPathField.getText());
+        //Custom helper path
+        settings.setCustomHelperPath(customHelperPathField.getText());
+        
+        //Custom helper ext name
+        settings.setCustomHelperExtName(customHelperExtNameField.getText());
         
         // 文件模板设置
         settings.setEnableCustomFileTemplate(enableCustomFileTemplateCheckBox.isSelected());
@@ -310,8 +343,11 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
             ueProcessNamesField.setText("");
         }
         
-        // Reset custom type registry path
-        customTypeRegistryPathField.setText(settings.getCustomTypeRegistryPath());
+        // Reset custom helper path
+        customHelperPathField.setText(settings.getCustomHelperPath());
+        
+        // Reset custom helper ext name
+        customHelperExtNameField.setText(settings.getCustomHelperExtName());
         
         // Reset 文件模板设置
         enableCustomFileTemplateCheckBox.setSelected(settings.getEnableCustomFileTemplate());

@@ -81,10 +81,17 @@ class LuaSettings : PersistentStateComponent<LuaSettings> {
 
 
     /**
-     * Custom type registry script path (appended to emmyHelper.lua)
-     * 自定义类型注册脚本路径（追加到 emmyHelper.lua 末尾执行）
+     * Custom helper directory path
+     * 自定义 helper 目录路径（包含自定义脚本的目录）
      */
-    var customTypeRegistryPath = ""
+    var customHelperPath = ""
+    
+    /**
+     * Custom extension script name (without .lua extension)
+     * 自定义扩展脚本名称（不含 .lua 后缀，如 "emmyHelper_custom"）
+     * 如果为空，使用内置的 "emmyHelper_ue"
+     */
+    var customHelperExtName = ""
 
     /**
      * UE进程名称列表，用于调试器进程过滤

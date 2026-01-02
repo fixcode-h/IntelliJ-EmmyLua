@@ -59,12 +59,24 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
                 // 清理旧会话的断点状态，确保新会话从干净状态开始
                 resetBreakpointState()
                 
-                // send init - 读取并合并所有 emmyHelper 相关文件
-                val code = readAndMergeEmmyHelperFiles()
-                if (code != null) {
+                // send init - 发送 emmyHelper 目录路径、自定义目录路径和脚本名称
+                val emmyHelperPath = getEmmyHelperDirPath()
+                val customHelperPath = getCustomHelperDirPath()
+                val emmyHelperExtName = getEmmyHelperExtName()
+                
+                if (emmyHelperPath != null) {
                     val extList = LuaFileManager.extensions
-                    transporter?.send(InitMessage(code, extList))
+                    transporter?.send(InitMessage(
+                        emmyHelperPath = emmyHelperPath,
+                        customHelperPath = customHelperPath,
+                        emmyHelperName = "emmyHelper",
+                        emmyHelperExtName = emmyHelperExtName,
+                        ext = extList
+                    ))
+                } else {
+                    error("无法获取 emmyHelper 目录路径")
                 }
+                
                 // send bps - 重新同步所有断点到调试器端
                 val breakpoints = XDebuggerManager.getInstance(session.project)
                     .breakpointManager
@@ -110,54 +122,96 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
     }
     
     /**
-     * 读取 emmyHelper.lua 文件并将类型注册脚本插入到指定位置
+     * 获取 emmyHelper 目录路径
      * 
-     * emmyHelper.lua 已整合所有子模块（ProxyRegistry、HandlerRegistry、TypeMatcher）
-     * 类型注册脚本（emmyHelper_ue.lua 或用户自定义）会被插入到 emmyHelperInit 函数体内
+     * 支持开发模式和生产模式：
+     * - 开发模式：直接返回 src/main/resources/debugger/emmy 目录路径
+     * - 生产模式：将资源解压到临时目录并返回路径
      */
-    private fun readAndMergeEmmyHelperFiles(): String? {
-        // 占位符标记
-        val placeholder = "-- [EMMY_HELPER_INIT_CONTENT]"
+    private fun getEmmyHelperDirPath(): String? {
+        // 1. 尝试开发模式路径
+        val devPath = getDevResourcePath("debugger/emmy")
+        if (devPath != null) {
+            return devPath
+        }
         
-        // 1. 读取主入口文件（已包含所有子模块）
-        val mainContent = readPluginResource("debugger/emmy/emmyHelper.lua")
-        if (mainContent == null) {
+        // 2. 生产模式：解压资源到临时目录
+        return extractEmmyHelperToTemp()
+    }
+    
+    /**
+     * 获取开发模式下的资源目录路径
+     */
+    private fun getDevResourcePath(relativePath: String): String? {
+        val basePath = session.project.basePath ?: return null
+        val devResourceDir = File(basePath, "src/main/resources/$relativePath")
+        if (devResourceDir.exists() && devResourceDir.isDirectory) {
+            return devResourceDir.absolutePath
+        }
+        return null
+    }
+    
+    /**
+     * 将 emmyHelper 资源解压到临时目录
+     */
+    private fun extractEmmyHelperToTemp(): String? {
+        try {
+            val tempDir = File(System.getProperty("java.io.tmpdir"), "emmy_helper")
+            if (!tempDir.exists()) {
+                tempDir.mkdirs()
+            }
+            
+            // 需要解压的文件列表
+            val filesToExtract = listOf("emmyHelper.lua", "emmyHelper_ue.lua")
+            
+            for (fileName in filesToExtract) {
+                val resourcePath = "debugger/emmy/$fileName"
+                val content = readPluginResource(resourcePath)
+                if (content != null) {
+                    val targetFile = File(tempDir, fileName)
+                    targetFile.writeText(content)
+                }
+            }
+            
+            return tempDir.absolutePath
+        } catch (e: Exception) {
             return null
         }
-        
-        // 2. 读取类型注册脚本（用户自定义或内置默认）
+    }
+    
+    /**
+     * 获取自定义 helper 目录路径
+     * 
+     * 如果用户配置了自定义脚本，返回其所在目录路径
+     */
+    private fun getCustomHelperDirPath(): String {
         val settings = LuaSettings.instance
-        val customPath = settings.customTypeRegistryPath
-        val typeRegistryContent: String? = if (!customPath.isNullOrBlank()) {
-            // 使用用户自定义脚本
+        val customPath = settings.customHelperPath
+        
+        if (!customPath.isNullOrBlank()) {
             val customFile = File(customPath)
-            if (customFile.exists() && customFile.isFile) {
-                try {
-                    "-- ========== Custom Type Registry: ${customFile.name} ==========\n" +
-                    customFile.readText()
-                } catch (e: Exception) {
-                    null
-                }
-            } else {
-                null
-            }
-        } else {
-            // 使用内置默认脚本
-            val defaultContent = readPluginResource("debugger/emmy/emmyHelper_ue.lua")
-            if (defaultContent != null) {
-                "-- ========== Default Type Registry: emmyHelper_ue.lua ==========\n" +
-                defaultContent
-            } else {
-                null
+            if (customFile.exists() && customFile.isDirectory) {
+                return customFile.absolutePath
             }
         }
         
-        // 3. 将类型注册脚本插入到占位符位置
-        return if (typeRegistryContent != null) {
-            mainContent.replace(placeholder, typeRegistryContent)
+        return ""
+    }
+    
+    /**
+     * 获取扩展脚本名称
+     * 
+     * 如果用户配置了自定义扩展脚本名称，返回该名称
+     * 否则返回默认的 "emmyHelper_ue"
+     */
+    private fun getEmmyHelperExtName(): String {
+        val settings = LuaSettings.instance
+        val customExtName = settings.customHelperExtName
+        
+        return if (!customExtName.isNullOrBlank()) {
+            customExtName
         } else {
-            // 如果没有类型注册脚本，移除占位符
-            mainContent.replace(placeholder, "-- No type registry script loaded")
+            "emmyHelper_ue"
         }
     }
     

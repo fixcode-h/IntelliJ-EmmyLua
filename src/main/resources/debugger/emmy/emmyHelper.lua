@@ -909,21 +909,9 @@ rawset(_G, 'emmyHelper', emmy)
 HandlerRegistry:setEmmy(emmy)
 
 -------------------------------------------------------------------------------
--- __emmyDebuggerExtInit: 扩展初始化函数（内部使用）
--- emmyHelper_ue.lua 的内容将被插入到此函数体内
+-- 用户自定义初始化函数（可选）
+-- 用户可以在全局定义 emmyHelperInit 函数，会在 emmyHelper 加载后执行
 -------------------------------------------------------------------------------
-local function __emmyDebuggerExtInit()
-    do
-        -- [EMMY_HELPER_INIT_CONTENT]
-    end
-end
-
-local success, err = pcall(__emmyDebuggerExtInit)
-if not success then
-    EmmyLog.error("[EmmyHelper]", "__emmyDebuggerExtInit failed:", tostring(err))
-end
-
-
 local emmyHelperInit = rawget(_G, 'emmyHelperInit')
 if emmyHelperInit then
     local ok, initErr = pcall(emmyHelperInit)
@@ -931,3 +919,15 @@ if emmyHelperInit then
         EmmyLog.error("[EmmyHelper]", "emmyHelperInit failed:", tostring(initErr))
     end
 end
+
+-------------------------------------------------------------------------------
+-- 返回模块（供 require 使用）
+-------------------------------------------------------------------------------
+return {
+    emmy = emmy,
+    EmmyLog = EmmyLog,
+    ProxyRegistry = ProxyRegistry,
+    HandlerRegistry = HandlerRegistry,
+    TypeMatcher = TypeMatcher,
+}
+

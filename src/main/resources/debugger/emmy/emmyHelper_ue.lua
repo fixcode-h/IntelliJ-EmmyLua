@@ -1,6 +1,7 @@
 -------------------------------------------------------------------------------
 -- emmyHelper_ue.lua: UE 类型处理器扩展
 -- 为 Unreal Engine 特定类型提供调试显示支持
+-- 可通过 require("emmyHelper_ue") 加载，支持断点调试
 -------------------------------------------------------------------------------
 
 -------------------------------------------------------------------------------
@@ -11,7 +12,7 @@
 local emmyHelper = rawget(_G, 'emmyHelper')
 if not emmyHelper then
     EmmyLog.error("[UE]", "emmyHelper not found in _G, module load failed")
-    return
+    return nil
 end
 
 -- 获取处理器基类
@@ -19,7 +20,7 @@ local ProcessorBase = emmyHelper.getProcessorBase and emmyHelper.getProcessorBas
 
 if not ProcessorBase then
     EmmyLog.error("[UE]", "ProcessorBase not available, emmyHelper.getProcessorBase =", tostring(emmyHelper.getProcessorBase))
-    return
+    return nil
 end
 
 -------------------------------------------------------------------------------
@@ -96,3 +97,12 @@ end)
 if not okFDateTime then
     EmmyLog.error("[UE]", "FDateTime processor registration failed:", errFDateTime)
 end
+
+-------------------------------------------------------------------------------
+-- 返回模块（标准 Lua 模块格式）
+-------------------------------------------------------------------------------
+return {
+    FVectorProcessor = FVectorProcessor,
+    FRotatorProcessor = FRotatorProcessor,
+    FDateTimeProcessor = FDateTimeProcessor,
+}
