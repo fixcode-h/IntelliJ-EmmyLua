@@ -230,6 +230,14 @@ fun multiResolve(ref: LuaNameExpr, context: SearchContext): Array<PsiElement> {
 fun multiResolve(indexExpr: LuaIndexExpr, context: SearchContext): List<PsiElement> {
     val list = mutableListOf<PsiElement>()
     val name = indexExpr.name ?: return list
+    
+    // 当前文件优先查找逻辑
+    val currentFileMember = resolveInCurrentFileFirst(indexExpr, name, context)
+    if (currentFileMember != null) {
+        list.add(currentFileMember)
+        return list
+    }
+    
     val type = indexExpr.guessParentType(context)
     type.eachTopClass(Processor { ty ->
         val m = ty.findMember(name, context)
@@ -253,6 +261,12 @@ fun resolve(indexExpr: LuaIndexExpr, context: SearchContext): PsiElement? {
 }
 
 fun resolve(indexExpr: LuaIndexExpr, idString: String, context: SearchContext): PsiElement? {
+    // 当前文件优先查找逻辑
+    val currentFileMember = resolveInCurrentFileFirst(indexExpr, idString, context)
+    if (currentFileMember != null) {
+        return currentFileMember
+    }
+    
     val type = indexExpr.guessParentType(context)
     var ret: PsiElement? = null
     type.eachTopClass(Processor { ty ->
@@ -269,6 +283,74 @@ fun resolve(indexExpr: LuaIndexExpr, idString: String, context: SearchContext): 
         }
     }
     return ret
+}
+
+/**
+ * 当前文件优先查找逻辑
+ * - self:Method() -> 始终优先在当前文件查找
+ * - LocalVar:Method() -> 仅当文件名是 LocalVar.lua 时优先在当前文件查找
+ */
+private fun resolveInCurrentFileFirst(indexExpr: LuaIndexExpr, methodName: String, context: SearchContext): PsiElement? {
+    val prefixExpr = PsiTreeUtil.getStubChildOfType(indexExpr, LuaExpr::class.java) ?: return null
+    val containingFile = indexExpr.containingFile
+    
+    // 获取前缀表达式的名称
+    val prefixName = when (prefixExpr) {
+        is LuaNameExpr -> prefixExpr.name
+        else -> null
+    } ?: return null
+    
+    // 判断是否应该优先在当前文件查找
+    val shouldSearchCurrentFileFirst = when {
+        // self:Method() -> 始终优先在当前文件查找
+        prefixName == Constants.WORD_SELF -> true
+        // LocalVar:Method() -> 仅当文件名是 LocalVar.lua 时优先在当前文件查找
+        else -> {
+            val fileNameWithoutExt = containingFile.virtualFile?.nameWithoutExtension 
+                ?: containingFile.name.substringBeforeLast(".")
+            fileNameWithoutExt == prefixName
+        }
+    }
+    
+    if (!shouldSearchCurrentFileFirst) {
+        return null
+    }
+    
+    // 在当前文件中查找方法定义
+    return findMethodInCurrentFile(containingFile, prefixName, methodName)
+}
+
+/**
+ * 在当前文件中查找方法定义
+ * 查找形如 ClassName:methodName 或 ClassName.methodName 的方法定义
+ */
+private fun findMethodInCurrentFile(file: com.intellij.psi.PsiFile, className: String, methodName: String): PsiElement? {
+    var result: PsiElement? = null
+    
+    // 遍历文件中的所有类方法定义
+    PsiTreeUtil.processElements(file, LuaClassMethodDef::class.java) { methodDef ->
+        val classMethodName = methodDef.classMethodName
+        val expr = classMethodName.expr
+        
+        // 检查方法名是否匹配
+        if (methodDef.name == methodName) {
+            // 检查类名是否匹配
+            val methodClassName = when (expr) {
+                is LuaNameExpr -> expr.name
+                else -> null
+            }
+            
+            // 对于 self 调用，匹配当前文件中任何类方法
+            // 对于 LocalVar 调用，需要类名完全匹配
+            if (className == Constants.WORD_SELF || methodClassName == className) {
+                result = methodDef
+                return@processElements false // 找到后停止
+            }
+        }
+        true // 继续查找
+    }
+    
+    return result
 }
 
 /**
