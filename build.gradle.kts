@@ -210,7 +210,8 @@ project(":") {
                     
                     // 验证关键文件
                     val keyFiles = listOf(
-                        "debugger/emmy/emmyHelper.lua",
+                        "debugger/emmy/code/emmyHelper.lua",
+                        "debugger/emmy/code/tool/emmyLog.lua",
                         "debugger/Emmy.lua"
                     )
                     
@@ -300,7 +301,7 @@ project(":") {
                     println("📝 Total size: $totalSize bytes")
                     
                     // 显示关键文件信息
-                    val emmyHelperFile = file("src/main/resources/debugger/emmy/emmyHelper.lua")
+                    val emmyHelperFile = file("src/main/resources/debugger/emmy/code/emmyHelper.lua")
                     if (emmyHelperFile.exists()) {
                         println("📄 emmyHelper.lua: ${emmyHelperFile.length()} bytes, modified: ${emmyHelperFile.lastModified()}")
                     }
@@ -358,7 +359,8 @@ project(":") {
                     
                     // 验证关键文件是否存在于沙盒中
                     val keyFiles = listOf(
-                        "emmy/emmyHelper.lua",
+                        "emmy/code/emmyHelper.lua",
+                        "emmy/code/tool/emmyLog.lua",
                         "Emmy.lua"
                     )
                     

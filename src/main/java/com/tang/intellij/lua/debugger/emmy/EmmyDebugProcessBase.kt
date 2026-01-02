@@ -125,12 +125,12 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
      * 获取 emmyHelper 目录路径
      * 
      * 支持开发模式和生产模式：
-     * - 开发模式：直接返回 src/main/resources/debugger/emmy 目录路径
+     * - 开发模式：直接返回 src/main/resources/debugger/emmy/code 目录路径
      * - 生产模式：将资源解压到临时目录并返回路径
      */
     private fun getEmmyHelperDirPath(): String? {
         // 1. 尝试开发模式路径
-        val devPath = getDevResourcePath("debugger/emmy")
+        val devPath = getDevResourcePath("debugger/emmy/code")
         if (devPath != null) {
             return devPath
         }
@@ -153,6 +153,7 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
     
     /**
      * 将 emmyHelper 资源解压到临时目录
+     * 递归复制 debugger/emmy/code 目录下的所有 Lua 文件
      */
     private fun extractEmmyHelperToTemp(): String? {
         try {
@@ -161,21 +162,91 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
                 tempDir.mkdirs()
             }
             
-            // 需要解压的文件列表
-            val filesToExtract = listOf("emmyHelper.lua", "emmyHelper_ue.lua")
-            
-            for (fileName in filesToExtract) {
-                val resourcePath = "debugger/emmy/$fileName"
-                val content = readPluginResource(resourcePath)
-                if (content != null) {
-                    val targetFile = File(tempDir, fileName)
-                    targetFile.writeText(content)
-                }
-            }
+            // 递归复制 code 目录下的所有文件
+            val codeResourceBase = "debugger/emmy/code"
+            extractCodeDirectory(codeResourceBase, tempDir)
             
             return tempDir.absolutePath
         } catch (e: Exception) {
             return null
+        }
+    }
+    
+    /**
+     * 递归提取 code 目录下的所有 Lua 文件
+     */
+    private fun extractCodeDirectory(resourceBase: String, targetDir: File) {
+        val settings = LuaSettings.instance
+        val classLoader = LuaFileUtil::class.java.classLoader
+        
+        // 开发模式：从文件系统递归复制
+        if (settings.enableDevMode) {
+            val projectBasePath = session.project.basePath
+            if (projectBasePath != null) {
+                val resourceDir = File(projectBasePath, "src/main/resources/$resourceBase")
+                if (resourceDir.exists() && resourceDir.isDirectory) {
+                    copyDirectoryRecursively(resourceDir, targetDir)
+                    return
+                }
+            }
+        }
+        
+        // 生产模式：从 JAR 包中提取
+        val resourceUrl = classLoader.getResource(resourceBase)
+        if (resourceUrl != null) {
+            when (resourceUrl.protocol) {
+                "file" -> {
+                    // 直接从文件系统复制
+                    val sourceDir = File(resourceUrl.toURI())
+                    copyDirectoryRecursively(sourceDir, targetDir)
+                }
+                "jar" -> {
+                    // 从 JAR 包中提取
+                    extractFromJar(resourceUrl, resourceBase, targetDir)
+                }
+            }
+        }
+    }
+    
+    /**
+     * 递归复制目录
+     */
+    private fun copyDirectoryRecursively(sourceDir: File, targetDir: File) {
+        sourceDir.walkTopDown().forEach { file ->
+            if (file.isFile && file.extension == "lua") {
+                val relativePath = file.relativeTo(sourceDir).path
+                val targetFile = File(targetDir, relativePath)
+                targetFile.parentFile?.mkdirs()
+                file.copyTo(targetFile, overwrite = true)
+            }
+        }
+    }
+    
+    /**
+     * 从 JAR 包中提取资源目录
+     */
+    private fun extractFromJar(resourceUrl: java.net.URL, resourceBase: String, targetDir: File) {
+        val jarPath = resourceUrl.path.substringAfter("file:").substringBefore("!")
+        val jarFile = java.util.jar.JarFile(java.net.URLDecoder.decode(jarPath, "UTF-8"))
+        
+        jarFile.use { jar ->
+            jar.entries().asSequence()
+                .filter { entry ->
+                    !entry.isDirectory && 
+                    entry.name.startsWith("$resourceBase/") && 
+                    entry.name.endsWith(".lua")
+                }
+                .forEach { entry ->
+                    val relativePath = entry.name.removePrefix("$resourceBase/")
+                    val targetFile = File(targetDir, relativePath)
+                    targetFile.parentFile?.mkdirs()
+                    
+                    jar.getInputStream(entry).use { input ->
+                        targetFile.outputStream().use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                }
         }
     }
     

@@ -30,21 +30,10 @@ end
 local FVectorProcessor = ProcessorBase:extend()
 
 function FVectorProcessor:processSpecific(variable, obj, name, depth)
-    local ok, x = pcall(function() return obj.X end)
-    local ok2, y = pcall(function() return obj.Y end)
-    local ok3, z = pcall(function() return obj.Z end)
-    
-    if ok and ok2 and ok3 then
-        variable.value = string.format("(X=%f, Y=%f, Z=%f)", x or 0, y or 0, z or 0)
-    end
+    variable.value = string.format("(X=%f, Y=%f, Z=%f)", obj.X or 0, obj.Y or 0, obj.Z or 0)
 end
 
-local okFVector, errFVector = pcall(function()
-    emmyHelper.registerProcessor('FVector', FVectorProcessor)
-end)
-if not okFVector then
-    EmmyLog.error("[UE]", "FVector processor registration failed:", errFVector)
-end
+emmyHelper.registerProcessor('FVector', FVectorProcessor)
 
 -------------------------------------------------------------------------------
 -- FRotator 类型处理器
@@ -53,22 +42,10 @@ end
 local FRotatorProcessor = ProcessorBase:extend()
 
 function FRotatorProcessor:processSpecific(variable, obj, name, depth)
-    local ok, pitch = pcall(function() return obj.Pitch end)
-    local ok2, yaw = pcall(function() return obj.Yaw end)
-    local ok3, roll = pcall(function() return obj.Roll end)
-    
-    if ok and ok2 and ok3 then
-        variable.value = string.format("(P=%f, Y=%f, R=%f)", 
-            pitch or 0, yaw or 0, roll or 0)
-    end
+    variable.value = string.format("(P=%f, Y=%f, R=%f)", obj.Pitch or 0, obj.Yaw or 0, obj.Roll or 0)
 end
 
-local okFRotator, errFRotator = pcall(function()
-    emmyHelper.registerProcessor('FRotator', FRotatorProcessor)
-end)
-if not okFRotator then
-    EmmyLog.error("[UE]", "FRotator processor registration failed:", errFRotator)
-end
+emmyHelper.registerProcessor('FRotator', FRotatorProcessor)
 
 -------------------------------------------------------------------------------
 -- FDateTime 类型处理器
@@ -77,26 +54,36 @@ end
 local FDateTimeProcessor = ProcessorBase:extend()
 
 function FDateTimeProcessor:processSpecific(variable, obj, name, depth)
-    local ok, ticks = pcall(function()
-        if _G.UE4 and _G.UE4.UUAGameStatics and _G.UE4.UUAGameStatics.GetDateTimeString then
-            return _G.UE4.UUAGameStatics.GetDateTimeString(obj)
-        end
-        return nil
-    end)
-    
-    if ok and ticks then
-        variable.value = ticks
-    else
-        variable.value = "DateTime"
+    variable.value = _G.UE4.UUAGameStatics.GetDateTimeString(obj)
+end
+
+emmyHelper.registerProcessor('FDateTime', FDateTimeProcessor)
+
+-------------------------------------------------------------------------------
+-- TArray/TMap/TSet 容器处理器
+-------------------------------------------------------------------------------
+
+local TContainerProcessor = ProcessorBase:extend()
+
+function TContainerProcessor:processSpecific(variable, obj, name, depth)
+    local mt = getmetatable(obj)
+    if not mt then return end
+
+    local toTableFunc = rawget(mt, 'ToTable')
+    if toTableFunc and type(toTableFunc) == 'function' then
+        local resultNode = emmyHelper.createNode()
+        local resultTable = toTableFunc(obj)
+        resultNode.name = "ValueTable"
+        resultNode.value = resultTable
+        resultNode:query(resultTable, depth - 1, true)
+        variable:addChild(resultNode)
     end
 end
 
-local okFDateTime, errFDateTime = pcall(function()
-    emmyHelper.registerProcessor('FDateTime', FDateTimeProcessor)
-end)
-if not okFDateTime then
-    EmmyLog.error("[UE]", "FDateTime processor registration failed:", errFDateTime)
-end
+-- 注册容器处理器
+emmyHelper.registerProcessor('TArray', TContainerProcessor)
+emmyHelper.registerProcessor('TMap', TContainerProcessor)
+emmyHelper.registerProcessor('TSet', TContainerProcessor)
 
 -------------------------------------------------------------------------------
 -- 返回模块（标准 Lua 模块格式）
@@ -105,4 +92,5 @@ return {
     FVectorProcessor = FVectorProcessor,
     FRotatorProcessor = FRotatorProcessor,
     FDateTimeProcessor = FDateTimeProcessor,
+    TContainerProcessor = TContainerProcessor,
 }
