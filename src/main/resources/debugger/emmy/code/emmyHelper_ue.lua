@@ -73,7 +73,7 @@ function TContainerProcessor:processSpecific(variable, obj, name, depth)
     if toTableFunc and type(toTableFunc) == 'function' then
         local resultNode = emmyHelper.createNode()
         local resultTable = toTableFunc(obj)
-        resultNode.name = "ValueTable"
+        resultNode.name = "ToTable"
         resultNode.value = resultTable
         resultNode:query(resultTable, depth - 1, true)
         variable:addChild(resultNode)
