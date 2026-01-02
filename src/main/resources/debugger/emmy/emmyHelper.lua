@@ -13,19 +13,14 @@
 ---@field minLogLevel number 最低日志级别
 local EmmyLog = {
     enableLog = true,  -- 全局开关，默认开启
-    minLogLevel = 3,   -- 默认 Info 级别
+    minLogLevel = 0,   -- 默认 Info 级别
 }
 
 ---@enum LogLevel
 EmmyLog.LogLevel = {
-    Debug = 2,
-    Info = 3,
-    Display = 4,
-    Short = 5,
-    CallerInfo = 6,
-    Warning = 7,
-    Error = 8,
-    Fatal = 9
+    Info = 0,
+    Warning = 1,
+    Error = 2,
 }
 
 -- 日志标识
@@ -33,14 +28,9 @@ _G.EmmyLuaLogType = "[EmmyLua]"
 
 --- 日志级别名称映射
 local LogLevelNames = {
-    [2] = "DEBUG",
-    [3] = "INFO",
-    [4] = "DISPLAY",
-    [5] = "SHORT",
-    [6] = "CALLER",
-    [7] = "WARN",
-    [8] = "ERROR",
-    [9] = "FATAL"
+    [0] = "INFO",
+    [1] = "WARN",
+    [2] = "ERROR",
 }
 
 --- 输出日志
@@ -57,12 +47,6 @@ function EmmyLog.log(level, ...)
     print(_G.EmmyLuaLogType, levelName, ...)
 end
 
---- Debug 级别日志
----@param ... any 日志内容
-function EmmyLog.debug(...)
-    EmmyLog.log(EmmyLog.LogLevel.Debug, ...)
-end
-
 --- Info 级别日志
 ---@param ... any 日志内容
 function EmmyLog.info(...)
@@ -72,13 +56,13 @@ end
 --- Warning 级别日志
 ---@param ... any 日志内容
 function EmmyLog.warn(...)
-    EmmyLog.log(EmmyLog.LogLevel.Info, ...)
+    EmmyLog.log(EmmyLog.LogLevel.Warning, ...)
 end
 
 --- Error 级别日志
 ---@param ... any 日志内容
 function EmmyLog.error(...)
-    EmmyLog.log(EmmyLog.LogLevel.Info, ...)
+    EmmyLog.log(EmmyLog.LogLevel.Error, ...)
 end
 
 -- 注册到全局变量
