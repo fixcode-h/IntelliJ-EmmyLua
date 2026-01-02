@@ -42,9 +42,16 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
     /**
      * 根据日志等级输出日志
      */
-    private fun logWithLevel(message: String, level: LogLevel, contentType: ConsoleViewContentType = ConsoleViewContentType.SYSTEM_OUTPUT) {
+    private fun logWithLevel(message: String, level: LogLevel, contentType: ConsoleViewContentType? = null) {
         if (level.level >= configuration.logLevel.level) {
-            println(message, LogConsoleType.NORMAL, contentType)
+            // 根据日志等级自动选择显示样式
+            val actualContentType = contentType ?: when (level) {
+                LogLevel.DEBUG -> ConsoleViewContentType.LOG_DEBUG_OUTPUT
+                LogLevel.NORMAL -> ConsoleViewContentType.SYSTEM_OUTPUT
+                LogLevel.WARNING -> ConsoleViewContentType.LOG_WARNING_OUTPUT
+                LogLevel.ERROR -> ConsoleViewContentType.ERROR_OUTPUT
+            }
+            println(message, LogConsoleType.NORMAL, actualContentType)
         }
     }
 
@@ -330,7 +337,15 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
                 try {
                     val gson = com.google.gson.Gson()
                     val msg = gson.fromJson(json, LogNotify::class.java)
-                    logWithLevel("📝 ${msg.message}", LogLevel.DEBUG)
+                    // type: 0=Debug, 1=Info, 2=Warning, 3=Error
+                    val level = when (msg.type) {
+                        0 -> LogLevel.DEBUG
+                        1 -> LogLevel.NORMAL
+                        2 -> LogLevel.WARNING
+                        3 -> LogLevel.ERROR
+                        else -> LogLevel.NORMAL
+                    }
+                    logWithLevel("📝 ${msg.message}", level)
                 } catch (e: Exception) {
                     // 忽略解析错误
                 }

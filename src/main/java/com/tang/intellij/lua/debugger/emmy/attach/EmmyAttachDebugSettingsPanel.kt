@@ -75,7 +75,7 @@ class EmmyAttachDebugSettingsPanel(private val project: Project) : SettingsEdito
         
         // 设置日志等级默认值和提示
         logLevelComboBox.selectedItem = LogLevel.NORMAL
-        logLevelComboBox.toolTipText = "设置日志输出等级：0级=调试日志，1级=普通日志，2级=错误日志"
+        logLevelComboBox.toolTipText = "设置日志输出等级：0=调试日志，1=普通日志，2=警告日志，3=错误日志"
 
         // 创建面板布局
         panel = createPanel()

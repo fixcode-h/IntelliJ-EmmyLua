@@ -22,7 +22,8 @@ package com.tang.intellij.lua.debugger.emmy.attach
 enum class LogLevel(val level: Int, val description: String) {
     DEBUG(0, "调试日志"),
     NORMAL(1, "普通日志"),
-    ERROR(2, "错误日志");
+    WARNING(2, "警告日志"),
+    ERROR(3, "错误日志");
     
     override fun toString(): String {
         return "$description (级别$level)"

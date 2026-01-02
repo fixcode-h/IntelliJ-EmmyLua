@@ -244,7 +244,15 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
 
             MessageCMD.LogNotify -> {
                 val notify = Gson().fromJson(json, LogNotify::class.java)
-                println(notify.message, LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+                // type: 0=Debug, 1=Info, 2=Warning, 3=Error
+                val contentType = when (notify.type) {
+                    0 -> ConsoleViewContentType.LOG_DEBUG_OUTPUT    // Debug
+                    1 -> ConsoleViewContentType.SYSTEM_OUTPUT       // Info
+                    2 -> ConsoleViewContentType.LOG_WARNING_OUTPUT  // Warning
+                    3 -> ConsoleViewContentType.ERROR_OUTPUT        // Error
+                    else -> ConsoleViewContentType.SYSTEM_OUTPUT
+                }
+                println(notify.message, LogConsoleType.NORMAL, contentType)
             }
 
             else -> {
