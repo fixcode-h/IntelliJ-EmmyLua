@@ -53,9 +53,7 @@ class ProcessSelector(private val project: Project) {
         autoAttachSingleProcess: Boolean = true,
         filterUEProcesses: Boolean = true
     ): List<ProcessInfo> {
-        // 调试日志
-        println("[EmmyDebug] getProcessList called: filterUEProcesses=$filterUEProcesses")
-        
+
         return try {
              // 验证调试器工具
              val validationError = DebuggerPathUtils.validateDebuggerTools()
