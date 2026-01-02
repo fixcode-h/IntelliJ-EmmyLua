@@ -26,7 +26,7 @@
         <!--LuaCheck-->
         <toolWindow id="LuaCheck"
                     anchor="bottom"
-                    icon="/icons/lua.png"
+                    icon="/icons/lua.svg"
                     factoryClass="com.tang.intellij.lua.luacheck.LuaCheckToolWindowFactory"
                     canCloseContents="true"/>
         <projectService serviceImplementation="com.tang.intellij.lua.luacheck.LuaCheckView"/>
@@ -345,7 +345,7 @@
         <action id="lua.LuaCheck"
                 text="Run LuaCheck"
                 popup="true"
-                icon="/icons/lua.png"
+                icon="/icons/lua.svg"
                 class="com.tang.intellij.lua.luacheck.LuaCheckGroup">
             <add-to-group group-id="ToolsMenu" anchor="last"/>
             <add-to-group group-id="EditorPopupMenu" anchor="last"/>

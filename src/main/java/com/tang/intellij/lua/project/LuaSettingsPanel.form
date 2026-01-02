@@ -216,7 +216,7 @@
           </grid>
           
           <!-- Unreal Engine标签页 -->
-          <grid id="unrealEngineTab" layout-manager="GridLayoutManager" row-count="5" column-count="3" same-size-horizontally="false" same-size-vertically="false" hgap="10" vgap="10">
+          <grid id="unrealEngineTab" layout-manager="GridLayoutManager" row-count="3" column-count="3" same-size-horizontally="false" same-size-vertically="false" hgap="10" vgap="10">
             <margin top="15" left="15" bottom="15" right="15"/>
             <constraints>
               <tabbedpane title="Unreal Engine"/>
@@ -224,64 +224,10 @@
             <properties/>
             <border type="none"/>
             <children>
-              <!-- UE项目路径 -->
-              <component id="ueProjectPathLabel" class="javax.swing.JLabel">
-                <constraints>
-                  <grid row="0" column="0" row-span="1" col-span="1" vsize-policy="0" hsize-policy="0" anchor="8" fill="0" indent="0" use-parent-layout="false"/>
-                </constraints>
-                <properties>
-                  <text value="UE Project Path:"/>
-                </properties>
-              </component>
-              <component id="ueProjectPathField" class="javax.swing.JTextField" binding="ueProjectPathField">
-                <constraints>
-                  <grid row="0" column="1" row-span="1" col-span="1" vsize-policy="0" hsize-policy="6" anchor="8" fill="1" indent="0" use-parent-layout="false">
-                    <preferred-size width="300" height="-1"/>
-                  </grid>
-                </constraints>
-                <properties/>
-              </component>
-              <grid id="ueProjectButtonsPanel" layout-manager="GridLayoutManager" row-count="1" column-count="2" same-size-horizontally="true" same-size-vertically="false" hgap="5" vgap="-1">
-                <margin top="0" left="0" bottom="0" right="0"/>
-                <constraints>
-                  <grid row="0" column="2" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="0" fill="3" indent="0" use-parent-layout="false"/>
-                </constraints>
-                <properties/>
-                <border type="none"/>
-                <children>
-                  <component id="browseUEProjectButton" class="javax.swing.JButton" binding="browseUEProjectButton">
-                    <constraints>
-                      <grid row="0" column="0" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="0" fill="1" indent="0" use-parent-layout="false"/>
-                    </constraints>
-                    <properties>
-                      <text value="Browse"/>
-                    </properties>
-                  </component>
-                  <component id="autoDetectUEProjectButton" class="javax.swing.JButton" binding="autoDetectUEProjectButton">
-                    <constraints>
-                      <grid row="0" column="1" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="0" fill="1" indent="0" use-parent-layout="false"/>
-                    </constraints>
-                    <properties>
-                      <text value="Auto Detect"/>
-                    </properties>
-                  </component>
-                </children>
-              </grid>
-              
-              <!-- UE IntelliSense选项 -->
-              <component id="enableUEIntelliSenseCheckBox" class="javax.swing.JCheckBox" binding="enableUEIntelliSenseCheckBox">
-                <constraints>
-                  <grid row="1" column="0" row-span="1" col-span="3" vsize-policy="0" hsize-policy="3" anchor="8" fill="0" indent="0" use-parent-layout="false"/>
-                </constraints>
-                <properties>
-                  <text value="Enable UE IntelliSense"/>
-                </properties>
-              </component>
-              
               <!-- UE进程名称 -->
                <component id="ueProcessNamesLabel" class="javax.swing.JLabel">
                  <constraints>
-                   <grid row="2" column="0" row-span="1" col-span="1" vsize-policy="0" hsize-policy="0" anchor="8" fill="0" indent="0" use-parent-layout="false"/>
+                   <grid row="0" column="0" row-span="1" col-span="1" vsize-policy="0" hsize-policy="0" anchor="8" fill="0" indent="0" use-parent-layout="false"/>
                  </constraints>
                  <properties>
                    <text value="UE Process Names:"/>
@@ -289,7 +235,7 @@
                </component>
                <component id="ueProcessNamesField" class="javax.swing.JTextField" binding="ueProcessNamesField">
                  <constraints>
-                   <grid row="2" column="1" row-span="1" col-span="2" vsize-policy="0" hsize-policy="6" anchor="8" fill="1" indent="0" use-parent-layout="false">
+                   <grid row="0" column="1" row-span="1" col-span="2" vsize-policy="0" hsize-policy="6" anchor="8" fill="1" indent="0" use-parent-layout="false">
                      <preferred-size width="400" height="-1"/>
                    </grid>
                  </constraints>
@@ -301,7 +247,7 @@
               <!-- 调试器进程黑名单 -->
                <component id="debugProcessBlacklistLabel" class="javax.swing.JLabel">
                  <constraints>
-                   <grid row="3" column="0" row-span="1" col-span="1" vsize-policy="0" hsize-policy="0" anchor="8" fill="0" indent="0" use-parent-layout="false"/>
+                   <grid row="1" column="0" row-span="1" col-span="1" vsize-policy="0" hsize-policy="0" anchor="8" fill="0" indent="0" use-parent-layout="false"/>
                  </constraints>
                  <properties>
                    <text value="Debug Process Blacklist:"/>
@@ -309,7 +255,7 @@
                </component>
                <component id="debugProcessBlacklistField" class="javax.swing.JTextField" binding="debugProcessBlacklistField">
                  <constraints>
-                   <grid row="3" column="1" row-span="1" col-span="2" vsize-policy="0" hsize-policy="6" anchor="8" fill="1" indent="0" use-parent-layout="false">
+                   <grid row="1" column="1" row-span="1" col-span="2" vsize-policy="0" hsize-policy="6" anchor="8" fill="1" indent="0" use-parent-layout="false">
                      <preferred-size width="400" height="-1"/>
                    </grid>
                  </constraints>
@@ -321,14 +267,14 @@
               <!-- 填充空间 -->
               <vspacer id="ueTabSpacer">
                 <constraints>
-                  <grid row="4" column="1" row-span="1" col-span="1" vsize-policy="6" hsize-policy="1" anchor="0" fill="2" indent="0" use-parent-layout="false"/>
+                  <grid row="2" column="1" row-span="1" col-span="1" vsize-policy="6" hsize-policy="1" anchor="0" fill="2" indent="0" use-parent-layout="false"/>
                 </constraints>
               </vspacer>
             </children>
           </grid>
           
           <!-- 调试设置标签页 -->
-          <grid id="debugSettingsTab" layout-manager="GridLayoutManager" row-count="4" column-count="3" same-size-horizontally="false" same-size-vertically="false" hgap="10" vgap="10">
+          <grid id="debugSettingsTab" layout-manager="GridLayoutManager" row-count="7" column-count="3" same-size-horizontally="false" same-size-vertically="false" hgap="10" vgap="10">
             <margin top="15" left="15" bottom="15" right="15"/>
             <constraints>
               <tabbedpane title="调试设置"/>
@@ -352,26 +298,26 @@
                 <properties/>
               </component>
               
-              <!-- 自定义EmmyHelper.lua文件路径 -->
-              <component id="customEmmyHelperPathLabel" class="javax.swing.JLabel">
+              <!-- 自定义 Helper 目录路径 -->
+              <component id="customHelperPathLabel" class="javax.swing.JLabel">
                 <constraints>
                   <grid row="1" column="0" row-span="1" col-span="1" vsize-policy="0" hsize-policy="0" anchor="8" fill="0" indent="0" use-parent-layout="false"/>
                 </constraints>
                 <properties>
-                  <text value="Custom EmmyHelper.lua Path:"/>
+                  <text value="Custom Helper Path:"/>
                 </properties>
               </component>
-              <component id="customEmmyHelperPathField" class="javax.swing.JTextField" binding="customEmmyHelperPathField">
+              <component id="customHelperPathField" class="javax.swing.JTextField" binding="customHelperPathField">
                 <constraints>
                   <grid row="1" column="1" row-span="1" col-span="1" vsize-policy="0" hsize-policy="6" anchor="8" fill="1" indent="0" use-parent-layout="false">
                     <preferred-size width="300" height="-1"/>
                   </grid>
                 </constraints>
                 <properties>
-                  <toolTipText value="Specify a custom path to emmyHelper.lua file (leave empty to use default)"/>
+                  <toolTipText value="Specify a directory containing custom helper Lua scripts"/>
                 </properties>
               </component>
-              <component id="browseCustomEmmyHelperButton" class="javax.swing.JButton" binding="browseCustomEmmyHelperButton">
+              <component id="browseCustomHelperPathButton" class="javax.swing.JButton" binding="browseCustomHelperPathButton">
                 <constraints>
                   <grid row="1" column="2" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="0" fill="1" indent="0" use-parent-layout="false"/>
                 </constraints>
@@ -380,11 +326,60 @@
                 </properties>
               </component>
               
+              <!-- 自定义 Helper 扩展脚本名称 -->
+              <component id="customHelperExtNameLabel" class="javax.swing.JLabel">
+                <constraints>
+                  <grid row="2" column="0" row-span="1" col-span="1" vsize-policy="0" hsize-policy="0" anchor="8" fill="0" indent="0" use-parent-layout="false"/>
+                </constraints>
+                <properties>
+                  <text value="Custom Helper Ext Name:"/>
+                </properties>
+              </component>
+              <component id="customHelperExtNameField" class="javax.swing.JTextField" binding="customHelperExtNameField">
+                <constraints>
+                  <grid row="2" column="1" row-span="1" col-span="1" vsize-policy="0" hsize-policy="6" anchor="8" fill="1" indent="0" use-parent-layout="false">
+                    <preferred-size width="300" height="-1"/>
+                  </grid>
+                </constraints>
+                <properties>
+                  <toolTipText value="Specify the custom helper extension script name (without .lua extension)"/>
+                </properties>
+              </component>
+              <component id="browseCustomHelperExtNameButton" class="javax.swing.JButton" binding="browseCustomHelperExtNameButton">
+                <constraints>
+                  <grid row="2" column="2" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="0" fill="1" indent="0" use-parent-layout="false"/>
+                </constraints>
+                <properties>
+                  <text value="Browse"/>
+                </properties>
+              </component>
+              
+              <!-- 开发模式设置 -->
+              <grid id="devModePanel" layout-manager="GridLayoutManager" row-count="1" column-count="1" same-size-horizontally="false" same-size-vertically="false" hgap="10" vgap="5">
+                <margin top="10" left="10" bottom="10" right="10"/>
+                <constraints>
+                  <grid row="3" column="0" row-span="1" col-span="3" vsize-policy="0" hsize-policy="3" anchor="0" fill="3" indent="0" use-parent-layout="false"/>
+                </constraints>
+                <properties/>
+                <border type="etched" title="开发模式 (Dev Mode)"/>
+                <children>
+                  <component id="enableDevModeCheckBox" class="javax.swing.JCheckBox" binding="enableDevModeCheckBox">
+                    <constraints>
+                      <grid row="0" column="0" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="8" fill="0" indent="2" use-parent-layout="false"/>
+                    </constraints>
+                    <properties>
+                      <text value="启用开发模式 (自动从项目 src/main/resources 读取 Lua 调试脚本)"/>
+                      <toolTipText value="启用后，emmyHelper.lua 等文件将从项目的 src/main/resources 目录读取，而非从插件 JAR 包中读取。系统会自动检测项目根目录下的 src/main/resources 文件夹。"/>
+                    </properties>
+                  </component>
+                </children>
+              </grid>
+              
               <!-- 调试选项 -->
               <grid id="debugOptionsPanel" layout-manager="GridLayoutManager" row-count="2" column-count="1" same-size-horizontally="false" same-size-vertically="false" hgap="-1" vgap="5">
                 <margin top="10" left="10" bottom="10" right="10"/>
                 <constraints>
-                  <grid row="2" column="0" row-span="1" col-span="3" vsize-policy="0" hsize-policy="3" anchor="0" fill="3" indent="0" use-parent-layout="false"/>
+                  <grid row="4" column="0" row-span="1" col-span="3" vsize-policy="0" hsize-policy="3" anchor="0" fill="3" indent="0" use-parent-layout="false"/>
                 </constraints>
                 <properties/>
                 <border type="etched" title="调试选项"/>
@@ -412,7 +407,7 @@
               <!-- 填充空间 -->
               <vspacer id="debugTabSpacer">
                 <constraints>
-                  <grid row="3" column="1" row-span="1" col-span="1" vsize-policy="6" hsize-policy="1" anchor="0" fill="2" indent="0" use-parent-layout="false"/>
+                  <grid row="6" column="1" row-span="1" col-span="1" vsize-policy="6" hsize-policy="1" anchor="0" fill="2" indent="0" use-parent-layout="false"/>
                 </constraints>
               </vspacer>
             </children>

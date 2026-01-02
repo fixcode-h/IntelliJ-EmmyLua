@@ -42,9 +42,16 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
     /**
      * 根据日志等级输出日志
      */
-    private fun logWithLevel(message: String, level: LogLevel, contentType: ConsoleViewContentType = ConsoleViewContentType.SYSTEM_OUTPUT) {
+    private fun logWithLevel(message: String, level: LogLevel, contentType: ConsoleViewContentType? = null) {
         if (level.level >= configuration.logLevel.level) {
-            println(message, LogConsoleType.NORMAL, contentType)
+            // 根据日志等级自动选择显示样式
+            val actualContentType = contentType ?: when (level) {
+                LogLevel.DEBUG -> ConsoleViewContentType.LOG_DEBUG_OUTPUT
+                LogLevel.NORMAL -> ConsoleViewContentType.SYSTEM_OUTPUT
+                LogLevel.WARNING -> ConsoleViewContentType.LOG_WARNING_OUTPUT
+                LogLevel.ERROR -> ConsoleViewContentType.ERROR_OUTPUT
+            }
+            println(message, LogConsoleType.NORMAL, actualContentType)
         }
     }
 
@@ -330,7 +337,15 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
                 try {
                     val gson = com.google.gson.Gson()
                     val msg = gson.fromJson(json, LogNotify::class.java)
-                    logWithLevel("📝 ${msg.message}", LogLevel.DEBUG)
+                    // type: 0=Debug, 1=Info, 2=Warning, 3=Error
+                    val level = when (msg.type) {
+                        0 -> LogLevel.DEBUG
+                        1 -> LogLevel.NORMAL
+                        2 -> LogLevel.WARNING
+                        3 -> LogLevel.ERROR
+                        else -> LogLevel.NORMAL
+                    }
+                    logWithLevel("📝 ${msg.message}", level)
                 } catch (e: Exception) {
                     // 忽略解析错误
                 }
@@ -396,24 +411,6 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
      */
     private fun readPluginResource(path: String): String? {
         return try {
-            // 如果是emmyHelper.lua文件，优先使用用户设置的自定义路径
-            if (path == "debugger/emmy/emmyHelper.lua") {
-                val settings = LuaSettings.instance
-                val customPath = settings.customEmmyHelperPath
-                if (!customPath.isNullOrBlank()) {
-                    val customFile = File(customPath)
-                    if (customFile.exists() && customFile.isFile()) {
-                        val content = customFile.readText()
-                        logWithLevel("✅ 成功从自定义路径读取EmmyHelper: $customPath", LogLevel.DEBUG)
-                        logWithLevel("📝 内容长度: ${content.length} 字符", LogLevel.DEBUG)
-                        logWithLevel("📋 内容预览: ${content.take(200)}...", LogLevel.DEBUG)
-                        return content
-                    } else {
-                        logWithLevel("⚠️ 自定义EmmyHelper路径无效，回退到默认路径: $customPath", LogLevel.DEBUG)
-                    }
-                }
-            }
-            
             // 首先尝试使用类加载器从JAR包中读取
             val classLoader = LuaFileUtil::class.java.classLoader
             val resource = classLoader.getResource(path)
@@ -422,7 +419,6 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
                 logWithLevel("✅ 成功从类加载器读取资源: $path", LogLevel.DEBUG)
                 logWithLevel("📄 资源URL: ${resource}", LogLevel.DEBUG)
                 logWithLevel("📝 内容长度: ${content.length} 字符", LogLevel.DEBUG)
-                logWithLevel("📋 内容预览: ${content.take(200)}...", LogLevel.DEBUG)
                 content
             } else {
                 // 如果类加载器无法找到，尝试使用LuaFileUtil的方法
@@ -431,7 +427,6 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
                     val content = File(filePath).readText()
                     logWithLevel("✅ 成功从文件系统读取资源: $filePath", LogLevel.DEBUG)
                     logWithLevel("📝 内容长度: ${content.length} 字符", LogLevel.DEBUG)
-                    logWithLevel("📋 内容预览: ${content.take(200)}...", LogLevel.DEBUG)
                     content
                 } else {
                     logWithLevel("❌ 无法找到资源: $path", LogLevel.ERROR, ConsoleViewContentType.ERROR_OUTPUT)
@@ -454,14 +449,27 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
         // 在后台线程执行文件读取操作，避免EDT违规
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
-                // 1. 发送初始化脚本（emmyHelper.lua）
-                val code = readPluginResource("debugger/emmy/emmyHelper.lua")
-                if (code != null) {
+                // 1. 获取 emmyHelper 目录路径、自定义目录路径和脚本名称
+                val emmyHelperPath = getEmmyHelperDirPath()
+                val customHelperPath = getCustomHelperDirPath()
+                val emmyHelperExtName = getEmmyHelperExtName()
+                
+                if (emmyHelperPath != null) {
                     val extensions = com.tang.intellij.lua.psi.LuaFileManager.extensions
-                    transporter?.send(InitMessage(code, extensions))
-                    logWithLevel("📤 发送InitReq消息（emmyHelper.lua）", LogLevel.DEBUG)
+                    transporter?.send(InitMessage(
+                        emmyHelperPath = emmyHelperPath,
+                        customHelperPath = customHelperPath,
+                        emmyHelperName = "emmyHelper",
+                        emmyHelperExtName = emmyHelperExtName,
+                        ext = extensions
+                    ))
+                    logWithLevel("📤 发送InitReq消息（emmyHelper路径: $emmyHelperPath）", LogLevel.DEBUG)
+                    if (customHelperPath.isNotEmpty()) {
+                        logWithLevel("📤 自定义Helper路径: $customHelperPath", LogLevel.DEBUG)
+                    }
+                    logWithLevel("📤 扩展脚本: $emmyHelperExtName", LogLevel.DEBUG)
                 } else {
-                    logWithLevel("❌ 无法读取emmyHelper.lua文件", LogLevel.ERROR, ConsoleViewContentType.ERROR_OUTPUT)
+                    logWithLevel("❌ 无法获取emmyHelper目录路径", LogLevel.ERROR, ConsoleViewContentType.ERROR_OUTPUT)
                 }
                 
                 // 2. 发送断点信息
@@ -484,6 +492,171 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
                 logWithLevel("❌ 发送初始化请求失败: ${e.message}", LogLevel.ERROR)
                 this@EmmyAttachDebugProcess.error("初始化请求失败: ${e.message}")
             }
+        }
+    }
+    
+    /**
+     * 获取 emmyHelper 目录路径
+     * 
+     * 支持开发模式和生产模式：
+     * - 开发模式：直接返回 src/main/resources/debugger/emmy/code 目录路径
+     * - 生产模式：将资源解压到临时目录并返回路径
+     */
+    private fun getEmmyHelperDirPath(): String? {
+        // 1. 尝试开发模式路径
+        val basePath = session.project.basePath
+        if (basePath != null) {
+            val devResourceDir = File(basePath, "src/main/resources/debugger/emmy/code")
+            if (devResourceDir.exists() && devResourceDir.isDirectory) {
+                logWithLevel("✅ 使用开发模式路径: ${devResourceDir.absolutePath}", LogLevel.DEBUG)
+                return devResourceDir.absolutePath
+            }
+        }
+        
+        // 2. 生产模式：解压资源到临时目录
+        return extractEmmyHelperToTemp()
+    }
+    
+    /**
+     * 将 emmyHelper 资源解压到临时目录
+     * 递归复制 debugger/emmy/code 目录下的所有 Lua 文件
+     */
+    private fun extractEmmyHelperToTemp(): String? {
+        try {
+            val tempDir = File(System.getProperty("java.io.tmpdir"), "emmy_helper")
+            if (!tempDir.exists()) {
+                tempDir.mkdirs()
+            }
+            
+            // 递归复制 code 目录下的所有文件
+            val codeResourceBase = "debugger/emmy/code"
+            extractCodeDirectory(codeResourceBase, tempDir)
+            
+            logWithLevel("✅ emmyHelper资源已解压到: ${tempDir.absolutePath}", LogLevel.DEBUG)
+            return tempDir.absolutePath
+        } catch (e: Exception) {
+            logWithLevel("❌ 解压emmyHelper资源失败: ${e.message}", LogLevel.ERROR)
+            return null
+        }
+    }
+    
+    /**
+     * 递归提取 code 目录下的所有 Lua 文件
+     */
+    private fun extractCodeDirectory(resourceBase: String, targetDir: File) {
+        val settings = LuaSettings.instance
+        val classLoader = LuaFileUtil::class.java.classLoader
+        
+        // 开发模式：从文件系统递归复制
+        if (settings.enableDevMode) {
+            val projectBasePath = session.project.basePath
+            if (projectBasePath != null) {
+                val resourceDir = File(projectBasePath, "src/main/resources/$resourceBase")
+                if (resourceDir.exists() && resourceDir.isDirectory) {
+                    copyDirectoryRecursively(resourceDir, targetDir)
+                    return
+                }
+            }
+        }
+        
+        // 生产模式：从 JAR 包中提取
+        val resourceUrl = classLoader.getResource(resourceBase)
+        if (resourceUrl != null) {
+            when (resourceUrl.protocol) {
+                "file" -> {
+                    // 直接从文件系统复制
+                    val sourceDir = File(resourceUrl.toURI())
+                    copyDirectoryRecursively(sourceDir, targetDir)
+                }
+                "jar" -> {
+                    // 从 JAR 包中提取
+                    extractFromJar(resourceUrl, resourceBase, targetDir)
+                }
+            }
+        }
+    }
+    
+    /**
+     * 递归复制目录
+     */
+    private fun copyDirectoryRecursively(sourceDir: File, targetDir: File) {
+        sourceDir.walkTopDown().forEach { file ->
+            if (file.isFile && file.extension == "lua") {
+                val relativePath = file.relativeTo(sourceDir).path
+                val targetFile = File(targetDir, relativePath)
+                targetFile.parentFile?.mkdirs()
+                file.copyTo(targetFile, overwrite = true)
+                logWithLevel("✅ 已解压: $relativePath -> ${targetFile.absolutePath}", LogLevel.DEBUG)
+            }
+        }
+    }
+    
+    /**
+     * 从 JAR 包中提取资源目录
+     */
+    private fun extractFromJar(resourceUrl: java.net.URL, resourceBase: String, targetDir: File) {
+        val jarPath = resourceUrl.path.substringAfter("file:").substringBefore("!")
+        val jarFile = java.util.jar.JarFile(java.net.URLDecoder.decode(jarPath, "UTF-8"))
+        
+        jarFile.use { jar ->
+            jar.entries().asSequence()
+                .filter { entry ->
+                    !entry.isDirectory && 
+                    entry.name.startsWith("$resourceBase/") && 
+                    entry.name.endsWith(".lua")
+                }
+                .forEach { entry ->
+                    val relativePath = entry.name.removePrefix("$resourceBase/")
+                    val targetFile = File(targetDir, relativePath)
+                    targetFile.parentFile?.mkdirs()
+                    
+                    jar.getInputStream(entry).use { input ->
+                        targetFile.outputStream().use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                    logWithLevel("✅ 已解压: $relativePath -> ${targetFile.absolutePath}", LogLevel.DEBUG)
+                }
+        }
+    }
+    
+    /**
+     * 获取自定义 helper 目录路径
+     * 
+     * 如果用户配置了自定义脚本，返回其所在目录路径
+     */
+    private fun getCustomHelperDirPath(): String {
+        val settings = LuaSettings.instance
+        val customPath = settings.customHelperPath
+        
+        if (!customPath.isNullOrBlank()) {
+            val customFile = File(customPath)
+            if (customFile.exists() && customFile.isDirectory) {
+                val dirPath = customFile.absolutePath
+                if (dirPath.isNotEmpty()) {
+                    logWithLevel("✅ 自定义Helper目录: $dirPath", LogLevel.DEBUG)
+                }
+                return dirPath
+            }
+        }
+        
+        return ""
+    }
+    
+    /**
+     * 获取扩展脚本名称
+     * 
+     * 如果用户配置了自定义扩展脚本名称，返回该名称
+     * 否则返回默认的 "emmyHelper_ue"
+     */
+    private fun getEmmyHelperExtName(): String {
+        val settings = LuaSettings.instance
+        val customExtName = settings.customHelperExtName
+        
+        return if (!customExtName.isNullOrBlank()) {
+            customExtName
+        } else {
+            "emmyHelper_ue"
         }
     }
 }

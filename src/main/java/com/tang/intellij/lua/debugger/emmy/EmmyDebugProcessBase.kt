@@ -56,13 +56,28 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
         // 在后台线程执行文件读取操作，避免EDT违规
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
-                // send init
-                val code = readPluginResource("debugger/emmy/emmyHelper.lua")
-                if (code != null) {
+                // 清理旧会话的断点状态，确保新会话从干净状态开始
+                resetBreakpointState()
+                
+                // send init - 发送 emmyHelper 目录路径、自定义目录路径和脚本名称
+                val emmyHelperPath = getEmmyHelperDirPath()
+                val customHelperPath = getCustomHelperDirPath()
+                val emmyHelperExtName = getEmmyHelperExtName()
+                
+                if (emmyHelperPath != null) {
                     val extList = LuaFileManager.extensions
-                    transporter?.send(InitMessage(code, extList))
+                    transporter?.send(InitMessage(
+                        emmyHelperPath = emmyHelperPath,
+                        customHelperPath = customHelperPath,
+                        emmyHelperName = "emmyHelper",
+                        emmyHelperExtName = emmyHelperExtName,
+                        ext = extList
+                    ))
+                } else {
+                    error("无法获取 emmyHelper 目录路径")
                 }
-                // send bps
+                
+                // send bps - 重新同步所有断点到调试器端
                 val breakpoints = XDebuggerManager.getInstance(session.project)
                     .breakpointManager
                     .getBreakpoints(LuaLineBreakpointType::class.java)
@@ -80,50 +95,244 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
     }
     
     /**
-     * 读取插件资源文件内容，支持JAR包和文件系统
+     * 重置断点状态，用于新调试会话开始时清理旧状态
+     * 这确保了：
+     * 1. ID计数器从0开始，避免ID无限增长
+     * 2. 断点映射被清空，避免残留的旧断点数据
+     * 3. 所有断点的userData中的ID被清除，确保重新注册时获得正确的新ID
+     */
+    private fun resetBreakpointState() {
+        // 清空本地断点映射
+        breakpoints.clear()
+        // 重置ID计数器
+        idCounter = 0
+        
+        // 清除所有断点的旧ID userData
+        // 这很重要，因为断点对象是IDE持久化的，userData会跨会话保留
+        try {
+            val allBreakpoints = XDebuggerManager.getInstance(session.project)
+                .breakpointManager
+                .getBreakpoints(LuaLineBreakpointType::class.java)
+            allBreakpoints.forEach { breakpoint ->
+                breakpoint.putUserData(ID, null)
+            }
+        } catch (e: Exception) {
+            // 忽略清理userData时的异常，不影响主流程
+        }
+    }
+    
+    /**
+     * 获取 emmyHelper 目录路径
+     * 
+     * 支持开发模式和生产模式：
+     * - 开发模式：直接返回 src/main/resources/debugger/emmy/code 目录路径
+     * - 生产模式：将资源解压到临时目录并返回路径
+     */
+    private fun getEmmyHelperDirPath(): String? {
+        // 1. 尝试开发模式路径
+        val devPath = getDevResourcePath("debugger/emmy/code")
+        if (devPath != null) {
+            return devPath
+        }
+        
+        // 2. 生产模式：解压资源到临时目录
+        return extractEmmyHelperToTemp()
+    }
+    
+    /**
+     * 获取开发模式下的资源目录路径
+     */
+    private fun getDevResourcePath(relativePath: String): String? {
+        val basePath = session.project.basePath ?: return null
+        val devResourceDir = File(basePath, "src/main/resources/$relativePath")
+        if (devResourceDir.exists() && devResourceDir.isDirectory) {
+            return devResourceDir.absolutePath
+        }
+        return null
+    }
+    
+    /**
+     * 将 emmyHelper 资源解压到临时目录
+     * 递归复制 debugger/emmy/code 目录下的所有 Lua 文件
+     */
+    private fun extractEmmyHelperToTemp(): String? {
+        try {
+            val tempDir = File(System.getProperty("java.io.tmpdir"), "emmy_helper")
+            if (!tempDir.exists()) {
+                tempDir.mkdirs()
+            }
+            
+            // 递归复制 code 目录下的所有文件
+            val codeResourceBase = "debugger/emmy/code"
+            extractCodeDirectory(codeResourceBase, tempDir)
+            
+            return tempDir.absolutePath
+        } catch (e: Exception) {
+            return null
+        }
+    }
+    
+    /**
+     * 递归提取 code 目录下的所有 Lua 文件
+     */
+    private fun extractCodeDirectory(resourceBase: String, targetDir: File) {
+        val settings = LuaSettings.instance
+        val classLoader = LuaFileUtil::class.java.classLoader
+        
+        // 开发模式：从文件系统递归复制
+        if (settings.enableDevMode) {
+            val projectBasePath = session.project.basePath
+            if (projectBasePath != null) {
+                val resourceDir = File(projectBasePath, "src/main/resources/$resourceBase")
+                if (resourceDir.exists() && resourceDir.isDirectory) {
+                    copyDirectoryRecursively(resourceDir, targetDir)
+                    return
+                }
+            }
+        }
+        
+        // 生产模式：从 JAR 包中提取
+        val resourceUrl = classLoader.getResource(resourceBase)
+        if (resourceUrl != null) {
+            when (resourceUrl.protocol) {
+                "file" -> {
+                    // 直接从文件系统复制
+                    val sourceDir = File(resourceUrl.toURI())
+                    copyDirectoryRecursively(sourceDir, targetDir)
+                }
+                "jar" -> {
+                    // 从 JAR 包中提取
+                    extractFromJar(resourceUrl, resourceBase, targetDir)
+                }
+            }
+        }
+    }
+    
+    /**
+     * 递归复制目录
+     */
+    private fun copyDirectoryRecursively(sourceDir: File, targetDir: File) {
+        sourceDir.walkTopDown().forEach { file ->
+            if (file.isFile && file.extension == "lua") {
+                val relativePath = file.relativeTo(sourceDir).path
+                val targetFile = File(targetDir, relativePath)
+                targetFile.parentFile?.mkdirs()
+                file.copyTo(targetFile, overwrite = true)
+            }
+        }
+    }
+    
+    /**
+     * 从 JAR 包中提取资源目录
+     */
+    private fun extractFromJar(resourceUrl: java.net.URL, resourceBase: String, targetDir: File) {
+        val jarPath = resourceUrl.path.substringAfter("file:").substringBefore("!")
+        val jarFile = java.util.jar.JarFile(java.net.URLDecoder.decode(jarPath, "UTF-8"))
+        
+        jarFile.use { jar ->
+            jar.entries().asSequence()
+                .filter { entry ->
+                    !entry.isDirectory && 
+                    entry.name.startsWith("$resourceBase/") && 
+                    entry.name.endsWith(".lua")
+                }
+                .forEach { entry ->
+                    val relativePath = entry.name.removePrefix("$resourceBase/")
+                    val targetFile = File(targetDir, relativePath)
+                    targetFile.parentFile?.mkdirs()
+                    
+                    jar.getInputStream(entry).use { input ->
+                        targetFile.outputStream().use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                }
+        }
+    }
+    
+    /**
+     * 获取自定义 helper 目录路径
+     * 
+     * 如果用户配置了自定义脚本，返回其所在目录路径
+     */
+    private fun getCustomHelperDirPath(): String {
+        val settings = LuaSettings.instance
+        val customPath = settings.customHelperPath
+        
+        if (!customPath.isNullOrBlank()) {
+            val customFile = File(customPath)
+            if (customFile.exists() && customFile.isDirectory) {
+                return customFile.absolutePath
+            }
+        }
+        
+        return ""
+    }
+    
+    /**
+     * 获取扩展脚本名称
+     * 
+     * 如果用户配置了自定义扩展脚本名称，返回该名称
+     * 否则返回默认的 "emmyHelper_ue"
+     */
+    private fun getEmmyHelperExtName(): String {
+        val settings = LuaSettings.instance
+        val customExtName = settings.customHelperExtName
+        
+        return if (!customExtName.isNullOrBlank()) {
+            customExtName
+        } else {
+            "emmyHelper_ue"
+        }
+    }
+    
+    /**
+     * 读取插件资源文件内容，支持开发模式、JAR包和文件系统
+     * 
+     * 开发模式路径自动检测逻辑：
+     * 1. 获取当前项目根目录 (session.project.basePath)
+     * 2. 检查是否存在 src/main/resources 目录
+     * 3. 如果存在且开发模式已启用，则从该目录读取
+     * 4. 否则回退到从 JAR 包读取
      */
     private fun readPluginResource(path: String): String? {
-        return try {
-            // 如果是emmyHelper.lua文件，优先使用用户设置的自定义路径
-            if (path == "debugger/emmy/emmyHelper.lua") {
-                val settings = LuaSettings.instance
-                val customPath = settings.customEmmyHelperPath
-                if (!customPath.isNullOrBlank()) {
-                    val customFile = File(customPath)
-                    if (customFile.exists() && customFile.isFile()) {
-                        val content = customFile.readText()
-                        println("✅ 成功从自定义路径读取EmmyHelper: $customPath")
-                        println("📝 内容长度: ${content.length} 字符")
-                        println("📋 内容预览: ${content.take(200)}...")
-                        return content
-                    } else {
-                        println("⚠️ 自定义EmmyHelper路径无效，回退到默认路径: $customPath")
+        val settings = LuaSettings.instance
+        
+        // 开发模式：自动检测项目源码目录
+        if (settings.enableDevMode) {
+            val projectBasePath = session.project.basePath
+            if (projectBasePath != null) {
+                // 尝试标准 Maven/Gradle 项目结构
+                val resourceDir = File(projectBasePath, "src/main/resources")
+                if (resourceDir.exists() && resourceDir.isDirectory) {
+                    val devFile = File(resourceDir, path)
+                    if (devFile.exists() && devFile.isFile) {
+                        return try {
+                            val content = devFile.readText()
+                            println("✅ [开发模式] 从项目源码读取: ${devFile.absolutePath}")
+                            content
+                        } catch (e: Exception) {
+                            println("⚠️ [开发模式] 读取失败: ${devFile.absolutePath}, ${e.message}")
+                            null
+                        }
                     }
                 }
             }
-            
+        }
+        
+        return try {
             // 首先尝试使用类加载器从JAR包中读取
             val classLoader = LuaFileUtil::class.java.classLoader
             val resource = classLoader.getResource(path)
             if (resource != null) {
                 val content = resource.readText()
-                println("✅ 成功从类加载器读取资源: $path")
-                println("📄 资源URL: ${resource}")
-                println("📝 内容长度: ${content.length} 字符")
-                println("📋 内容预览: ${content.take(200)}...")
                 content
             } else {
                 // 如果类加载器无法找到，尝试使用LuaFileUtil的方法
                 val filePath = LuaFileUtil.getPluginVirtualFile(path)
                 if (filePath != null && !filePath.startsWith("jar:")) {
-                    val content = File(filePath).readText()
-                    println("✅ 成功从文件系统读取资源: $filePath")
-                    println("📝 内容长度: ${content.length} 字符")
-                    println("📋 内容预览: ${content.take(200)}...")
-                    content
+                    File(filePath).readText()
                 } else {
-                    println("❌ 无法找到资源: $path")
-                    println("🔍 LuaFileUtil返回路径: $filePath")
                     null
                 }
             }
@@ -160,7 +369,15 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
 
             MessageCMD.LogNotify -> {
                 val notify = Gson().fromJson(json, LogNotify::class.java)
-                println(notify.message, LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+                // type: 0=Debug, 1=Info, 2=Warning, 3=Error
+                val contentType = when (notify.type) {
+                    0 -> ConsoleViewContentType.LOG_DEBUG_OUTPUT    // Debug
+                    1 -> ConsoleViewContentType.SYSTEM_OUTPUT       // Info
+                    2 -> ConsoleViewContentType.LOG_WARNING_OUTPUT  // Warning
+                    3 -> ConsoleViewContentType.ERROR_OUTPUT        // Error
+                    else -> ConsoleViewContentType.SYSTEM_OUTPUT
+                }
+                println(notify.message, LogConsoleType.NORMAL, contentType)
             }
 
             else -> {

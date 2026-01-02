@@ -24,8 +24,8 @@ import com.intellij.openapi.options.Configurable;
 import com.intellij.openapi.options.SearchableConfigurable;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.project.ProjectManager;
-import com.intellij.openapi.ui.Messages;
 import com.intellij.openapi.util.text.StringUtil;
+import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.util.ArrayUtil;
 import com.intellij.util.FileContentUtil;
@@ -66,18 +66,17 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
     private JComboBox<LuaLanguageLevel> languageLevel;
     private JTextField requireFunctionNames;
     private JTextField tooLargerFileThreshold;
-    private JTextField ueProjectPathField;
-    private JButton browseUEProjectButton;
-    private JButton autoDetectUEProjectButton;
-    private JCheckBox enableUEIntelliSenseCheckBox;
     private JTextField ueProcessNamesField;
     private JTextField debugProcessBlacklistField;
-    private JTextField customEmmyHelperPathField;
-    private JButton browseCustomEmmyHelperButton;
+    private JTextField customHelperPathField;
+    private JButton browseCustomHelperPathButton;
+    private JTextField customHelperExtNameField;
+    private JButton browseCustomHelperExtNameButton;
     private JCheckBox enableCustomFileTemplateCheckBox;
     private JTextArea customFileTemplateTextArea;
     private JCheckBox enableFileNameReplacementCheckBox;
     private JTextField fileNamePlaceholderField;
+    private JCheckBox enableDevModeCheckBox;
 
     public LuaSettingsPanel() {
         this.settings = LuaSettings.Companion.getInstance();
@@ -107,9 +106,6 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
         languageLevel.setModel(lanLevelModel);
         lanLevelModel.setSelectedItem(settings.getLanguageLevel());
 
-        //UE project settings
-        ueProjectPathField.setText(settings.getUeProjectPath());
-        enableUEIntelliSenseCheckBox.setSelected(settings.getEnableUEIntelliSense());
         // 将进程名称数组转换为逗号分隔的字符串
         String[] processNames = settings.getUeProcessNames();
         if (processNames != null && processNames.length > 0) {
@@ -126,68 +122,55 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
             debugProcessBlacklistField.setText("");
         }
         
-        // 自定义EmmyHelper.lua路径设置
-        customEmmyHelperPathField.setText(settings.getCustomEmmyHelperPath());
+        // 自定义 Helper 目录路径设置
+        customHelperPathField.setText(settings.getCustomHelperPath());
+        
+        // 自定义 Helper 扩展脚本名称设置
+        customHelperExtNameField.setText(settings.getCustomHelperExtName());
         
         // 文件模板设置
         enableCustomFileTemplateCheckBox.setSelected(settings.getEnableCustomFileTemplate());
         customFileTemplateTextArea.setText(settings.getCustomFileTemplate());
         enableFileNameReplacementCheckBox.setSelected(settings.getEnableFileNameReplacement());
         fileNamePlaceholderField.setText(settings.getFileNamePlaceholder());
+        
+        // 开发模式设置
+        enableDevModeCheckBox.setSelected(settings.getEnableDevMode());
 
-        //browse custom emmy helper button action
-        browseCustomEmmyHelperButton.addActionListener(e -> {
+        //browse custom helper path button action (选择目录)
+        browseCustomHelperPathButton.addActionListener(e -> {
+            FileChooserDescriptor descriptor = new FileChooserDescriptor(false, true, false, false, false, false);
+            descriptor.setTitle("Select Custom Helper Directory");
+            descriptor.setDescription("Choose a directory containing custom helper Lua scripts");
+            
+            VirtualFile selectedFile = FileChooser.chooseFile(descriptor, null, null);
+            if (selectedFile != null) {
+                customHelperPathField.setText(selectedFile.getPath());
+            }
+        });
+        
+        //browse custom helper ext name button action (从 customHelperPath 目录选择文件)
+        browseCustomHelperExtNameButton.addActionListener(e -> {
+            String helperPath = customHelperPathField.getText().trim();
+            VirtualFile rootDir = null;
+            if (!helperPath.isEmpty()) {
+                rootDir = LocalFileSystem.getInstance().findFileByPath(helperPath);
+            }
+            
             FileChooserDescriptor descriptor = new FileChooserDescriptor(true, false, false, false, false, false)
                     .withFileFilter(file -> file.getName().endsWith(".lua"));
-            descriptor.setTitle("Select Custom EmmyHelper.lua File");
-            descriptor.setDescription("Choose a custom Lua file to use as EmmyHelper");
-            
-            VirtualFile selectedFile = FileChooser.chooseFile(descriptor, null, null);
-            if (selectedFile != null) {
-                customEmmyHelperPathField.setText(selectedFile.getPath());
+            descriptor.setTitle("Select Custom Helper Extension Script");
+            descriptor.setDescription("Choose a Lua file from the custom helper directory");
+            if (rootDir != null && rootDir.isDirectory()) {
+                descriptor.setRoots(rootDir);
             }
-        });
-
-        //browse button action
-        browseUEProjectButton.addActionListener(e -> {
-            FileChooserDescriptor descriptor = new FileChooserDescriptor(true, false, false, false, false, false)
-                    .withFileFilter(file -> file.getName().endsWith(".uproject"));
-            descriptor.setTitle("Select UE Project File");
-            descriptor.setDescription("Choose the .uproject file for your Unreal Engine project");
             
-            VirtualFile selectedFile = FileChooser.chooseFile(descriptor, null, null);
+            VirtualFile selectedFile = FileChooser.chooseFile(descriptor, null, rootDir);
             if (selectedFile != null) {
-                ueProjectPathField.setText(selectedFile.getPath());
+                // 只保存文件名（不含扩展名）
+                String fileName = selectedFile.getNameWithoutExtension();
+                customHelperExtNameField.setText(fileName);
             }
-        });
-
-        //auto detect button action
-        autoDetectUEProjectButton.addActionListener(e -> {
-            // 在后台线程中执行自动检测，避免阻塞UI
-            ApplicationManager.getApplication().executeOnPooledThread(() -> {
-                String detectedPath = settings.autoDetectUProjectPath();
-                
-                // 在UI线程中更新界面
-                ApplicationManager.getApplication().invokeLater(() -> {
-                    if (detectedPath != null) {
-                        ueProjectPathField.setText(detectedPath);
-                        // 显示成功消息
-                        Messages.showInfoMessage(
-                            "已自动检测到 .uproject 文件：\n" + detectedPath,
-                            "自动检测成功"
-                        );
-                    } else {
-                        // 显示未找到消息
-                        Messages.showWarningDialog(
-                            "未能在当前项目及其父目录中找到 .uproject 文件。\n" +
-                            "请确保：\n" +
-                            "1. 当前项目类型已设置为 'Unreal Engine'\n" +
-                            "2. 项目目录或其父目录包含 .uproject 文件",
-                            "自动检测失败"
-                        );
-                    }
-                });
-            });
         });
     }
 
@@ -225,15 +208,15 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
                 settings.getAttachDebugCaptureStd() != captureStd.isSelected() ||
                 settings.getAttachDebugDefaultCharsetName() != charsetComboBox.getSelectedItem() ||
                 settings.getLanguageLevel() != languageLevel.getSelectedItem() ||
-                !StringUtil.equals(settings.getUeProjectPath(), ueProjectPathField.getText()) ||
-                settings.getEnableUEIntelliSense() != enableUEIntelliSenseCheckBox.isSelected() ||
                 !Arrays.equals(settings.getUeProcessNames(), getProcessNamesFromTextField()) ||
                 !Arrays.equals(settings.getDebugProcessBlacklist(), getDebugProcessBlacklistFromTextField()) ||
-                !StringUtil.equals(settings.getCustomEmmyHelperPath(), customEmmyHelperPathField.getText()) ||
+                !StringUtil.equals(settings.getCustomHelperPath(), customHelperPathField.getText()) ||
+                !StringUtil.equals(settings.getCustomHelperExtName(), customHelperExtNameField.getText()) ||
                 settings.getEnableCustomFileTemplate() != enableCustomFileTemplateCheckBox.isSelected() ||
                 !StringUtil.equals(settings.getCustomFileTemplate(), customFileTemplateTextArea.getText()) ||
                 settings.getEnableFileNameReplacement() != enableFileNameReplacementCheckBox.isSelected() ||
                 !StringUtil.equals(settings.getFileNamePlaceholder(), fileNamePlaceholderField.getText()) ||
+                settings.getEnableDevMode() != enableDevModeCheckBox.isSelected() ||
                 !Arrays.equals(settings.getAdditionalSourcesRoot(), additionalRoots.getRoots(), String::compareTo);
     }
 
@@ -256,18 +239,21 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
         settings.setAttachDebugCaptureStd(captureStd.isSelected());
         settings.setAttachDebugDefaultCharsetName((String) Objects.requireNonNull(charsetComboBox.getSelectedItem()));
         
-        //UE project settings
-        settings.setUeProjectPath(ueProjectPathField.getText());
-        settings.setEnableUEIntelliSense(enableUEIntelliSenseCheckBox.isSelected());
+        //Custom helper path
+        settings.setCustomHelperPath(customHelperPathField.getText());
         
-        //Custom EmmyHelper path
-        settings.setCustomEmmyHelperPath(customEmmyHelperPathField.getText());
+        //Custom helper ext name
+        settings.setCustomHelperExtName(customHelperExtNameField.getText());
         
         // 文件模板设置
         settings.setEnableCustomFileTemplate(enableCustomFileTemplateCheckBox.isSelected());
         settings.setCustomFileTemplate(customFileTemplateTextArea.getText());
         settings.setEnableFileNameReplacement(enableFileNameReplacementCheckBox.isSelected());
         settings.setFileNamePlaceholder(fileNamePlaceholderField.getText());
+        
+        // 开发模式设置
+        settings.setEnableDevMode(enableDevModeCheckBox.isSelected());
+        
         // 将逗号分隔的字符串转换为进程名称数组
         String processNamesText = ueProcessNamesField.getText().trim();
         if (processNamesText.isEmpty()) {
@@ -349,9 +335,6 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
         charsetComboBox.setSelectedItem(settings.getAttachDebugDefaultCharsetName());
         languageLevel.setSelectedItem(settings.getLanguageLevel());
         
-        // Reset UE project fields
-        ueProjectPathField.setText(settings.getUeProjectPath());
-        enableUEIntelliSenseCheckBox.setSelected(settings.getEnableUEIntelliSense());
         // 将进程名称数组转换为逗号分隔的字符串
         String[] processNames = settings.getUeProcessNames();
         if (processNames != null && processNames.length > 0) {
@@ -360,14 +343,20 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
             ueProcessNamesField.setText("");
         }
         
-        // Reset custom EmmyHelper path
-        customEmmyHelperPathField.setText(settings.getCustomEmmyHelperPath());
+        // Reset custom helper path
+        customHelperPathField.setText(settings.getCustomHelperPath());
+        
+        // Reset custom helper ext name
+        customHelperExtNameField.setText(settings.getCustomHelperExtName());
         
         // Reset 文件模板设置
         enableCustomFileTemplateCheckBox.setSelected(settings.getEnableCustomFileTemplate());
         customFileTemplateTextArea.setText(settings.getCustomFileTemplate());
         enableFileNameReplacementCheckBox.setSelected(settings.getEnableFileNameReplacement());
         fileNamePlaceholderField.setText(settings.getFileNamePlaceholder());
+        
+        // Reset 开发模式设置
+        enableDevModeCheckBox.setSelected(settings.getEnableDevMode());
     }
 
     private int getTooLargerFileThreshold() {

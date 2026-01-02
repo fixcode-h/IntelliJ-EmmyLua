@@ -1,29 +1,17 @@
+-------------------------------------------------------------------------------
+-- emmyFrameworks.lua: 框架支持
+-- 提供 tolua/xlua/cocos/unlua 等框架的调试支持
+-------------------------------------------------------------------------------
 
----@class emmy
----@field createNode fun(): Variable
-local emmy = {}
+-- 前向声明（由主模块设置）
+local emmy = nil
+local ProxyRegistry = nil
+local HandlerRegistry = nil
+local TypeMatcher = nil
 
----@class Variable
----@field query fun(self: Variable, obj: any, depth: number, queryHelper: boolean):void
----@field name string
----@field value string
----@field valueTypeName string
-
-
----@enum LuaValueType
-local LuaValueType = {
-    ["nil"] = 0,           -- nil 类型
-    ["boolean"] = 1,       -- boolean 类型
-    ["lightuserdata"] = 2, -- lightuserdata 类型
-    ["number"] = 3,        -- number 类型
-    ["string"] = 4,        -- string 类型
-    ["table"] = 5,         -- table 类型
-    ["function"] = 6,      -- function 类型
-    ["userdata"] = 7,      -- userdata 类型
-    ["thread"] = 8,        -- thread 类型
-    ["GROUP"] = 9          -- 特殊分组类型 C# or C++
-}
-
+-------------------------------------------------------------------------------
+-- tolua 框架支持
+-------------------------------------------------------------------------------
 local toluaHelper = {
     ---@param variable Variable
     queryVariable = function(variable, obj, typeName, depth)
@@ -74,6 +62,9 @@ local toluaHelper = {
     end
 }
 
+-------------------------------------------------------------------------------
+-- xlua 框架支持
+-------------------------------------------------------------------------------
 local xluaDebugger = {
     queryVariable = function(variable, obj, typeName, depth)
         if typeName == 'userdata' then
@@ -141,6 +132,9 @@ local xluaDebugger = {
     end
 }
 
+-------------------------------------------------------------------------------
+-- cocos2d-x 框架支持
+-------------------------------------------------------------------------------
 local cocosLuaDebugger = {
     queryVariable = function(variable, obj, typeName, depth)
         if typeName == 'userdata' then
@@ -179,172 +173,171 @@ local cocosLuaDebugger = {
     end
 }
 
--- 基于 __name 的处理器系统
-local UserdataProcessorBase = {}
-UserdataProcessorBase.__index = UserdataProcessorBase
+-------------------------------------------------------------------------------
+-- UnLua 框架支持 (UE4/UE5) - 使用模块化架构
+-------------------------------------------------------------------------------
 
-function UserdataProcessorBase:new()
-    local obj = {}
-    setmetatable(obj, self)
-    return obj
-end
-
--- 通用的 __tostring 处理函数
-function UserdataProcessorBase:processToString(variable, obj)
-    local mt = getmetatable(obj)
-    if not mt then return false end
-
-    local toStringFunc = rawget(mt, '__tostring')
-    if toStringFunc and type(toStringFunc) == 'function' then
-        local ok, s = pcall(function() return toStringFunc(obj) end)
-        if ok then
-            variable.value = tostring(s)
-        else
-            variable.value = tostring(obj)
-        end
-        variable.valueType = 7
-        if not variable.valueTypeName then
-            variable.valueTypeName = 'userdata'
-        end
-        return true
+--- 处理代理表（UnLua 绑定的 Lua table）
+---@param variable Variable
+---@param obj table
+---@param depth number
+---@param proxyResult ProxyRecognizeResult
+---@return boolean
+local function processProxyTable(variable, obj, depth, proxyResult)
+    -- 设置类型信息
+    variable.valueTypeName = proxyResult.typeName
+    
+    -- 如果存在内部 Object，使用 tostring 设置 value
+    if proxyResult.innerObject then
+        variable.value = tostring(proxyResult.innerObject)
     end
-    return false
-end
-
-function UserdataProcessorBase:process(variable, obj, name, depth)
-    self:processToString(variable, obj)
-
-    self:processSpecific(variable, obj, name, depth)
-
-    if self:shouldProcessMetatable(depth) then
-        self:processMetatable(variable, obj, depth)
+    
+    -- 遍历 table 字段
+    for key, value in pairs(obj) do
+        local childNode = emmy.createNode()
+        childNode.name = tostring(key)
+        childNode:query(value, depth - 1, true)
+        variable:addChild(childNode)
     end
+    
     return true
 end
 
-
-function UserdataProcessorBase:processSpecific(variable, obj, name, depth)
-    -- 子类可覆写此方法处理特定类型的逻辑
-end
-
-function UserdataProcessorBase:shouldProcessMetatable(depth)
-    return depth > 1
-end
-
-function UserdataProcessorBase:processMetatable(variable, obj, depth)
-    local mt = getmetatable(obj)
-    if not mt then return end
-    local parent = variable
-    for property, _ in pairs(mt) do
-        local v = emmy.createNode()
-        v.name = tostring(property)
-        local ok, val = pcall(function() return obj[property] end)
-        if ok then
-            v:query(val, depth - 1, true)
-        else
-            v.value = "<unreadable>"
-            v.valueTypeName = "metatable"
-        end
-        parent:addChild(v)
-    end
-end
-
-local TArrayProcessor = UserdataProcessorBase:new()
--- 通用的 ToTable 处理函数
-function TArrayProcessor:processToTable(variable, obj, name, depth)
-    local mt = getmetatable(obj)
-    if not mt then return false end
-
-    local toTableFunc = rawget(mt, 'ToTable')
-    if toTableFunc and type(toTableFunc) == 'function' then
-        local resultNode = emmy.createNode()
-        local resultTable = toTableFunc(obj)
-        resultNode.name = "ValueTable"
-        resultNode.value = resultTable
-        resultNode.valueType = 5
-        resultNode.valueTypeName = 'table'
-        resultNode:query(resultTable, depth - 1, true)
-        variable:addChild(resultNode)
-        return true
-    end
-end
-function TArrayProcessor:processSpecific(variable, obj, name, depth)
-    self:processToTable(variable, obj, name, depth)
-end
-
--- 处理器注册表
-local userdataProcessors = {
-    ['TArray'] = TArrayProcessor,
-    ['TMap'] = TArrayProcessor,
-    ['TSet'] = TArrayProcessor,
-}
-
--- 获取处理器的函数
-local function getUserdataProcessor(typeName)
-    local processor = userdataProcessors[typeName]
-    if processor then
-        return processor
-    end
-    -- 返回默认的基类处理器
-    return UserdataProcessorBase:new()
-end
-
-
-local unluaDebugger = {
-    queryVariable = function(variable, obj, typeName, depth)
-        -- 检查是否为 table 类型，并且看起来像一个 UnLua 代理对象
-        if typeName == 'table' then
-            local uObject = rawget(obj, 'Object')
-            if uObject and type(uObject) == 'userdata' then
-                local mt = getmetatable(uObject)
-                if mt then
-                    local name = rawget(mt, '__name')
-                    if name and type(name) == 'string' then
-                        -- 手动遍历 table 而不是调用 query
-                        for key, value in pairs(obj) do
-                            local childNode = emmy.createNode()
-                            childNode.name = tostring(key)
-                            childNode:query(value, depth - 1, true)
-                            variable:addChild(childNode)
-                        end
-                        -- 将 table 的类型名也显示为UE对象名
-                        variable.valueTypeName = name
-                        return true
-                    end
-                end
-            end
-        elseif typeName == 'userdata' then
-            local mt = getmetatable(obj)
-            if not mt then return false end
-
-            local name = rawget(mt, '__name')
-            if not name or type(name) ~= 'string' then
-                return false
-            end
-            variable.valueTypeName = name
-
-            local processor = getUserdataProcessor(name)
-            return processor:process(variable, obj, name, depth)
-        end
+--- 处理 userdata 对象
+---@param variable Variable
+---@param obj userdata
+---@param depth number
+---@return boolean
+local function processUserdata(variable, obj, depth)
+    local processor, typeName = TypeMatcher:getHandler(obj)
+    
+    if not typeName then
+        -- 无法从 metatable 提取 __name，无法处理
         return false
     end
+    
+    -- 设置类型名
+    variable.valueTypeName = typeName
+    
+    -- 如果没有匹配到处理器，使用默认处理器
+    if not processor then
+        local defaultProcessor = HandlerRegistry:getProcessorBase():new()
+        return defaultProcessor:process(variable, obj, typeName, depth)
+    end
+    
+    -- 调用匹配的处理器
+    return processor:process(variable, obj, typeName, depth)
+end
+
+-- UnLua 调试器
+local unluaDebugger = {
+    queryVariable = function(variable, obj, typeName, depth)
+        -- 检查是否为代理表
+        if typeName == 'table' then
+            local proxyResult = ProxyRegistry:recognize(obj)
+            if proxyResult and proxyResult.isProxy then
+                return processProxyTable(variable, obj, depth, proxyResult)
+            end
+        elseif typeName == 'userdata' then
+            return processUserdata(variable, obj, depth)
+        end
+        
+        return false
+    end,
+    
+    -- 动态注册 API（委托给子模块）
+    registerProcessor = function(typeName, processor)
+        local ok, err = pcall(function()
+            HandlerRegistry:register(typeName, processor)
+        end)
+        if not ok then
+            EmmyLog.error("registerProcessor failed:", typeName, err)
+        end
+        return ok
+    end,
+    
+    unregisterProcessor = function(typeName)
+        local ok, err = pcall(function()
+            HandlerRegistry:unregister(typeName)
+        end)
+        if not ok then
+            EmmyLog.error("unregisterProcessor failed:", typeName, err)
+        end
+        return ok
+    end,
+    
+    getProcessorBase = function()
+        local ok, result = pcall(function()
+            return HandlerRegistry:getProcessorBase()
+        end)
+        if not ok then
+            EmmyLog.error("getProcessorBase failed:", result)
+            return nil
+        end
+        return result
+    end,
+    
+    -- 代理表识别函数注册 API
+    registerProxyRecognizer = function(recognizer, priority)
+        local ok, err = pcall(function()
+            ProxyRegistry:register(recognizer, priority)
+        end)
+        if not ok then
+            EmmyLog.error("registerProxyRecognizer failed:", err)
+        end
+        return ok
+    end,
+    
+    unregisterProxyRecognizer = function(recognizer)
+        local ok, result = pcall(function()
+            return ProxyRegistry:unregister(recognizer)
+        end)
+        if not ok then
+            EmmyLog.error("unregisterProxyRecognizer failed:", result)
+            return false
+        end
+        return result
+    end
 }
 
-if tolua then
-    if tolua.gettag then
-        emmy = toluaHelper
+-------------------------------------------------------------------------------
+-- 模块接口
+-------------------------------------------------------------------------------
+
+local M = {}
+
+--- 设置依赖引用
+---@param emmyRef table emmy 引用
+---@param proxyRef table ProxyRegistry 引用
+---@param handlerRef table HandlerRegistry 引用
+---@param matcherRef table TypeMatcher 引用
+function M.setDependencies(emmyRef, proxyRef, handlerRef, matcherRef)
+    emmy = emmyRef
+    ProxyRegistry = proxyRef
+    HandlerRegistry = handlerRef
+    TypeMatcher = matcherRef
+end
+
+--- 根据环境选择合适的框架
+---@return table 选中的框架调试器
+function M.selectFramework()
+    if tolua then
+        if tolua.gettag then
+            return toluaHelper
+        else
+            return cocosLuaDebugger
+        end
+    elseif xlua then
+        return xluaDebugger
     else
-        emmy = cocosLuaDebugger
+        return unluaDebugger
     end
-elseif xlua then
-    emmy = xluaDebugger
-else
-    emmy = unluaDebugger
 end
 
-rawset(_G, 'emmyHelper', emmy)
+-- 导出各框架调试器（供测试或直接使用）
+M.toluaHelper = toluaHelper
+M.xluaDebugger = xluaDebugger
+M.cocosLuaDebugger = cocosLuaDebugger
+M.unluaDebugger = unluaDebugger
 
-local emmyHelperInit = rawget(_G, 'emmyHelperInit')
-if emmyHelperInit then
-    emmyHelperInit()
-end
+return M

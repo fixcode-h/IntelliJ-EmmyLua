@@ -57,7 +57,8 @@ class EmmyAttachDebugRunner : LuaRunner() {
             val processSelector = ProcessSelector(environment.project)
             val selectedProcess = processSelector.showProcessSelectionDialog(
                 "",
-                configuration.autoAttachSingleProcess
+                configuration.autoAttachSingleProcess,
+                configuration.filterUEProcesses
             )
             
             selectedProcess?.let { process ->
