@@ -66,26 +66,10 @@ TypeMatcher:init(HandlerRegistry)
 -- 框架选择与初始化
 -------------------------------------------------------------------------------
 
--- 设置框架模块的依赖
-frameworks.setDependencies(emmy, ProxyRegistry, HandlerRegistry, TypeMatcher)
-
--- 选择合适的框架
-emmy = frameworks.selectFramework()
-
--- 注册到全局变量
+-- 先创建 emmyHelper 表并注册到全局，以便 emmyHelperInit 可以设置 createNode
 rawset(_G, 'emmyHelper', emmy)
 
--- 设置 HandlerRegistry 的 emmy 引用（用于 createNode）
--- 只在框架选择后设置一次，确保 emmy 对象已包含 createNode 方法
-HandlerRegistry:setEmmy(emmy)
-
--- 加载 UE 特定处理器（FVector/FRotator/FDateTime/TArray/TMap/TSet 等）
-pcall(require, 'emmyHelper_ue')
-
--------------------------------------------------------------------------------
--- 用户自定义初始化函数（可选）
--- 用户可以在全局定义 emmyHelperInit 函数，会在 emmyHelper 加载后执行
--------------------------------------------------------------------------------
+-- 调用 C++ 端的 emmyHelperInit 函数来设置 createNode
 local emmyHelperInit = rawget(_G, 'emmyHelperInit')
 if emmyHelperInit then
     local ok, initErr = pcall(emmyHelperInit)
@@ -93,6 +77,26 @@ if emmyHelperInit then
         EmmyLog.error("[EmmyHelper]", "emmyHelperInit failed:", tostring(initErr))
     end
 end
+
+-- 设置框架模块的依赖（此时 emmy 已经包含 createNode）
+frameworks.setDependencies(emmy, ProxyRegistry, HandlerRegistry, TypeMatcher)
+
+-- 选择合适的框架
+local frameworkDebugger = frameworks.selectFramework()
+
+-- 将框架调试器的方法合并到 emmy 中，保留 createNode
+for k, v in pairs(frameworkDebugger) do
+    emmy[k] = v
+end
+
+-- 更新全局 emmyHelper（确保包含 createNode 和框架方法）
+rawset(_G, 'emmyHelper', emmy)
+
+-- 设置 HandlerRegistry 的 emmy 引用（用于 createNode）
+HandlerRegistry:setEmmy(emmy)
+
+-- 加载 UE 特定处理器（FVector/FRotator/FDateTime/TArray/TMap/TSet 等）
+pcall(require, 'emmyHelper_ue')
 
 -------------------------------------------------------------------------------
 -- 返回模块（供 require 使用）
