@@ -48,18 +48,6 @@ end
 emmyHelper.registerProcessor('FRotator', FRotatorProcessor)
 
 -------------------------------------------------------------------------------
--- FDateTime 类型处理器
--------------------------------------------------------------------------------
-
-local FDateTimeProcessor = ProcessorBase:extend()
-
-function FDateTimeProcessor:processSpecific(variable, obj, name, depth)
-    variable.value = _G.UE4.UUAGameStatics.GetDateTimeString(obj)
-end
-
-emmyHelper.registerProcessor('FDateTime', FDateTimeProcessor)
-
--------------------------------------------------------------------------------
 -- TArray/TMap/TSet 容器处理器
 -------------------------------------------------------------------------------
 
@@ -68,6 +56,8 @@ local TContainerProcessor = ProcessorBase:extend()
 function TContainerProcessor:processSpecific(variable, obj, name, depth)
     local mt = getmetatable(obj)
     if not mt then return end
+
+	variable.value = string.format("(size = %d)",obj:Length())
 
     local toTableFunc = rawget(mt, 'ToTable')
     if toTableFunc and type(toTableFunc) == 'function' then
@@ -91,6 +81,5 @@ emmyHelper.registerProcessor('TSet', TContainerProcessor)
 return {
     FVectorProcessor = FVectorProcessor,
     FRotatorProcessor = FRotatorProcessor,
-    FDateTimeProcessor = FDateTimeProcessor,
     TContainerProcessor = TContainerProcessor,
 }
