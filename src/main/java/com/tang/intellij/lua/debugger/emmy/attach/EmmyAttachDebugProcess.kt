@@ -66,12 +66,12 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
                 
                 // 获取调试端口并尝试连接
                 val port = ProcessUtils.getPortFromPid(this.attachedPid)
-                logWithLevel("🔌 尝试连接调试端口: $port", LogLevel.NORMAL)
                 
                 // 尝试多个地址：IPv4 和 IPv6
                 val hosts = listOf("127.0.0.1", "::1", "localhost")
                 var connected = false
                 var lastException: Exception? = null
+                val failureMessages = mutableListOf<Pair<String, String>>()
                 
                 for (host in hosts) {
                     try {
@@ -94,12 +94,15 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
                             hostException.message?.contains("timeout") == true -> "连接超时"
                             else -> hostException.message?.take(30) ?: "未知错误"
                         }
-                        logWithLevel("❌ $host:$port 连接失败: $errorMsg", LogLevel.ERROR)
+                        failureMessages.add(host to errorMsg)
                         lastException = hostException
                     }
                 }
                 
                 if (!connected) {
+                    failureMessages.forEach { (host, errorMsg) ->
+                        logWithLevel("❌ $host:$port 连接失败: $errorMsg", LogLevel.ERROR)
+                    }
                     val errorDetail = lastException?.message ?: "未知错误"
                     val errorMessage = "❌ 无法连接到调试端口 $port\n" +
                             "🔍 可能原因：DLL注入失败、调试服务器未启动或端口被阻止\n" +
