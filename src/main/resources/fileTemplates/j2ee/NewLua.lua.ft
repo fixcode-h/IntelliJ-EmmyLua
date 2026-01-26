@@ -3,3 +3,8 @@
 --- Created by ${USER}.
 --- DateTime: ${DATE} ${TIME}
 ---
+
+---@class ${FILE_NAME}
+local ${FILE_NAME} = _G.LuaUnrealClass()
+
+return ${FILE_NAME}
