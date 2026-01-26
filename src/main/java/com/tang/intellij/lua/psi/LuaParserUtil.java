@@ -125,6 +125,37 @@ public class LuaParserUtil extends GeneratedParserUtilBase {
      */
     private static TokenSet RECOVERY_SET = TokenSet.create(FUNCTION);
 
+    private static boolean shouldRecover(PsiBuilder builder, IElementType type, TokenSet types) {
+        if (!RECOVERY_SET.contains(type) || types.contains(type)) {
+            return false;
+        }
+        if (type != FUNCTION) {
+            return true;
+        }
+        return isFunctionAtColumnZero(builder);
+    }
+
+    private static boolean isFunctionAtColumnZero(PsiBuilder builder) {
+        int offset = builder.getCurrentOffset();
+        if (offset <= 0) {
+            return true;
+        }
+        CharSequence text = builder.getOriginalText();
+        boolean hasIndent = false;
+        for (int i = offset - 1; i >= 0; i--) {
+            char c = text.charAt(i);
+            if (c == '\n' || c == '\r') {
+                return !hasIndent;
+            }
+            if (c == ' ' || c == '\t' || c == '\f') {
+                hasIndent = true;
+                continue;
+            }
+            return false;
+        }
+        return !hasIndent;
+    }
+
     private static boolean matchStart(boolean advanced, PsiBuilder builder, int level, IElementType begin) {
         if (begin == DO) {
             return matchEnd(advanced, builder, level, TokenSet.EMPTY, END_SET);
@@ -206,7 +237,7 @@ public class LuaParserUtil extends GeneratedParserUtilBase {
             //
             // 注：这会牺牲掉 "function A() function B() end end" 这种嵌套定义的折叠支持，
             // 但换来的是编辑过程中极其稳定的体验。对于 LazyBlock 来说，这是绝对值得的 trade-off。
-            if (RECOVERY_SET.contains(type) && !types.contains(type)) {
+            if (shouldRecover(builder, type, types)) {
                 return false;
             }
 
@@ -236,7 +267,7 @@ public class LuaParserUtil extends GeneratedParserUtilBase {
                     
                     // 【二次检查】防止 matchStart 消耗完后，紧接着就是一个 FUNCTION
                     // 例如： if cond then ... end function B() ...
-                    if (RECOVERY_SET.contains(type) && !types.contains(type)) {
+                    if (shouldRecover(builder, type, types)) {
                         return false;
                     }
                 } else {
@@ -244,7 +275,7 @@ public class LuaParserUtil extends GeneratedParserUtilBase {
                     
                     // 【三次检查】在暴力 advance 之前，最后确认一次
                     // 虽然步骤 2 已经检查过，但为了逻辑严密防止漏网之鱼（如 skips 逻辑变动）
-                    if (RECOVERY_SET.contains(type)) {
+                    if (shouldRecover(builder, type, types)) {
                         return false;
                     }
                     
