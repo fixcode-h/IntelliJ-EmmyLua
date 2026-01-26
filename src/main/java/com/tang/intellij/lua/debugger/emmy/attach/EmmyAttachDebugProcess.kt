@@ -66,7 +66,6 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
                 
                 // 获取调试端口并尝试连接
                 val port = ProcessUtils.getPortFromPid(this.attachedPid)
-                logWithLevel("🔌 尝试连接调试端口: $port", LogLevel.NORMAL)
                 
                 // 尝试多个地址：IPv4 和 IPv6
                 val hosts = listOf("127.0.0.1", "::1", "localhost")
