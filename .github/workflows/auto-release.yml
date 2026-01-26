@@ -75,7 +75,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       # 第六步：执行 Gradle 打包命令
-      # --- 核心修正点：在这里通过 -P 参数将版本号传递给 Gradle ---
+      # --- 核心修正点：在这里通过 -P 参数将版本号传递给 Gradle ----
       - name: Build with Gradle
         run: ./gradlew buildPlugin -x buildSearchableOptions -PpluginVersion=${{ env.NEW_VERSION }}
 
