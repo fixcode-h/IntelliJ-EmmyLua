@@ -53,21 +53,33 @@ emmyHelper.registerProcessor('FRotator', FRotatorProcessor)
 
 local TContainerProcessor = ProcessorBase:extend()
 
+function TContainerProcessor:shouldProcessMetatable(depth)
+	return false
+end
+
 function TContainerProcessor:processSpecific(variable, obj, name, depth)
-    local mt = getmetatable(obj)
-    if not mt then return end
+	local mt = getmetatable(obj)
+	if not mt then return end
 
-	variable.value = string.format("(size = %d)",obj:Length())
-
-    local toTableFunc = rawget(mt, 'ToTable')
-    if toTableFunc and type(toTableFunc) == 'function' then
-        local resultNode = emmyHelper.createNode()
-        local resultTable = toTableFunc(obj)
-        resultNode.name = "ToTable"
-        resultNode.value = resultTable
-        resultNode:query(resultTable, depth - 1, true)
-        variable:addChild(resultNode)
-    end
+	local toTableFunc = rawget(mt, 'ToTable')
+	if toTableFunc and type(toTableFunc) == 'function' then
+		local resultTable = toTableFunc(obj)
+		variable.valueType = 5
+		if depth > 1 then
+			for key, value in pairs(resultTable) do
+				local childNode = emmyHelper.createNode()
+				childNode.name = tostring(key)
+				childNode:query(value, depth - 1, true)
+				variable:addChild(childNode)
+			end
+		end
+		local raw = tostring(resultTable)
+		local count = #resultTable
+		raw = raw:gsub("^table:%s*", "")
+		variable.value = string.format("table(%s, size = %d)", raw, count)
+	else
+		variable.value = string.format("(size = %d)", obj:Length())
+	end
 end
 
 -- 注册容器处理器

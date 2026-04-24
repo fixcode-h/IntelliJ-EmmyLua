@@ -150,6 +150,29 @@ class TableXValue(v: VariableValue, val frame: EmmyDebugStackFrame) : LuaXValue(
     }
 
     override fun computeChildren(node: XCompositeNode) {
+        // 如果首次 EvalReq 已经带回了子节点（depth>=1 时后端会一次性附带），
+        // 直接使用缓存的 children 渲染，避免再次向调试器后端发送 EvalReq。
+        // 这非常重要：对 UnLua / C++ UObject userdata，再次 eval 会在 Lua 侧
+        // 走 __index -> Class_Index -> Property->Read，可能访问已经失效/已释放
+        // 的 ContainerPtr（例如 PIE 已停止、对象被 GC），造成 Lua 进程崩溃。
+        if (children.isNotEmpty()) {
+            val cl = XValueChildrenList()
+            children.forEach {
+                it.parent = this@TableXValue
+                cl.add(it.name, it)
+            }
+            node.addChildren(cl, true)
+            return
+        }
+
+        // userdata 类型尤其危险：UnLua 的 __index 元方法在某些上下文下
+        // （如调用栈处于 line hook 内、对象的 Container 不可用）会崩溃。
+        // 对这类类型直接返回空子节点，让用户点击明确的属性再单独展开。
+        if (value.valueTypeValue == LuaValueType.TUSERDATA) {
+            node.addChildren(XValueChildrenList.EMPTY, true)
+            return
+        }
+
         val ev = this.frame.evaluator
         if (ev != null) {
             ev.eval(evalExpr, value.cacheId, object : XDebuggerEvaluator.XEvaluationCallback {
