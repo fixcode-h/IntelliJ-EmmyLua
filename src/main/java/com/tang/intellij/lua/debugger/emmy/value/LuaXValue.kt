@@ -161,6 +161,19 @@ class TableXValue(v: VariableValue, val frame: EmmyDebugStackFrame) : LuaXValue(
     }
 
     /**
+     * 判断一个子节点是否是后端用于表达 metatable 的伪条目，例如：
+     *   - `(metatable)`       —— 元表本身（nil / table）
+     *   - `(metatable.__index)` —— 元表的 __index
+     * 这些条目的 `name` 是带括号的固定字符串，`fake` 字段并不可靠
+     * （valueType 可能是 TTABLE 或 TNIL，都不走 fake 分支），
+     * 因此只能按名字判定，统一在摘要里跳过。
+     */
+    private fun isMetatablePseudoChild(cv: VariableValue): Boolean {
+        val n = cv.name
+        return n.startsWith("(metatable")
+    }
+
+    /**
      * 根据当前已缓存的 children 拼出一个简短摘要字符串：
      * - table：`{k1=v1, k2=v2, ...}`
      * - userdata / C++ / C#：`ClassName { field1=val, field2=val, ... }`
@@ -178,7 +191,8 @@ class TableXValue(v: VariableValue, val frame: EmmyDebugStackFrame) : LuaXValue(
         val parts = mutableListOf<String>()
         var shown = 0
         for (child in children) {
-            if (child.value.fake) continue // 跳过 metatable / group 等伪节点
+            if (child.value.fake) continue // 跳过 GROUP 等伪节点
+            if (isMetatablePseudoChild(child.value)) continue // 跳过 metatable 伪条目
             if (shown >= maxItems) {
                 parts.add("...")
                 break
@@ -188,6 +202,10 @@ class TableXValue(v: VariableValue, val frame: EmmyDebugStackFrame) : LuaXValue(
             parts.add("$k=$v")
             shown++
         }
+
+        // 若全被过滤（例如 self 首包只有 metatable 伪条目），退回后端原始 value，
+        // 避免展示空 `{}` 或误导性的 `{[(metatable)]=nil}`
+        if (parts.isEmpty()) return value.value
 
         val body = parts.joinToString(", ")
         val prefix = if (value.valueTypeName.isNotEmpty() &&
