@@ -41,8 +41,10 @@ import com.tang.intellij.lua.debugger.emmy.value.LuaXValue
 import com.tang.intellij.lua.debugger.emmy.value.TableXValue
 import com.tang.intellij.lua.lang.LuaFileType
 import com.tang.intellij.lua.psi.LuaAssignStat
+import com.tang.intellij.lua.psi.LuaCallExpr
 import com.tang.intellij.lua.psi.LuaExpr
 import com.tang.intellij.lua.psi.LuaIndexExpr
+import com.tang.intellij.lua.psi.LuaListArgs
 import com.tang.intellij.lua.psi.LuaLiteralExpr
 import com.tang.intellij.lua.psi.LuaLocalDef
 import com.tang.intellij.lua.psi.LuaNameExpr
@@ -187,7 +189,9 @@ class LuaEditorLinePainter : EditorLinePainter() {
             }
         }
         // 3. 字面量
-        if (entry.literalText != null) return entry.literalText
+        if (entry.literalText != null) {
+            return entry.literalText
+        }
         return null
     }
 
@@ -249,6 +253,12 @@ class LuaEditorLinePainter : EditorLinePainter() {
             }
         }
 
+        // 额外：扫描本行所有 LuaCallExpr 的实参，把能解析为路径（NameExpr / 纯字段 IndexExpr）
+        // 的实参产出为 Entry。适用于 `self:m(self.x, y)` / `foo(bar.baz)` 等场景。
+        // 注意：call 可能嵌套在 assign/local 的 RHS 里，我们仍然扫描——这样
+        // `local r = self:m(self.x)` 里的 `self.x` 也能展示；重复会在后面去重。
+        collectCallArgEntries(psiFile, lineStart, lineEnd, result)
+
         // 兜底：裸表达式行（例如 `foo()` / `x`）
         if (result.isEmpty()) {
             var e: PsiElement? = psiFile.findElementAt(lineStart)
@@ -266,7 +276,54 @@ class LuaEditorLinePainter : EditorLinePainter() {
             }
         }
 
+        // 按 (displayName + pathSegments) 去重，保持首次出现顺序
+        if (result.size > 1) {
+            val seen = HashSet<String>()
+            val dedup = ArrayList<Entry>(result.size)
+            for (entry in result) {
+                val key = entry.displayName + "|" + (entry.pathSegments?.joinToString(".") ?: "#lit:${entry.literalText}")
+                if (seen.add(key)) dedup += entry
+            }
+            return dedup
+        }
         return result
+    }
+
+    /**
+     * 扫本行所有 [LuaCallExpr]，把其实参里能解析为路径的表达式加入 [out]。
+     * 支持：
+     *   - `foo(x)`                 → 产出 x
+     *   - `foo(self.x)`            → 产出 x（路径 [self, x]）
+     *   - `self:m(self.a.b, c)`    → 产出 b（路径 [self, a, b]）和 c
+     * 不处理：
+     *   - 实参是字面量 / 下标表达式 / 嵌套 call / 运算表达式 —— 无法解析为简单路径
+     *   - 单独的 `self` 实参（噪声）
+     */
+    private fun collectCallArgEntries(
+        psiFile: PsiFile,
+        lineStart: Int,
+        lineEnd: Int,
+        out: MutableList<Entry>
+    ) {
+        // 用 PsiTreeUtil 递归收集本行出现的所有 LuaCallExpr（限制在行范围内）
+        val visited = HashSet<LuaCallExpr>()
+        var el: PsiElement? = psiFile.findElementAt(lineStart)
+        while (el != null && el.textRange.startOffset < lineEnd) {
+            val call = PsiTreeUtil.getParentOfType(el, LuaCallExpr::class.java, false)
+            if (call != null && visited.add(call)) {
+                val args = call.args
+                if (args is LuaListArgs) {
+                    for (argExpr in args.exprList) {
+                        // 实参必须整个落在本行范围内（多行调用的其它行由各自的 painter 回调处理）
+                        val r = argExpr.textRange
+                        if (r.startOffset >= lineEnd || r.endOffset <= lineStart) continue
+                        val entry = buildEntryFromExpr(argExpr) ?: continue
+                        out += entry
+                    }
+                }
+            }
+            el = PsiTreeUtil.nextLeaf(el) ?: break
+        }
     }
 
     private fun advanceAfter(psiFile: PsiFile, stmt: PsiElement, cur: PsiElement): PsiElement? {
@@ -453,7 +510,14 @@ class LuaEditorLinePainter : EditorLinePainter() {
      */
     private fun buildPathFromExpr(expr: LuaExpr): List<String>? {
         return when (expr) {
-            is LuaNameExpr -> listOf(expr.name).takeIf { isDisplayableName(it[0]) }
+            is LuaNameExpr -> {
+                // 允许 `self` 作为路径首段（`self.x.y`），但它单独出现时由上层 (buildEntryFromExpr /
+                // handleAssignStat) 决定是否跳过显示。
+                val n = expr.name
+                if (n.isNullOrEmpty()) null
+                else if (n == "self") listOf("self")
+                else listOf(n).takeIf { isDisplayableName(it[0]) }
+            }
             is LuaIndexExpr -> {
                 // 只接受形如 a.b.c 或 a:b 链（纯字段访问）；下标 / 表达式索引 → null
                 if (expr.lbrack != null) return null
@@ -509,6 +573,13 @@ class LuaEditorLinePainter : EditorLinePainter() {
         var cur: XValue = topVars[path[0]] ?: return null
         for (i in 1 until path.size) {
             val seg = path[i]
+            // 中间节点是 nil：在 Lua 里 `nil.x` 会崩，但调试器 inline preview 视角下，
+            // 把"父链已 nil 推导整条链为 nil"是对用户最有价值的提示（能直观看到
+            // `params.ReportData` 是 nil 时，所有 `self.X = params.ReportData.Y` 行
+            // 都以 nil 显示）。所以在此短路返回当前的 nil XValue。
+            if ((cur as? LuaXValue)?.value?.valueTypeValue == LuaValueType.TNIL) {
+                return cur
+            }
             val tv = cur as? TableXValue ?: return null
             val cached = tv.cachedChildren
             val hasReal = cached.any { !isMetatablePseudo(it.value.name) }
