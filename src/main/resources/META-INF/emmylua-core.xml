@@ -79,6 +79,7 @@
         <!--navigate-->
         <gotoClassContributor implementation="com.tang.intellij.lua.editor.LuaClassNavigationContributor"/>
         <gotoSymbolContributor implementation="com.tang.intellij.lua.editor.LuaSymbolNavigationContributor"/>
+        <gotoDeclarationHandler implementation="com.tang.intellij.lua.reference.LuaGotoDeclarationHandler"/>
         <breadcrumbsInfoProvider implementation="com.tang.intellij.lua.editor.LuaBreadcrumbsProvider"/>
 
         <!--completion-->
