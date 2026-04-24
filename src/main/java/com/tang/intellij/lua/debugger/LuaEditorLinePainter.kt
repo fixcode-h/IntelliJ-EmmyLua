@@ -10,6 +10,8 @@
 
 package com.tang.intellij.lua.debugger
 
+import com.intellij.codeInsight.daemon.DaemonCodeAnalyzer
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.editor.DefaultLanguageHighlighterColors
 import com.intellij.openapi.editor.EditorLinePainter
 import com.intellij.openapi.editor.LineExtensionInfo
@@ -32,6 +34,8 @@ import com.intellij.xdebugger.frame.XValueChildrenList
 import com.intellij.xdebugger.frame.XValueNode
 import com.intellij.xdebugger.frame.XValuePlace
 import com.intellij.xdebugger.frame.presentation.XValuePresentation
+import java.util.Collections
+import java.util.WeakHashMap
 import com.tang.intellij.lua.debugger.emmy.LuaValueType
 import com.tang.intellij.lua.debugger.emmy.value.LuaXValue
 import com.tang.intellij.lua.debugger.emmy.value.TableXValue
@@ -82,8 +86,16 @@ class LuaEditorLinePainter : EditorLinePainter() {
     )
 
     companion object {
-        // 预取逻辑已移除：painter 绝不主动发 eval，只读 cachedChildren。
-        // 这样可以彻底避免和"变量面板展开"的 eval 回调抢占。
+        /**
+         * 已经为其发起过 `computeChildren` 预取的 TableXValue 集合。WeakHashMap 保证
+         * frame 切换 / 调试会话结束后，相关对象被 GC 时自动移除。
+         * 防止对同一 table 反复发送 EvalReq。
+         *
+         * 注意：TUSERDATA 绝不能加入此集合（不做预取），因为 UnLua 的 __index 元方法
+         * 在某些上下文（line hook、对象已释放）会崩溃 Lua 进程。
+         */
+        private val prefetchedTables: MutableSet<TableXValue> =
+            Collections.newSetFromMap(WeakHashMap())
     }
 
     override fun getLineExtensions(
@@ -116,6 +128,9 @@ class LuaEditorLinePainter : EditorLinePainter() {
         val results = mutableListOf<LineExtensionInfo>()
         val attrs = getInlineAttributes()
         val used = hashSetOf<String>()
+        // 本轮扫描中遇到的"cachedChildren 为空/不全的中间 TableXValue"，返回前统一异步预取。
+        // 预取完成后我们会 restart DaemonCodeAnalyzer，下次编辑器重绘时 painter 能命中缓存。
+        val pendingPrefetch = linkedSetOf<TableXValue>()
 
         var first = true
         for (entry in entries) {
@@ -127,11 +142,16 @@ class LuaEditorLinePainter : EditorLinePainter() {
             // 2. 取不到时（LHS 尚未赋值 / 中间节点未缓存等）→ fallbackPath（RHS 路径）
             // 3. 仍取不到时 → literalText（RHS 字面量文本）
             // 4. 都没有 → 跳过
-            val valueText: String = resolveEntryValue(entry, topVars) ?: continue
+            val valueText: String = resolveEntryValue(entry, topVars, pendingPrefetch) ?: continue
 
             val prefix = if (first) "  " else ", "
             first = false
             results.add(LineExtensionInfo("$prefix${entry.displayName} = $valueText", attrs))
+        }
+
+        // 触发缺失中间节点的异步预取（一次性），完成后请求编辑器重绘
+        if (pendingPrefetch.isNotEmpty()) {
+            schedulePrefetch(project, psiFile, pendingPrefetch)
         }
 
         return if (results.isEmpty()) null else results
@@ -144,25 +164,24 @@ class LuaEditorLinePainter : EditorLinePainter() {
      * 3. `literalText`（RHS 字面量兜底）
      * 任一级命中即返回。table 类型会被跳过（继续试下一级）；nil 会被正常渲染为 `nil`。
      *
-     * 注意：所有路径下钻都只使用 `TableXValue.cachedChildren`，**绝不主动触发 eval**。
-     * 一旦 painter 抢先发 eval，就可能和"变量面板展开"的 eval 请求冲突 / 回调抢占，
-     * 导致面板拿不到 children、展开后一片空白。因此中间节点未缓存时直接放弃取值，
-     * 等用户真的去面板展开 → children 被正常填充 → 下次 painter 扫描自然就能用到。
+     * 若中间节点的 children 还未加载，会把该节点登记到 [pendingPrefetch]，
+     * 稍后统一发起异步 eval；本次无值，等下一轮重绘再试。
      */
     private fun resolveEntryValue(
         entry: Entry,
-        topVars: Map<String, XValue>
+        topVars: Map<String, XValue>,
+        pendingPrefetch: MutableSet<TableXValue>
     ): String? {
         // 1. 主路径
         if (entry.pathSegments != null) {
-            val xv = resolvePath(topVars, entry.pathSegments)
+            val xv = resolvePath(topVars, entry.pathSegments, pendingPrefetch)
             if (xv != null && !isTableValue(xv)) {
                 renderXValue(xv)?.let { return it }
             }
         }
         // 2. 备选路径
         if (entry.fallbackPath != null) {
-            val xv = resolvePath(topVars, entry.fallbackPath)
+            val xv = resolvePath(topVars, entry.fallbackPath, pendingPrefetch)
             if (xv != null && !isTableValue(xv)) {
                 renderXValue(xv)?.let { return it }
             }
@@ -474,12 +493,17 @@ class LuaEditorLinePainter : EditorLinePainter() {
 
     /**
      * 沿 [path] 在顶层变量表里逐层下钻到末端 XValue。
-     * 过程中只读取 `TableXValue.cachedChildren`（本地缓存），**绝不触发 eval**。
-     * 任何一段查不到就返回 null；中间节点若 children 未加载，也直接返回 null。
+     * 过程中只读取 `TableXValue.cachedChildren`（本地缓存），不主动触发 eval。
+     * 任何一段查不到就返回 null；若中间/起始 TableXValue 的 children 未加载，
+     * 则登记到 [pendingPrefetch]，稍后统一异步触发 computeChildren。
+     *
+     * 特殊处理：TableXValue 有时 cachedChildren 非空但只含 metatable 伪条目
+     * （name 以 `(metatable` 开头），这时视作"真字段尚未加载"，也登记预取。
      */
     private fun resolvePath(
         topVars: Map<String, XValue>,
-        path: List<String>
+        path: List<String>,
+        pendingPrefetch: MutableSet<TableXValue>
     ): XValue? {
         if (path.isEmpty()) return null
         var cur: XValue = topVars[path[0]] ?: return null
@@ -487,15 +511,76 @@ class LuaEditorLinePainter : EditorLinePainter() {
             val seg = path[i]
             val tv = cur as? TableXValue ?: return null
             val cached = tv.cachedChildren
-            if (cached.isEmpty()) {
-                // 中间节点尚未加载 children —— 不主动 eval，直接放弃本次取值。
-                // 等用户去变量面板展开时，children 会被正常填充，下次 painter 扫描时自然能用到。
+            val hasReal = cached.any { !isMetatablePseudo(it.value.name) }
+            if (!hasReal) {
+                // 中间节点真字段未加载 —— 登记预取，本次先返回 null 不渲染。
+                // TUSERDATA 绝不预取（UnLua __index 防崩）。
+                if (tv.value.valueTypeValue != LuaValueType.TUSERDATA) {
+                    pendingPrefetch.add(tv)
+                }
                 return null
             }
             val next = cached.firstOrNull { it.value.name == seg } ?: return null
             cur = next
         }
         return cur
+    }
+
+    private fun isMetatablePseudo(name: String): Boolean =
+        name.startsWith("(metatable")
+
+    /**
+     * 对本轮扫描中发现的 "真字段未缓存" 的中间 TableXValue，批量异步触发一次
+     * `computeChildren`（会发 EvalReq，回调里 `children` 被填充）。
+     * 每个 TableXValue 只请求一次（由 [prefetchedTables] 去重）。
+     * 任一节点加载完成后，restart DaemonCodeAnalyzer 让 painter 用新缓存重绘一次。
+     *
+     * 安全性：painter 发 eval 使用独立的假 XCompositeNode；`TableXValue.computeChildren`
+     * 每次调用都会发送新的 EvalReq（协议 seq 不同，各自回调），painter 的请求不会
+     * 拦截 / 吞掉变量面板的请求，因此不会影响正常展开。
+     */
+    private fun schedulePrefetch(
+        project: Project,
+        psiFile: PsiFile,
+        targets: Set<TableXValue>
+    ) {
+        val toRequest = targets.filter { prefetchedTables.add(it) }
+        if (toRequest.isEmpty()) return
+
+        val app = ApplicationManager.getApplication()
+        app.executeOnPooledThread {
+            val node = object : XCompositeNode {
+                override fun addChildren(children: XValueChildrenList, last: Boolean) {}
+                override fun tooManyChildren(remaining: Int) {}
+                override fun setAlreadySorted(alreadySorted: Boolean) {}
+                override fun setErrorMessage(errorMessage: String) {}
+                override fun setErrorMessage(
+                    errorMessage: String,
+                    link: com.intellij.xdebugger.frame.XDebuggerTreeNodeHyperlink?
+                ) {}
+                override fun setMessage(
+                    message: String,
+                    icon: javax.swing.Icon?,
+                    attributes: SimpleTextAttributes,
+                    link: com.intellij.xdebugger.frame.XDebuggerTreeNodeHyperlink?
+                ) {}
+            }
+            for (tv in toRequest) {
+                try {
+                    tv.computeChildren(node)
+                } catch (_: Throwable) {
+                    // 预取失败不影响主流程
+                }
+            }
+            // eval 是异步完成的，children 在随后才被填充。
+            // 短延迟后 restart DaemonCodeAnalyzer，让 painter 再跑一次用上新缓存。
+            app.invokeLater({
+                if (project.isDisposed) return@invokeLater
+                try {
+                    DaemonCodeAnalyzer.getInstance(project).restart(psiFile)
+                } catch (_: Throwable) {}
+            }, com.intellij.openapi.application.ModalityState.any())
+        }
     }
 
     private fun isTableValue(xv: XValue): Boolean {
