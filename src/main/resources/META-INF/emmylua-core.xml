@@ -22,6 +22,9 @@
 
     <extensions defaultExtensionNs="com.intellij">
         <errorHandler implementation="com.tang.intellij.lua.errorreporting.GitHubErrorReporter"/>
+
+        <!-- Debugger inline values (行旁值预览) -->
+        <editor.linePainter implementation="com.tang.intellij.lua.debugger.LuaEditorLinePainter"/>
         
         <!-- notification groups -->
         <notificationGroup id="LuaPanda Version Check" displayType="BALLOON" key="notification.group.luapanda.version.check"/>

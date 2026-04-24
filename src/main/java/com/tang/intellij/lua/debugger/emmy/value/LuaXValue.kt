@@ -130,6 +130,12 @@ class TableXValue(v: VariableValue, val frame: EmmyDebugStackFrame) : LuaXValue(
 
     private val children = mutableListOf<LuaXValue>()
 
+    /**
+     * 只读暴露已缓存的 children，供外部（如 inline value painter）**纯本地**查询使用。
+     * 调用方只应读取，绝不可触发 eval —— 这里返回的列表可能为空，外部需自行处理。
+     */
+    val cachedChildren: List<LuaXValue> get() = children
+
     init {
         value.children?.
                 sortedWith(VariableComparator)?.
@@ -146,16 +152,88 @@ class TableXValue(v: VariableValue, val frame: EmmyDebugStackFrame) : LuaXValue(
         else if (value.valueTypeName == "C++") {
             icon = LuaIcons.CPP
         }
-        xValueNode.setPresentation(icon, value.valueTypeName, value.value, true)
+        // 在树视图 / 变量面板里保持原来的显示（`table` / `C++` 等 + 后端给的地址字符串）。
+        // 在内联预览（INLINE） / 悬浮气泡（TOOLTIP） 下，用已缓存的 children 拼一个更可读的
+        // 摘要字符串，例如 {a=1, b="hi", c={...}}。这完全基于本地数据，不会触发任何
+        // 后端 eval，避免再次走到 UnLua 的 __index -> Class_Index 崩溃路径。
+        val summary = buildInlineSummary()
+        xValueNode.setPresentation(icon, value.valueTypeName, summary, true)
+    }
+
+    /**
+     * 判断一个子节点是否是后端用于表达 metatable 的伪条目，例如：
+     *   - `(metatable)`       —— 元表本身（nil / table）
+     *   - `(metatable.__index)` —— 元表的 __index
+     * 这些条目的 `name` 是带括号的固定字符串，`fake` 字段并不可靠
+     * （valueType 可能是 TTABLE 或 TNIL，都不走 fake 分支），
+     * 因此只能按名字判定，统一在摘要里跳过。
+     */
+    private fun isMetatablePseudoChild(cv: VariableValue): Boolean {
+        val n = cv.name
+        return n.startsWith("(metatable")
+    }
+
+    /**
+     * 根据当前已缓存的 children 拼出一个简短摘要字符串：
+     * - table：`{k1=v1, k2=v2, ...}`
+     * - userdata / C++ / C#：`ClassName { field1=val, field2=val, ... }`
+     * - 无 children：回退到后端原始 value（例如 "table: 0x1234..."）
+     *
+     * 注意：仅使用 valueType 为基础类型的子节点做 value 渲染，避免递归展开 nested table
+     * 时需要二次 eval；对 table/userdata 子节点只显示类型名占位（`{...}`）。
+     */
+    private fun buildInlineSummary(): String {
+        if (children.isEmpty()) return value.value
+
+        val maxItems = 5
+        val maxLen = 120
+
+        val parts = mutableListOf<String>()
+        var shown = 0
+        for (child in children) {
+            if (child.value.fake) continue // 跳过 GROUP 等伪节点
+            if (isMetatablePseudoChild(child.value)) continue // 跳过 metatable 伪条目
+            if (shown >= maxItems) {
+                parts.add("...")
+                break
+            }
+            val k = child.value.nameValue
+            val v = renderChildValue(child.value)
+            parts.add("$k=$v")
+            shown++
+        }
+
+        // 若全被过滤（例如 self 首包只有 metatable 伪条目），退回后端原始 value，
+        // 避免展示空 `{}` 或误导性的 `{[(metatable)]=nil}`
+        if (parts.isEmpty()) return value.value
+
+        val body = parts.joinToString(", ")
+        val prefix = if (value.valueTypeName.isNotEmpty() &&
+                         value.valueTypeName != "table" &&
+                         value.valueTypeName != "userdata") {
+            "${value.valueTypeName} "
+        } else ""
+        val full = "$prefix{$body}"
+        return if (full.length > maxLen) full.substring(0, maxLen - 3) + "..." else full
+    }
+
+    private fun renderChildValue(cv: VariableValue): String {
+        return when (cv.valueTypeValue) {
+            LuaValueType.TSTRING -> "\"${cv.value}\""
+            LuaValueType.TNIL -> "nil"
+            LuaValueType.TBOOLEAN, LuaValueType.TNUMBER -> cv.value
+            LuaValueType.TTABLE, LuaValueType.TUSERDATA -> "{...}"
+            LuaValueType.TFUNCTION -> "function"
+            else -> cv.value
+        }
     }
 
     override fun computeChildren(node: XCompositeNode) {
-        // 如果首次 EvalReq 已经带回了子节点（depth>=1 时后端会一次性附带），
-        // 直接使用缓存的 children 渲染，避免再次向调试器后端发送 EvalReq。
-        // 这非常重要：对 UnLua / C++ UObject userdata，再次 eval 会在 Lua 侧
-        // 走 __index -> Class_Index -> Property->Read，可能访问已经失效/已释放
-        // 的 ContainerPtr（例如 PIE 已停止、对象被 GC），造成 Lua 进程崩溃。
-        if (children.isNotEmpty()) {
+        // userdata 类型尤其危险：UnLua 的 __index 元方法在某些上下文下
+        // （如调用栈处于 line hook 内、对象的 Container 不可用）会崩溃。
+        // 对这类类型一律只使用栈帧 Stack 包里已带回的 children（可能为空或只有 metatable），
+        // 绝不再次主动 eval，以避免走到 Class_Index -> Property->Read 的危险路径。
+        if (value.valueTypeValue == LuaValueType.TUSERDATA) {
             val cl = XValueChildrenList()
             children.forEach {
                 it.parent = this@TableXValue
@@ -165,13 +243,12 @@ class TableXValue(v: VariableValue, val frame: EmmyDebugStackFrame) : LuaXValue(
             return
         }
 
-        // userdata 类型尤其危险：UnLua 的 __index 元方法在某些上下文下
-        // （如调用栈处于 line hook 内、对象的 Container 不可用）会崩溃。
-        // 对这类类型直接返回空子节点，让用户点击明确的属性再单独展开。
-        if (value.valueTypeValue == LuaValueType.TUSERDATA) {
-            node.addChildren(XValueChildrenList.EMPTY, true)
-            return
-        }
+        // 普通 TTABLE：每次展开都重新 eval 取完整子节点。
+        // —— 不能用“children 非空就直接返回缓存”的快速路径，因为后端栈帧首包对
+        // 带元表的 OO 风格 table（如 `self`）只会附带 metatable 相关的伪条目
+        // （`(metatable)` / `(metatable.__index)`，valueType 仍为 TTABLE，fake=false），
+        // 真实字段要等展开时 eval depth=2 才下发。
+        // 若误走快速路径就会看到“self 展开只有两个 metatable 条目”的问题。
 
         val ev = this.frame.evaluator
         if (ev != null) {
