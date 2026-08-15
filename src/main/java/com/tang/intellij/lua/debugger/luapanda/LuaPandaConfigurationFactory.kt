@@ -28,7 +28,7 @@ class LuaPandaConfigurationFactory(type: ConfigurationType) : LuaConfigurationFa
     }
 
     override fun getName(): String {
-        return "LuaPanda Debug"
+        return "LuaPandaDebugger"
     }
 
     override fun getId(): String {

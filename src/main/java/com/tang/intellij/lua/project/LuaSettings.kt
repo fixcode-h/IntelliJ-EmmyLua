@@ -23,7 +23,6 @@ import com.intellij.openapi.components.Storage
 import com.intellij.util.xmlb.XmlSerializerUtil
 import com.tang.intellij.lua.Constants
 import com.tang.intellij.lua.lang.LuaLanguageLevel
-import java.nio.charset.Charset
 
 /**
  *
@@ -66,12 +65,6 @@ class LuaSettings : PersistentStateComponent<LuaSettings> {
      * UE 自动生成的文件可能很大，设置为 5MB 以支持大型 API 文件
      */
     var tooLargerFileThreshold = 5120
-
-    var attachDebugDefaultCharsetName = "UTF-8"
-
-    var attachDebugCaptureStd = true
-
-    var attachDebugCaptureOutput = true
 
     /**
      * Lua language level
@@ -152,9 +145,6 @@ class LuaSettings : PersistentStateComponent<LuaSettings> {
             constructorNames = value.split(";").map { it.trim() }.toTypedArray()
         }
 
-    val attachDebugDefaultCharset: Charset get() {
-        return Charset.forName(attachDebugDefaultCharsetName) ?: Charset.forName("UTF-8")
-    }
     var requireLikeFunctionNamesString: String
         get() {
             return requireLikeFunctionNames.joinToString(";")

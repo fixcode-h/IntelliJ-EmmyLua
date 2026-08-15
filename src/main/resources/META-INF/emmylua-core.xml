@@ -137,13 +137,6 @@
         <langCodeStyleSettingsProvider implementation="com.tang.intellij.lua.editor.formatter.LuaLanguageCodeStyleSettingsProvider"/>
 
         <!-- runner & debugger -->
-        <runConfigurationProducer implementation="com.tang.intellij.lua.debugger.LuaRunConfigurationProducer"/>
-        <!-- Hidden: Lua Remote(Mobdebug) -->
-        <!--<programRunner implementation="com.tang.intellij.lua.debugger.remote.LuaMobDebuggerRunner"/>-->
-        <!--<configurationType implementation="com.tang.intellij.lua.debugger.remote.LuaMobConfigurationType"/>-->
-        <!-- Lua Application -->
-        <programRunner implementation="com.tang.intellij.lua.debugger.app.LuaAppRunner"/>
-        <configurationType implementation="com.tang.intellij.lua.debugger.app.LuaAppConfigurationType"/>
         <programRunner implementation="com.tang.intellij.lua.debugger.emmy.EmmyDebuggerRunner"/>
         <configurationType implementation="com.tang.intellij.lua.debugger.emmy.EmmyDebugConfigurationType"/>
         <programRunner implementation="com.tang.intellij.lua.debugger.emmy.attach.EmmyAttachDebugRunner"/>
@@ -151,8 +144,6 @@
         <programRunner implementation="com.tang.intellij.lua.debugger.luapanda.LuaPandaDebuggerRunner"/>
         <configurationType implementation="com.tang.intellij.lua.debugger.luapanda.LuaPandaConfigurationType"/>
         <xdebugger.breakpointType implementation="com.tang.intellij.lua.debugger.LuaLineBreakpointType"/>
-<!--        <xdebugger.attachDebuggerProvider implementation="com.tang.intellij.lua.debugger.emmyAttach.EmmyAttachDebuggerProvider"/>-->
-
         <!--templates-->
         <defaultLiveTemplates file="/liveTemplates/lua.xml"/>
         <liveTemplateContext contextId="LUA_CODE" implementation="com.tang.intellij.lua.codeInsight.template.context.LuaCodeContextType"/>

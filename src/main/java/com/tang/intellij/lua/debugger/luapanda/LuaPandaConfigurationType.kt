@@ -32,7 +32,7 @@ class LuaPandaConfigurationType : ConfigurationType {
     }
     
     override fun getDisplayName(): String {
-        return "Emmy LuaPandaDebugger"
+        return "LuaPandaDebugger"
     }
     
     override fun getConfigurationTypeDescription(): String {

@@ -27,7 +27,6 @@ import com.intellij.openapi.project.ProjectManager;
 import com.intellij.openapi.util.text.StringUtil;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
-import com.intellij.util.ArrayUtil;
 import com.intellij.util.FileContentUtil;
 import com.tang.intellij.lua.lang.LuaLanguageLevel;
 import com.tang.intellij.lua.LuaBundle;
@@ -39,10 +38,8 @@ import javax.swing.*;
 import javax.swing.text.AttributeSet;
 import javax.swing.text.BadLocationException;
 import javax.swing.text.PlainDocument;
-import java.nio.charset.Charset;
 import java.util.Arrays;
 import java.util.Objects;
-import java.util.SortedMap;
 
 /**
  * Created by tangzx on 2017/6/12.
@@ -60,9 +57,6 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
     private JCheckBox recognizeGlobalNameAsCheckBox;
     private LuaAdditionalSourcesRootPanel additionalRoots;
     private JCheckBox enableGenericCheckBox;
-    private JCheckBox captureOutputDebugString;
-    private JCheckBox captureStd;
-    private JComboBox<String> charsetComboBox;
     private JComboBox<LuaLanguageLevel> languageLevel;
     private JTextField requireFunctionNames;
     private JTextField tooLargerFileThreshold;
@@ -92,14 +86,6 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
         requireFunctionNames.setText(settings.getRequireLikeFunctionNamesString());
         tooLargerFileThreshold.setDocument(new IntegerDocument());
         tooLargerFileThreshold.setText(String.valueOf(settings.getTooLargerFileThreshold()));
-
-        captureStd.setSelected(settings.getAttachDebugCaptureStd());
-        captureOutputDebugString.setSelected(settings.getAttachDebugCaptureOutput());
-
-        SortedMap<String, Charset> charsetSortedMap = Charset.availableCharsets();
-        ComboBoxModel<String> outputCharsetModel = new DefaultComboBoxModel<>(ArrayUtil.toStringArray(charsetSortedMap.keySet()));
-        charsetComboBox.setModel(outputCharsetModel);
-        charsetComboBox.setSelectedItem(settings.getAttachDebugDefaultCharsetName());
 
         //language level
         ComboBoxModel<LuaLanguageLevel> lanLevelModel = new DefaultComboBoxModel<>(LuaLanguageLevel.values());
@@ -204,9 +190,6 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
                 settings.isNilStrict() != nilStrict.isSelected() ||
                 settings.isRecognizeGlobalNameAsType() != recognizeGlobalNameAsCheckBox.isSelected() ||
                 settings.getEnableGeneric() != enableGenericCheckBox.isSelected() ||
-                settings.getAttachDebugCaptureOutput() != captureOutputDebugString.isSelected() ||
-                settings.getAttachDebugCaptureStd() != captureStd.isSelected() ||
-                settings.getAttachDebugDefaultCharsetName() != charsetComboBox.getSelectedItem() ||
                 settings.getLanguageLevel() != languageLevel.getSelectedItem() ||
                 !Arrays.equals(settings.getUeProcessNames(), getProcessNamesFromTextField()) ||
                 !Arrays.equals(settings.getDebugProcessBlacklist(), getDebugProcessBlacklistFromTextField()) ||
@@ -235,9 +218,6 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
         settings.setRecognizeGlobalNameAsType(recognizeGlobalNameAsCheckBox.isSelected());
         settings.setAdditionalSourcesRoot(additionalRoots.getRoots());
         settings.setEnableGeneric(enableGenericCheckBox.isSelected());
-        settings.setAttachDebugCaptureOutput(captureOutputDebugString.isSelected());
-        settings.setAttachDebugCaptureStd(captureStd.isSelected());
-        settings.setAttachDebugDefaultCharsetName((String) Objects.requireNonNull(charsetComboBox.getSelectedItem()));
         
         //Custom helper path
         settings.setCustomHelperPath(customHelperPathField.getText());
@@ -330,9 +310,6 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
         enableGenericCheckBox.setSelected(settings.getEnableGeneric());
         requireFunctionNames.setText(settings.getRequireLikeFunctionNamesString());
         tooLargerFileThreshold.setText(String.valueOf(settings.getTooLargerFileThreshold()));
-        captureStd.setSelected(settings.getAttachDebugCaptureStd());
-        captureOutputDebugString.setSelected(settings.getAttachDebugCaptureOutput());
-        charsetComboBox.setSelectedItem(settings.getAttachDebugDefaultCharsetName());
         languageLevel.setSelectedItem(settings.getLanguageLevel());
         
         // 将进程名称数组转换为逗号分隔的字符串
