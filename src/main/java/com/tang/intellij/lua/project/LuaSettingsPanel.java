@@ -46,6 +46,7 @@ import java.util.Objects;
  */
 public class LuaSettingsPanel implements SearchableConfigurable, Configurable.NoScroll {
     private final LuaSettings settings;
+    private final LuaProjectSettings projectSettings;
     private JScrollPane myPanel;
     private JTabbedPane contentPanel;
     private JTextField constructorNames;
@@ -72,8 +73,9 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
     private JTextField fileNamePlaceholderField;
     private JCheckBox enableDevModeCheckBox;
 
-    public LuaSettingsPanel() {
+    public LuaSettingsPanel(Project project) {
         this.settings = LuaSettings.Companion.getInstance();
+        this.projectSettings = LuaProjectSettings.getInstance(project);
         constructorNames.setText(settings.getConstructorNamesString());
         strictDoc.setSelected(settings.isStrictDoc());
         smartCloseEnd.setSelected(settings.isSmartCloseEnd());
@@ -81,7 +83,7 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
         enforceTypeSafety.setSelected(settings.isEnforceTypeSafety());
         nilStrict.setSelected(settings.isNilStrict());
         recognizeGlobalNameAsCheckBox.setSelected(settings.isRecognizeGlobalNameAsType());
-        additionalRoots.setRoots(settings.getAdditionalSourcesRoot());
+        additionalRoots.setRoots(projectSettings.getAdditionalSourcesRoot());
         enableGenericCheckBox.setSelected(settings.getEnableGeneric());
         requireFunctionNames.setText(settings.getRequireLikeFunctionNamesString());
         tooLargerFileThreshold.setDocument(new IntegerDocument());
@@ -93,7 +95,7 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
         lanLevelModel.setSelectedItem(settings.getLanguageLevel());
 
         // 将进程名称数组转换为逗号分隔的字符串
-        String[] processNames = settings.getUeProcessNames();
+        String[] processNames = projectSettings.getUeProcessNames();
         if (processNames != null && processNames.length > 0) {
             ueProcessNamesField.setText(String.join(", ", processNames));
         } else {
@@ -101,7 +103,7 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
         }
         
         // 将调试器进程黑名单数组转换为逗号分隔的字符串
-        String[] blacklistProcesses = settings.getDebugProcessBlacklist();
+        String[] blacklistProcesses = projectSettings.getDebugProcessBlacklist();
         if (blacklistProcesses != null && blacklistProcesses.length > 0) {
             debugProcessBlacklistField.setText(String.join(", ", blacklistProcesses));
         } else {
@@ -109,10 +111,10 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
         }
         
         // 自定义 Helper 目录路径设置
-        customHelperPathField.setText(settings.getCustomHelperPath());
+        customHelperPathField.setText(projectSettings.getCustomHelperPath());
         
         // 自定义 Helper 扩展脚本名称设置
-        customHelperExtNameField.setText(settings.getCustomHelperExtName());
+        customHelperExtNameField.setText(projectSettings.getCustomHelperExtName());
         
         // 文件模板设置
         enableCustomFileTemplateCheckBox.setSelected(settings.getEnableCustomFileTemplate());
@@ -121,7 +123,7 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
         fileNamePlaceholderField.setText(settings.getFileNamePlaceholder());
         
         // 开发模式设置
-        enableDevModeCheckBox.setSelected(settings.getEnableDevMode());
+        enableDevModeCheckBox.setSelected(projectSettings.getEnableDevMode());
 
         //browse custom helper path button action (选择目录)
         browseCustomHelperPathButton.addActionListener(e -> {
@@ -191,16 +193,16 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
                 settings.isRecognizeGlobalNameAsType() != recognizeGlobalNameAsCheckBox.isSelected() ||
                 settings.getEnableGeneric() != enableGenericCheckBox.isSelected() ||
                 settings.getLanguageLevel() != languageLevel.getSelectedItem() ||
-                !Arrays.equals(settings.getUeProcessNames(), getProcessNamesFromTextField()) ||
-                !Arrays.equals(settings.getDebugProcessBlacklist(), getDebugProcessBlacklistFromTextField()) ||
-                !StringUtil.equals(settings.getCustomHelperPath(), customHelperPathField.getText()) ||
-                !StringUtil.equals(settings.getCustomHelperExtName(), customHelperExtNameField.getText()) ||
+                !Arrays.equals(projectSettings.getUeProcessNames(), getProcessNamesFromTextField()) ||
+                !Arrays.equals(projectSettings.getDebugProcessBlacklist(), getDebugProcessBlacklistFromTextField()) ||
+                !StringUtil.equals(projectSettings.getCustomHelperPath(), customHelperPathField.getText()) ||
+                !StringUtil.equals(projectSettings.getCustomHelperExtName(), customHelperExtNameField.getText()) ||
                 settings.getEnableCustomFileTemplate() != enableCustomFileTemplateCheckBox.isSelected() ||
                 !StringUtil.equals(settings.getCustomFileTemplate(), customFileTemplateTextArea.getText()) ||
                 settings.getEnableFileNameReplacement() != enableFileNameReplacementCheckBox.isSelected() ||
                 !StringUtil.equals(settings.getFileNamePlaceholder(), fileNamePlaceholderField.getText()) ||
-                settings.getEnableDevMode() != enableDevModeCheckBox.isSelected() ||
-                !Arrays.equals(settings.getAdditionalSourcesRoot(), additionalRoots.getRoots(), String::compareTo);
+                projectSettings.getEnableDevMode() != enableDevModeCheckBox.isSelected() ||
+                !Arrays.equals(projectSettings.getAdditionalSourcesRoot(), additionalRoots.getRoots(), String::compareTo);
     }
 
     @Override
@@ -216,14 +218,14 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
         settings.setEnforceTypeSafety(enforceTypeSafety.isSelected());
         settings.setNilStrict(nilStrict.isSelected());
         settings.setRecognizeGlobalNameAsType(recognizeGlobalNameAsCheckBox.isSelected());
-        settings.setAdditionalSourcesRoot(additionalRoots.getRoots());
+        projectSettings.setAdditionalSourcesRoot(additionalRoots.getRoots());
         settings.setEnableGeneric(enableGenericCheckBox.isSelected());
         
         //Custom helper path
-        settings.setCustomHelperPath(customHelperPathField.getText());
+        projectSettings.setCustomHelperPath(customHelperPathField.getText());
         
         //Custom helper ext name
-        settings.setCustomHelperExtName(customHelperExtNameField.getText());
+        projectSettings.setCustomHelperExtName(customHelperExtNameField.getText());
         
         // 文件模板设置
         settings.setEnableCustomFileTemplate(enableCustomFileTemplateCheckBox.isSelected());
@@ -232,30 +234,30 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
         settings.setFileNamePlaceholder(fileNamePlaceholderField.getText());
         
         // 开发模式设置
-        settings.setEnableDevMode(enableDevModeCheckBox.isSelected());
+        projectSettings.setEnableDevMode(enableDevModeCheckBox.isSelected());
         
         // 将逗号分隔的字符串转换为进程名称数组
         String processNamesText = ueProcessNamesField.getText().trim();
         if (processNamesText.isEmpty()) {
-            settings.setUeProcessNames(new String[0]);
+            projectSettings.setUeProcessNames(new String[0]);
         } else {
             String[] processNames = processNamesText.split(",");
             for (int i = 0; i < processNames.length; i++) {
                 processNames[i] = processNames[i].trim();
             }
-            settings.setUeProcessNames(processNames);
+            projectSettings.setUeProcessNames(processNames);
         }
         
         // 将逗号分隔的字符串转换为调试器进程黑名单数组
         String blacklistText = debugProcessBlacklistField.getText().trim();
         if (blacklistText.isEmpty()) {
-            settings.setDebugProcessBlacklist(new String[0]);
+            projectSettings.setDebugProcessBlacklist(new String[0]);
         } else {
             String[] blacklistProcesses = blacklistText.split(",");
             for (int i = 0; i < blacklistProcesses.length; i++) {
                 blacklistProcesses[i] = blacklistProcesses[i].trim();
             }
-            settings.setDebugProcessBlacklist(blacklistProcesses);
+            projectSettings.setDebugProcessBlacklist(blacklistProcesses);
         }
         
         LuaLanguageLevel selectedLevel = (LuaLanguageLevel) Objects.requireNonNull(languageLevel.getSelectedItem());
@@ -306,14 +308,14 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
         enforceTypeSafety.setSelected(settings.isEnforceTypeSafety());
         nilStrict.setSelected(settings.isNilStrict());
         recognizeGlobalNameAsCheckBox.setSelected(settings.isRecognizeGlobalNameAsType());
-        additionalRoots.setRoots(settings.getAdditionalSourcesRoot());
+        additionalRoots.setRoots(projectSettings.getAdditionalSourcesRoot());
         enableGenericCheckBox.setSelected(settings.getEnableGeneric());
         requireFunctionNames.setText(settings.getRequireLikeFunctionNamesString());
         tooLargerFileThreshold.setText(String.valueOf(settings.getTooLargerFileThreshold()));
         languageLevel.setSelectedItem(settings.getLanguageLevel());
         
         // 将进程名称数组转换为逗号分隔的字符串
-        String[] processNames = settings.getUeProcessNames();
+        String[] processNames = projectSettings.getUeProcessNames();
         if (processNames != null && processNames.length > 0) {
             ueProcessNamesField.setText(String.join(", ", processNames));
         } else {
@@ -321,10 +323,10 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
         }
         
         // Reset custom helper path
-        customHelperPathField.setText(settings.getCustomHelperPath());
+        customHelperPathField.setText(projectSettings.getCustomHelperPath());
         
         // Reset custom helper ext name
-        customHelperExtNameField.setText(settings.getCustomHelperExtName());
+        customHelperExtNameField.setText(projectSettings.getCustomHelperExtName());
         
         // Reset 文件模板设置
         enableCustomFileTemplateCheckBox.setSelected(settings.getEnableCustomFileTemplate());
@@ -333,7 +335,8 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
         fileNamePlaceholderField.setText(settings.getFileNamePlaceholder());
         
         // Reset 开发模式设置
-        enableDevModeCheckBox.setSelected(settings.getEnableDevMode());
+        enableDevModeCheckBox.setSelected(projectSettings.getEnableDevMode());
+        debugProcessBlacklistField.setText(String.join(", ", projectSettings.getDebugProcessBlacklist()));
     }
 
     private int getTooLargerFileThreshold() {

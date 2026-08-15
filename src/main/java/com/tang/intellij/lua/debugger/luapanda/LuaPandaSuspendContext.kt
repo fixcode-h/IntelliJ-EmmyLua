@@ -162,8 +162,9 @@ class LuaPandaStackFrame(
                     val children = XValueChildrenList()
                     
                     // 解析返回的变量信息 - info字段直接是变量数组
-                    if (response.info?.isJsonArray == true) {
-                        response.info.asJsonArray.forEach { element ->
+                    val responseInfo = response.info
+                    if (responseInfo?.isJsonArray == true) {
+                        responseInfo.asJsonArray.forEach { element ->
                             val varObj = element.asJsonObject
                             val variable = LuaPandaVariable(
                                 name = varObj.get("name")?.asString ?: "",
@@ -230,16 +231,18 @@ class LuaPandaValue(
     override fun computePresentation(node: XValueNode, place: XValuePlace) {
         val type = variable.type ?: "unknown"
         val value = variable.value ?: "nil"
+        val cachedChildren = variable.children
         
         val icon = getIcon(type)
         
-        node.setPresentation(icon, type, value, variable.variablesReference > 0 || (variable.children != null && variable.children.isNotEmpty()))
+        node.setPresentation(icon, type, value, variable.variablesReference > 0 || !cachedChildren.isNullOrEmpty())
     }
 
     override fun computeChildren(node: XCompositeNode) {
-        if (variable.children != null && variable.children.isNotEmpty()) {
+        val cachedChildren = variable.children
+        if (!cachedChildren.isNullOrEmpty()) {
             val children = XValueChildrenList()
-            variable.children.forEach { child ->
+            cachedChildren.forEach { child ->
                 children.add(child.name, LuaPandaValue(debugProcess, child, stackId))
             }
             node.addChildren(children, true)
@@ -256,8 +259,9 @@ class LuaPandaValue(
                     val children = XValueChildrenList()
                     
                     // 解析返回的变量信息 - info字段直接是变量数组
-                    if (response.info?.isJsonArray == true) {
-                        response.info.asJsonArray.forEach { element ->
+                    val responseInfo = response.info
+                    if (responseInfo?.isJsonArray == true) {
+                        responseInfo.asJsonArray.forEach { element ->
                             val varObj = element.asJsonObject
                             val childVar = LuaPandaVariable(
                                 name = varObj.get("name")?.asString ?: "",

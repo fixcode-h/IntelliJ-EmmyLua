@@ -17,31 +17,44 @@
 package com.tang.intellij.test.refactoring
 
 import com.intellij.openapi.fileEditor.FileDocumentManager
+import com.intellij.openapi.progress.EmptyProgressIndicator
+import com.intellij.openapi.progress.ProgressManager
 import com.intellij.psi.PsiElement
-import com.intellij.refactoring.MultiFileTestCase
+import com.intellij.psi.PsiManager
 import com.intellij.refactoring.move.moveFilesOrDirectories.MoveFilesOrDirectoriesProcessor
+import com.tang.intellij.test.LuaTestBase
 
-class MoveFileTest : MultiFileTestCase() {
-    override fun getTestRoot() = "/refactoring/"
-
-    override fun getTestDataPath() = "src/test/resources/"
+class MoveFileTest : LuaTestBase() {
+    override fun getTestDataPath() = "src/test/resources"
 
     fun testMoveFile() {
+        myFixture.copyDirectoryToProject("refactoring/moveFile/before", "")
+        val rootDir = myFixture.findFileInTempDir("")
         val fileToMove = "A.lua"
         val targetDirName = "to"
-        doTest { rootDir, _ ->
-            val child = rootDir.findFileByRelativePath(fileToMove)
-            assertNotNull("File $fileToMove not found", child)
-            val file = myPsiManager.findFile(child!!)!!
+        val child = rootDir.findFileByRelativePath(fileToMove)
+        assertNotNull("File $fileToMove not found", child)
+        val psiManager = PsiManager.getInstance(project)
+        val file = psiManager.findFile(child!!)!!
 
-            val child1 = rootDir.findChild(targetDirName)
-            assertNotNull("File $targetDirName not found", child1)
-            val targetDirectory = myPsiManager.findDirectory(child1!!)
+        val target = rootDir.findChild(targetDirName)
+        assertNotNull("File $targetDirName not found", target)
+        val targetDirectory = psiManager.findDirectory(target!!)!!
 
-            MoveFilesOrDirectoriesProcessor(myProject, arrayOf<PsiElement>(file), targetDirectory!!,
-                    false, false, null, null).run()
+        val processor = MoveFilesOrDirectoriesProcessor(
+            project,
+            arrayOf<PsiElement>(file),
+            targetDirectory,
+            false,
+            false,
+            null,
+            null
+        )
+        ProgressManager.getInstance().runProcess({ processor.run() }, EmptyProgressIndicator())
 
-            FileDocumentManager.getInstance().saveAllDocuments()
-        }
+        FileDocumentManager.getInstance().saveAllDocuments()
+        assertNull(rootDir.findChild("A.lua"))
+        assertNotNull(rootDir.findFileByRelativePath("to/A.lua"))
+        assertEquals("require(\"to.A\")", rootDir.findChild("B.lua")!!.contentsToByteArray().toString(Charsets.UTF_8))
     }
 }

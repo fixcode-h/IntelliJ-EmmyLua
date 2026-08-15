@@ -84,9 +84,8 @@ class LuaPandaDebugConfiguration(
     @Throws(InvalidDataException::class)
     override fun readExternal(element: Element) {
         super.readExternal(element)
-        transportType = LuaPandaTransportType.valueOf(
-            element.getAttributeValue("transportType") ?: LuaPandaTransportType.TCP_SERVER.name
-        )
+        transportType = LuaPandaTransportType.fromStoredValue(element.getAttributeValue("transportType"))
+            ?: LuaPandaTransportType.TCP_SERVER
         host = element.getAttributeValue("host") ?: "localhost"
         port = element.getAttributeValue("port")?.toIntOrNull() ?: 8818
         stopOnEntry = element.getAttributeValue("stopOnEntry")?.toBoolean() ?: false
@@ -107,7 +106,8 @@ class LuaPandaDebugConfiguration(
     @Throws(WriteExternalException::class)
     override fun writeExternal(element: Element) {
         super.writeExternal(element)
-        element.setAttribute("transportType", transportType.name)
+        element.setAttribute("schemaVersion", CURRENT_SCHEMA_VERSION.toString())
+        element.setAttribute("transportType", transportType.configId)
         element.setAttribute("host", host)
         element.setAttribute("port", port.toString())
         element.setAttribute("stopOnEntry", stopOnEntry.toString())
@@ -123,5 +123,9 @@ class LuaPandaDebugConfiguration(
         element.setAttribute("distinguishSameNameFile", distinguishSameNameFile.toString())
         element.setAttribute("truncatedOPath", truncatedOPath)
         element.setAttribute("developmentMode", developmentMode.toString())
+    }
+
+    companion object {
+        const val CURRENT_SCHEMA_VERSION = 2
     }
 }

@@ -19,36 +19,43 @@
 package com.tang.intellij.lua.debugger.emmy
 
 import com.google.gson.Gson
+import java.util.concurrent.atomic.AtomicInteger
 
-enum class MessageCMD {
-    Unknown,
+enum class MessageCMD(val wireId: Int) {
+    Unknown(0),
 
-    InitReq,
-    InitRsp,
+    InitReq(1),
+    InitRsp(2),
 
-    ReadyReq,
-    ReadyRsp,
+    ReadyReq(3),
+    ReadyRsp(4),
 
-    AddBreakPointReq,
-    AddBreakPointRsp,
+    AddBreakPointReq(5),
+    AddBreakPointRsp(6),
 
-    RemoveBreakPointReq,
-    RemoveBreakPointRsp,
+    RemoveBreakPointReq(7),
+    RemoveBreakPointRsp(8),
 
-    ActionReq,
-    ActionRsp,
+    ActionReq(9),
+    ActionRsp(10),
 
-    EvalReq,
-    EvalRsp,
+    EvalReq(11),
+    EvalRsp(12),
 
     // lua -> ide
-    BreakNotify,
-    AttachedNotify,
+    BreakNotify(13),
+    AttachedNotify(14),
 
-    StartHookReq,
-    StartHookRsp,
+    StartHookReq(15),
+    StartHookRsp(16),
 
-    LogNotify,
+    LogNotify(17);
+
+    companion object {
+        private val byWireId = entries.associateBy(MessageCMD::wireId)
+
+        fun fromWireId(wireId: Int): MessageCMD = byWireId[wireId] ?: Unknown
+    }
 }
 
 interface IMessage {
@@ -57,17 +64,17 @@ interface IMessage {
 }
 
 open class Message(cmdName: MessageCMD) : IMessage {
-    override val cmd = cmdName.ordinal
+    override val cmd = cmdName.wireId
 
     override fun toJSON(): String {
         return Gson().toJson(this)
     }
 
     companion object {
-        private var seqCount = 0
+        private val seqCount = AtomicInteger()
 
         fun makeSeq(): Int {
-            return seqCount++
+            return seqCount.getAndIncrement()
         }
     }
 }
@@ -80,31 +87,37 @@ class InitMessage(
     val ext: Array<String>
 ) : Message(MessageCMD.InitReq)
 
-enum class DebugAction {
-    Break,
-    Continue,
-    StepOver,
-    StepIn,
-    StepOut,
-    Stop,
+enum class DebugAction(val wireId: Int) {
+    Break(0),
+    Continue(1),
+    StepOver(2),
+    StepIn(3),
+    StepOut(4),
+    Stop(5),
 }
 
 class DebugActionMessage(actionName: DebugAction) : Message(MessageCMD.ActionReq) {
-    val action = actionName.ordinal
+    val action = actionName.wireId
 }
 
-enum class LuaValueType {
-    TNIL,
-    TBOOLEAN,
-    TLIGHTUSERDATA,
-    TNUMBER,
-    TSTRING,
-    TTABLE,
-    TFUNCTION,
-    TUSERDATA,
-    TTHREAD,
+enum class LuaValueType(val wireId: Int) {
+    TNIL(0),
+    TBOOLEAN(1),
+    TLIGHTUSERDATA(2),
+    TNUMBER(3),
+    TSTRING(4),
+    TTABLE(5),
+    TFUNCTION(6),
+    TUSERDATA(7),
+    TTHREAD(8),
 
-    GROUP,
+    GROUP(9);
+
+    companion object {
+        private val byWireId = entries.associateBy(LuaValueType::wireId)
+
+        fun fromWireId(wireId: Int): LuaValueType = byWireId[wireId] ?: TSTRING
+    }
 }
 
 class VariableValue(val name: String,
@@ -115,7 +128,7 @@ class VariableValue(val name: String,
                     val cacheId: Int,
                     val children: List<VariableValue>?) {
     val nameTypeValue: LuaValueType get() {
-        return LuaValueType.values().find { it.ordinal == nameType } ?: LuaValueType.TSTRING
+        return LuaValueType.fromWireId(nameType)
     }
 
     val nameValue: String get() {
@@ -125,7 +138,7 @@ class VariableValue(val name: String,
     }
 
     val valueTypeValue: LuaValueType get() {
-        return LuaValueType.values().find { it.ordinal == valueType } ?: LuaValueType.TSTRING
+        return LuaValueType.fromWireId(valueType)
     }
 
     val fake: Boolean get() {

@@ -39,10 +39,12 @@ import com.intellij.xdebugger.evaluation.XDebuggerEditorsProvider
 import com.intellij.xdebugger.frame.XSuspendContext
 import com.intellij.xdebugger.ui.DebuggerColors
 import com.tang.intellij.lua.debugger.*
+import com.tang.intellij.lua.debugger.core.DebugSessionEvent
+import com.tang.intellij.lua.debugger.core.DebugSessionEventLoop
+import com.tang.intellij.lua.debugger.core.DebugSessionState
 import com.tang.intellij.lua.psi.LuaFileUtil
 import com.tang.intellij.lua.LuaBundle
 import com.google.gson.Gson
-import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * LuaPanda调试进程
@@ -58,8 +60,16 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
     private var idCounter = 0
     internal var transporter: LuaPandaTransporter? = null
     private val logger = Logger.getInstance(LuaPandaDebugProcess::class.java)
-    private var isInitialized = false
-    private var isStopping = false // 标记是否正在主动停止
+    private val lifecycle = DebugSessionEventLoop(
+        threadName = "LuaPanda-Session",
+        transitionListener = { transition ->
+            logger.debug("LuaPanda session: ${transition.previous} --${transition.event}--> ${transition.current}")
+        },
+        errorHandler = { error -> logger.error("LuaPanda session event failed", error) }
+    )
+    @Volatile private var sessionGeneration = 0L
+    private val isInitialized: Boolean get() = lifecycle.state == DebugSessionState.RUNNING
+    private val isStopping: Boolean get() = lifecycle.state == DebugSessionState.STOPPING
     private val isClientMode = configuration.transportType == LuaPandaTransportType.TCP_CLIENT
 
     companion object {
@@ -71,7 +81,8 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
     override fun sessionInitialized() {
         super.sessionInitialized()
         logWithLevel("调试会话初始化完成", LogLevel.CONNECTION)
-        ApplicationManager.getApplication().executeOnPooledThread {
+        sessionGeneration = lifecycle.start()
+        lifecycle.post(sessionGeneration, DebugSessionEvent.TARGET_READY) {
             setupTransporter()
         }
     }
@@ -81,9 +92,15 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
     }
 
     override fun stop() {
+        clearInlineSnapshot()
+        val notifyTarget = isInitialized
+        lifecycle.post(sessionGeneration, DebugSessionEvent.STOP_REQUESTED) {
+            performStop(notifyTarget)
+        }
+    }
+
+    private fun performStop(notifyTarget: Boolean) {
         logWithLevel("🛑 调试会话停止中...", LogLevel.CONNECTION)
-        isStopping = true // 标记正在主动停止
-        
         try {
             // 1. 先停止连接尝试和重连机制
             transporter?.let { 
@@ -93,21 +110,15 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
             }
             
             // 2. 如果调试器已初始化，发送停止命令
-            if (isInitialized && transporter != null) {
+            if (notifyTarget && transporter != null) {
                 try {
                     logWithLevel("📤 发送停止运行命令到Lua调试器", LogLevel.DEBUG)
                     
                     // 参照VSCode插件的disconnectRequest，给Lua发消息让其停止运行
-                    val stopConfirmed = AtomicBoolean(false)
                     transporter?.commandToDebugger(LuaPandaCommands.STOP_RUN, null, { response ->
                         logWithLevel("✅ 收到Lua端停止确认", LogLevel.CONNECTION)
-                        stopConfirmed.set(true)
-                        // 在收到确认后立即清理连接
                         finalizeStop()
-                    }, 0)
-                    
-                    // 设置超时机制 - 如果在指定时间内没有收到停止确认，强制停止
-                    setupStopTimeout(stopConfirmed)
+                    }, configuration.stopConfirmTimeout, { finalizeStop() })
                     
                 } catch (e: Exception) {
                     logWithLevel("❌ 发送停止命令失败: ${e.message}", LogLevel.ERROR, contentType = ConsoleViewContentType.ERROR_OUTPUT)
@@ -130,7 +141,14 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
      * 参照VSCode插件的资源清理逻辑
      */
     private fun finalizeStop() {
+        lifecycle.post(sessionGeneration, DebugSessionEvent.TERMINATED) {
+            cleanupResources()
+        }
+    }
+
+    private fun cleanupResources() {
         try {
+            clearInlineSnapshot()
             logWithLevel("🧹 清理调试会话资源...", LogLevel.DEBUG)
             
             // 1. 停止并清理传输器
@@ -146,9 +164,7 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
             // 2. 清理回调和状态
             transporter?.clearCallbacks()
             
-            // 3. 重置状态标志
-            isInitialized = false
-            isStopping = false
+            // 3. 释放传输器引用
             transporter = null
             
             // 4. 清理断点映射
@@ -158,6 +174,8 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
             
         } catch (e: Exception) {
             logWithLevel("❌ 资源清理过程中出错: ${e.message}", LogLevel.ERROR, contentType = ConsoleViewContentType.ERROR_OUTPUT)
+        } finally {
+            lifecycle.close()
         }
     }
     
@@ -198,6 +216,9 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
     
     private fun setupTransporterHandlers() {
         transporter?.setLogLevel(configuration.logLevel)
+        transporter?.setEventDispatcher { action ->
+            lifecycle.execute(sessionGeneration, action)
+        }
         
         transporter?.setMessageHandler { message ->
             handleMessage(message)
@@ -213,38 +234,11 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
         }
     }
     
-    private fun stopTransporter() {
-        transporter?.stop()
-        transporter = null
-        isStopping = false // 重置停止标志
-    }
-    
-    private fun setupStopTimeout(stopConfirmed: AtomicBoolean) {
-        Thread {
-            try {
-                val timeoutMs = (configuration.stopConfirmTimeout * 1000).toLong()
-                logWithLevel("等待停止确认，超时时间: ${configuration.stopConfirmTimeout}秒", LogLevel.CONNECTION)
-                Thread.sleep(timeoutMs)
-                
-                if (!stopConfirmed.get() && transporter != null) {
-                    logWithLevel("停止确认超时，强制关闭连接", LogLevel.CONNECTION)
-                    stopTransporter()
-                }
-            } catch (e: InterruptedException) {
-                logWithLevel("停止确认等待被中断", LogLevel.DEBUG)
-                Thread.currentThread().interrupt()
-            }
-        }.start()
-    }
-    
     // ========== 连接管理 ==========
     
     private fun onConnect() {
-        logWithLevel("连接建立，立即发送初始化消息...", LogLevel.DEBUG)
-        
-        // 参照VSCode插件的实现，连接建立后立即发送初始化消息
-        // 延迟发送可能导致客户端超时断开连接
-        ApplicationManager.getApplication().invokeLater {
+        lifecycle.post(sessionGeneration, DebugSessionEvent.CONNECTED) {
+            logWithLevel("连接建立，立即发送初始化消息...", LogLevel.DEBUG)
             if (transporter != null && !session.isStopped) {
                 sendInitializationMessageWithRetry(1)
             }
@@ -258,30 +252,36 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
     private fun onDisconnect() {
         logWithLevel("📡 连接断开", LogLevel.CONNECTION)
         
-        // 重置初始化状态
-        isInitialized = false
-        
-        // 根据断开原因显示不同消息
         if (isStopping) {
             logWithLevel("🏁 调试会话已正常结束", LogLevel.CONNECTION)
+            finalizeStop()
         } else {
             // 非主动停止的断开
             if (configuration.autoReconnect && !session.isStopped) {
-                logWithLevel("🔄 客户端连接断开，等待重新连接...", LogLevel.CONNECTION)
-                logWithLevel("🔄 自动重连已启用，正在尝试重新连接...", LogLevel.CONNECTION)
+                lifecycle.post(sessionGeneration, DebugSessionEvent.RECONNECTING) {
+                    logWithLevel("🔄 客户端连接断开，等待重新连接...", LogLevel.CONNECTION)
+                    logWithLevel("🔄 自动重连已启用，正在尝试重新连接...", LogLevel.CONNECTION)
+                }
             } else {
                 // 没有启用自动重连或会话已停止，应该停止调试会话
                 logWithLevel("❌ 客户端连接断开，自动重连已禁用", LogLevel.CONNECTION)
                 logWithLevel("🛑 正在停止调试会话...", LogLevel.CONNECTION)
                 
                 // 在UI线程中停止调试会话
-                ApplicationManager.getApplication().invokeLater {
-                    try {
-                        session.stop()
-                        logWithLevel("✅ 调试会话已停止", LogLevel.CONNECTION)
-                    } catch (e: Exception) {
-                        logWithLevel("❌ 停止调试会话时出错: ${e.message}", LogLevel.ERROR, contentType = ConsoleViewContentType.ERROR_OUTPUT)
-                        logger.error("Error stopping debug session on disconnect", e)
+                lifecycle.post(sessionGeneration, DebugSessionEvent.FAILED) {
+                    transporter?.stop()
+                    transporter?.clearCallbacks()
+                    transporter = null
+                    ApplicationManager.getApplication().invokeLater {
+                        try {
+                            session.stop()
+                            logWithLevel("✅ 调试会话已停止", LogLevel.CONNECTION)
+                        } catch (e: Exception) {
+                            logWithLevel("❌ 停止调试会话时出错: ${e.message}", LogLevel.ERROR, contentType = ConsoleViewContentType.ERROR_OUTPUT)
+                            logger.error("Error stopping debug session on disconnect", e)
+                        } finally {
+                            lifecycle.close()
+                        }
                     }
                 }
             }
@@ -453,17 +453,11 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
                 
                 logger.info("LuaPanda初始化成功 - UseHookLib: $useHookLib, UseLoadstring: $useLoadstring, B64Encode: $isNeedB64EncodeStr")
                 
-                isInitialized = true
-                
-                // 发送现有断点到调试器
-                sendExistingBreakpoints()
-                
-                logWithLevel("🚀 调试器现已就绪，可以开始调试", LogLevel.CONNECTION)
+                markInitialized()
                 
             } ?: run {
                 logWithLevel("⚠️ 初始化响应缺少调试器状态信息，使用默认设置", LogLevel.DEBUG)
-                isInitialized = true
-                sendExistingBreakpoints()
+                markInitialized()
             }
             
         } catch (e: Exception) {
@@ -471,8 +465,14 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
             logger.error("Failed to parse initialization response", e)
             
             // 即使解析失败，也标记为已初始化，允许基本调试功能
-            isInitialized = true
+            markInitialized()
+        }
+    }
+
+    private fun markInitialized() {
+        lifecycle.post(sessionGeneration, DebugSessionEvent.INITIALIZED) {
             sendExistingBreakpoints()
+            logWithLevel("🚀 调试器现已就绪，可以开始调试", LogLevel.CONNECTION)
         }
     }
     
@@ -595,8 +595,9 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
     }
     
     private fun extractStacksFromMessage(message: LuaPandaMessage): List<LuaPandaStack> {
-        return if (message.stack != null) {
-            message.stack
+        val messageStacks = message.stack
+        return if (messageStacks != null) {
+            messageStacks
         } else if (message.getInfoAsObject() != null) {
             Gson().fromJson(message.getInfoAsObject(), Array<LuaPandaStack>::class.java).toList()
         } else {
@@ -744,6 +745,7 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
     }
 
     override fun runToPosition(position: XSourcePosition, context: XSuspendContext?) {
+        clearInlineSnapshot()
         val filePath = position.file.canonicalPath ?: position.file.path
         val tempBreakpointInfo = BreakpointInfo(
             verified = true,
@@ -758,21 +760,25 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
     }
 
     override fun run() {
+        clearInlineSnapshot()
         logWithLevel("继续运行", LogLevel.DEBUG)
         sendCommandNoResponse(LuaPandaCommands.CONTINUE)
     }
 
     override fun startStepOver(context: XSuspendContext?) {
+        clearInlineSnapshot()
         logWithLevel("单步跳过", LogLevel.DEBUG)
         sendCommandWithResponse(LuaPandaCommands.STEP_OVER, null)
     }
 
     override fun startStepInto(context: XSuspendContext?) {
+        clearInlineSnapshot()
         logWithLevel("单步进入", LogLevel.DEBUG)
         sendCommandWithResponse(LuaPandaCommands.STEP_IN, null)
     }
 
     override fun startStepOut(context: XSuspendContext?) {
+        clearInlineSnapshot()
         logWithLevel("单步跳出", LogLevel.DEBUG)
         sendCommandWithResponse(LuaPandaCommands.STEP_OUT, null)
     }
@@ -786,7 +792,17 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
             
             ApplicationManager.getApplication().invokeLater {
                 val sourcePosition = createSourcePosition(topStack)
-                
+                if (sourcePosition != null) {
+                    InlineDebugSnapshotStore.getInstance(session.project).update(
+                        session,
+                        topStack.toInlineSnapshot(
+                            sourcePosition.file.canonicalPath ?: sourcePosition.file.path,
+                            sourcePosition.line
+                        )
+                    )
+                } else {
+                    clearInlineSnapshot()
+                }
                 setupExecutionStack(suspendContext, sourcePosition)
                 handleBreakpointHit(sourcePosition, suspendContext)
                 showExecutionPoint(sourcePosition)
@@ -843,6 +859,10 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
                 }
             }
         }
+    }
+
+    private fun clearInlineSnapshot() {
+        InlineDebugSnapshotStore.getInstance(session.project).clear(session)
     }
 
     private fun createSourcePosition(stack: LuaPandaStack): XSourcePosition? {
@@ -929,7 +949,7 @@ class LuaPandaDebugProcess(session: XDebugSession) : LuaDebugProcess(session) {
             }
             LuaPandaCommands.STOP_RUN -> {
                 logWithLevel("收到停止确认，关闭连接", LogLevel.CONNECTION)
-                stopTransporter()
+                finalizeStop()
             }
             LuaPandaCommands.STEP_OVER,
             LuaPandaCommands.STEP_IN,

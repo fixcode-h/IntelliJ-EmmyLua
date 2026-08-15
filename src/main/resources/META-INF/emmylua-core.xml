@@ -156,14 +156,14 @@
 
         <!--lua settings-->
         <applicationService serviceImplementation="com.tang.intellij.lua.project.LuaSettings"/>
-        <applicationConfigurable groupId="language"
+        <projectConfigurable groupId="language"
                                  displayName="EmmyLua"
                                  id="preferences.Lua"
                                  instance="com.tang.intellij.lua.project.LuaSettingsPanel">
             <!--<configurable instance="com.tang.intellij.lua.project.CompletionSettingsPanel"
                           displayName="Emmy Completion"
                           id="preferences.Lua.Completion"/>-->
-        </applicationConfigurable>
+        </projectConfigurable>
 
         <!--intentions-->
         <intentionAction>

@@ -49,9 +49,15 @@ abstract class Transporter {
 
     var logger: DebugLogger? = null
 
+    private var eventDispatcher: ((() -> Unit) -> Unit) = { action -> action() }
+
     protected val messageQueue = LinkedBlockingQueue<IMessage>()
 
-    protected var stopped = false
+    @Volatile protected var stopped = false
+
+    fun setEventDispatcher(dispatcher: (() -> Unit) -> Unit) {
+        eventDispatcher = dispatcher
+    }
 
     open fun start() {
 
@@ -66,19 +72,21 @@ abstract class Transporter {
     }
 
     protected fun onConnect(suc: Boolean) {
-        handler?.onConnect(suc)
+        eventDispatcher { handler?.onConnect(suc) }
         // 移除简单的"Connected."消息，保留更详细的连接信息
     }
 
     protected open fun onDisconnect() {
-        // 移除简单的"Disconnected."消息，保留更详细的断开连接信息
+        eventDispatcher { handler?.onDisconnect() }
     }
 
     protected fun onReceiveMessage(type: MessageCMD, json: String) {
-        try {
-            handler?.onReceiveMessage(type, json)
-        } catch (e: Exception) {
-            println(e)
+        eventDispatcher {
+            try {
+                handler?.onReceiveMessage(type, json)
+            } catch (e: Exception) {
+                logger?.error(e.message ?: "Protocol callback failed")
+            }
         }
     }
 }
@@ -112,8 +120,7 @@ abstract class SocketChannelTransporter : Transporter() {
                 val cmdValue = reader.readLine()
                 val cmd = cmdValue.toInt()
                 val json = reader.readLine()
-                val type = MessageCMD.values().find { it.ordinal == cmd }
-                onReceiveMessage(type ?: MessageCMD.Unknown, json)
+                onReceiveMessage(MessageCMD.fromWireId(cmd), json)
             } catch (e: Exception) {
                 onDisconnect()
                 break
@@ -170,7 +177,6 @@ class SocketClientTransporter(val host: String, val port: Int) : SocketChannelTr
 
     override fun onDisconnect() {
         super.onDisconnect()
-        handler?.onDisconnect()
     }
 }
 
@@ -246,7 +252,6 @@ class PipelineClientTransporter(val name: String) : SocketChannelTransporter() {
 
     override fun onDisconnect() {
         super.onDisconnect()
-        handler?.onDisconnect()
     }
 }
 

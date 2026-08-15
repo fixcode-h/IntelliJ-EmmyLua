@@ -18,7 +18,6 @@ package com.tang.intellij.lua.debugger.luapanda
 
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
-import com.tang.intellij.lua.LuaBundle
 
 data class LuaPandaMessage(
     val cmd: String,
@@ -104,13 +103,4 @@ object LuaPandaCommands {
     const val GET_VARIABLE = "getVariable"
     const val SET_VARIABLE = "setVariable"
     const val GET_WATCHED_VARIABLE = "getWatchedVariable"
-}
-
-enum class LuaPandaTransportType(val desc: String) {
-    TCP_CLIENT(LuaBundle.message("debugger.transport.tcp_client")),
-    TCP_SERVER(LuaBundle.message("debugger.transport.tcp_server"));
-
-    override fun toString(): String {
-        return desc
-    }
 }

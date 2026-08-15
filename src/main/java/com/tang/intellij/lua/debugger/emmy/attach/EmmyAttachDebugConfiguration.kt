@@ -122,9 +122,10 @@ class EmmyAttachDebugConfiguration(project: Project, factory: EmmyAttachDebugger
 
     override fun writeExternal(element: Element) {
         super.writeExternal(element)
+        JDOMExternalizerUtil.writeField(element, "SCHEMA_VERSION", CURRENT_SCHEMA_VERSION.toString())
         JDOMExternalizerUtil.writeField(element, "PID", pid.toString())
         JDOMExternalizerUtil.writeField(element, "PROCESS_NAME", processName)
-        JDOMExternalizerUtil.writeField(element, "WIN_ARCH", winArch.name)
+        JDOMExternalizerUtil.writeField(element, "WIN_ARCH", winArch.configId)
         JDOMExternalizerUtil.writeField(element, "CAPTURE_LOG", captureLog.toString())
         JDOMExternalizerUtil.writeField(element, "AUTO_ATTACH_SINGLE_PROCESS", autoAttachSingleProcess.toString())
         JDOMExternalizerUtil.writeField(element, "FILTER_UE_PROCESSES", filterUEProcesses.toString())
@@ -138,7 +139,7 @@ class EmmyAttachDebugConfiguration(project: Project, factory: EmmyAttachDebugger
         pid = pidStr?.toIntOrNull() ?: 0
         processName = JDOMExternalizerUtil.readField(element, "PROCESS_NAME") ?: ""
         val archStr = JDOMExternalizerUtil.readField(element, "WIN_ARCH")
-        winArch = if (archStr != null) EmmyWinArch.valueOf(archStr) else EmmyWinArch.X64
+        winArch = EmmyWinArch.fromStoredValue(archStr) ?: EmmyWinArch.X64
         val captureLogStr = JDOMExternalizerUtil.readField(element, "CAPTURE_LOG")
         captureLog = captureLogStr?.toBoolean() ?: false
         val autoAttachStr = JDOMExternalizerUtil.readField(element, "AUTO_ATTACH_SINGLE_PROCESS")
@@ -149,5 +150,9 @@ class EmmyAttachDebugConfiguration(project: Project, factory: EmmyAttachDebugger
         threadFilterBlacklist = if (blacklistStr.isNullOrEmpty()) listOf() else blacklistStr.split(",")
         val logLevelStr = JDOMExternalizerUtil.readField(element, "LOG_LEVEL")
         logLevel = LogLevel.fromLevel(logLevelStr?.toIntOrNull() ?: 1)  // 默认为1级（普通日志）
+    }
+
+    companion object {
+        const val CURRENT_SCHEMA_VERSION = 2
     }
 }

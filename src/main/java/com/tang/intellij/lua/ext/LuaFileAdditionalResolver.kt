@@ -20,11 +20,11 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VfsUtil
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.openapi.vfs.VirtualFileManager
-import com.tang.intellij.lua.project.LuaSettings
+import com.tang.intellij.lua.project.LuaProjectSettings
 
 class LuaFileAdditionalResolver : ILuaFileResolver {
     override fun find(project: Project, shortUrl: String, extNames: Array<String>): VirtualFile? {
-        val sourcesRoot = LuaSettings.instance.additionalSourcesRoot
+        val sourcesRoot = LuaProjectSettings.getInstance(project).additionalSourcesRoot
         var firstMatch: VirtualFile? = null
         for (sr in sourcesRoot) {
             for (ext in extNames) {

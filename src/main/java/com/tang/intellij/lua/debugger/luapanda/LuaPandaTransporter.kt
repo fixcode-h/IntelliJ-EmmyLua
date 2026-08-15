@@ -21,10 +21,14 @@ import com.google.gson.JsonObject
 import com.intellij.execution.ui.ConsoleViewContentType
 import com.tang.intellij.lua.debugger.DebugLogger
 import com.tang.intellij.lua.debugger.LogConsoleType
+import com.tang.intellij.lua.debugger.core.RequestRegistry
 import java.io.*
 import java.net.ServerSocket
 import java.net.Socket
-import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CancellationException
+import java.util.concurrent.Executors
+import java.util.concurrent.ThreadFactory
+import java.util.concurrent.atomic.AtomicLong
 
 // ========== 枚举和接口定义 ==========
 
@@ -58,14 +62,26 @@ abstract class LuaPandaTransporter(private val logger: DebugLogger? = null) {
     
     private var messageHandler: ((LuaPandaMessage) -> Unit)? = null
     private var connectionHandler: ((Boolean) -> Unit)? = null
-    protected var callbackCounter = 0
-    protected val callbacks = ConcurrentHashMap<String, (LuaPandaMessage) -> Unit>()
+    private var eventDispatcher: ((() -> Unit) -> Unit) = { action -> action() }
+    private val callbackCounter = AtomicLong()
+    private val requestRegistry = RequestRegistry<LuaPandaMessage>(
+        defaultTimeoutMillis = DEFAULT_REQUEST_TIMEOUT_MILLIS,
+        scheduler = REQUEST_TIMEOUT_SCHEDULER,
+        closeScheduler = false,
+        callbackErrorHandler = { error -> logError("请求回调执行失败: ${error.message}", LogLevel.ERROR) }
+    )
     private var logLevel: Int = LogLevel.CONNECTION.value
     private var b64EncodeEnabled: Boolean = true // 默认启用Base64编码
     protected abstract val writer: PrintWriter? // 添加抽象的writer属性
     
     companion object {
         protected const val PROTOCOL_SEPARATOR = "|*|"
+        private const val DEFAULT_REQUEST_TIMEOUT_MILLIS = 10_000L
+        private val REQUEST_TIMEOUT_SCHEDULER = Executors.newSingleThreadScheduledExecutor(
+            ThreadFactory { task ->
+                Thread(task, "LuaPanda-RequestTimeout").apply { isDaemon = true }
+            }
+        )
     }
     
     // ========== 抽象方法 ==========
@@ -87,6 +103,10 @@ abstract class LuaPandaTransporter(private val logger: DebugLogger? = null) {
     fun setConnectionHandler(handler: (Boolean) -> Unit) {
         this.connectionHandler = handler
     }
+
+    fun setEventDispatcher(dispatcher: (() -> Unit) -> Unit) {
+        eventDispatcher = dispatcher
+    }
     
     /**
      * 设置Base64编码状态
@@ -105,7 +125,7 @@ abstract class LuaPandaTransporter(private val logger: DebugLogger? = null) {
     fun sendMessage(message: LuaPandaMessage, callback: (LuaPandaMessage?) -> Unit) {
         val callbackId = generateCallbackId()
         val messageWithCallback = LuaPandaMessage(message.cmd, message.info, callbackId, message.stack)
-        registerCallback(callbackId) { response -> callback(response) }
+        registerCallback(callbackId) { result -> callback(result.getOrNull()) }
         sendMessage(messageWithCallback)
     }
     
@@ -120,17 +140,18 @@ abstract class LuaPandaTransporter(private val logger: DebugLogger? = null) {
         cmd: String, 
         sendObject: Any? = null, 
         callbackFunc: ((LuaPandaMessage) -> Unit)? = null, 
-        timeOutSec: Int = 0
+        timeOutSec: Int = 0,
+        failureFunc: ((Throwable) -> Unit)? = null
     ) {
         val callbackId = if (callbackFunc != null) {
             val id = generateUniqueCallbackId()
-            registerCallback(id, callbackFunc)
-            
-            // TODO: 实现超时机制
-            if (timeOutSec > 0) {
-                // 超时处理逻辑
+            val timeoutMillis = if (timeOutSec > 0) timeOutSec * 1_000L else DEFAULT_REQUEST_TIMEOUT_MILLIS
+            registerCallback(id, timeoutMillis) { result ->
+                result.onSuccess(callbackFunc).onFailure { error ->
+                    logError("请求 $cmd 失败: ${error.message}", LogLevel.DEBUG)
+                    failureFunc?.invoke(error)
+                }
             }
-            
             id
         } else {
             "0" // 没有回调时使用默认值
@@ -155,10 +176,14 @@ abstract class LuaPandaTransporter(private val logger: DebugLogger? = null) {
             logInfo("发送协议: $displayJson", LogLevel.DEBUG)
             
             // 直接使用writer属性发送消息
-            writer?.print(finalMessage)
-            writer?.flush()
+            val activeWriter = writer ?: throw IOException("Transport is not connected")
+            activeWriter.print(finalMessage)
+            activeWriter.flush()
             
         } catch (e: Exception) {
+            if (callbackId != "0") {
+                requestRegistry.cancel(callbackId, e)
+            }
             logError("发送命令失败: ${e.message}", LogLevel.ERROR)
         }
     }
@@ -166,36 +191,42 @@ abstract class LuaPandaTransporter(private val logger: DebugLogger? = null) {
     // ========== 回调管理 ==========
     
     fun generateCallbackId(): String {
-        return (++callbackCounter).toString()
+        return callbackCounter.incrementAndGet().toString()
     }
     
     /**
      * 生成唯一的回调ID - 仿照VSCode插件的实现
      */
     private fun generateUniqueCallbackId(): String {
-        val max = 999999999
-        val min = 10  // 10以内是保留位
-        var ranNum: Int
-        
+        var id: String
         do {
-            ranNum = (Math.random() * (max - min + 1) + min).toInt()
-        } while (callbacks.containsKey(ranNum.toString()))
-        
-        return ranNum.toString()
+            id = generateCallbackId()
+        } while (requestRegistry.contains(id))
+        return id
     }
     
-    fun registerCallback(callbackId: String, callback: (LuaPandaMessage) -> Unit) {
-        callbacks[callbackId] = callback
+    private fun registerCallback(
+        callbackId: String,
+        timeoutMillis: Long = DEFAULT_REQUEST_TIMEOUT_MILLIS,
+        callback: (Result<LuaPandaMessage>) -> Unit
+    ) {
+        requestRegistry.register(callbackId, timeoutMillis) { result ->
+            eventDispatcher { callback(result) }
+        }
     }
     
     // ========== 消息处理方法 ==========
     
     protected fun notifyConnect(connected: Boolean) {
-        connectionHandler?.invoke(connected)
+        if (!connected) {
+            requestRegistry.cancelAll(IOException("LuaPanda transport connection failed"))
+        }
+        eventDispatcher { connectionHandler?.invoke(connected) }
     }
     
     protected fun notifyDisconnect() {
-        connectionHandler?.invoke(false)
+        requestRegistry.cancelAll(IOException("LuaPanda transport disconnected"))
+        eventDispatcher { connectionHandler?.invoke(false) }
     }
     
     /**
@@ -218,9 +249,6 @@ abstract class LuaPandaTransporter(private val logger: DebugLogger? = null) {
                 // 处理普通消息
                 handleNormalMessage(message)
             }
-            
-            // 清理超时的回调（参照VSCode插件的超时处理）
-            cleanupTimeoutCallbacks()
             
         } catch (e: Exception) {
             logError("处理消息时出错: ${e.message}", LogLevel.ERROR)
@@ -259,10 +287,8 @@ abstract class LuaPandaTransporter(private val logger: DebugLogger? = null) {
      * 处理回调响应
      */
     private fun handleCallbackResponse(callbackId: String, message: LuaPandaMessage) {
-        val callback = callbacks.remove(callbackId)
-        if (callback != null) {
+        if (requestRegistry.complete(callbackId, message)) {
             logInfo("执行回调 ID: $callbackId", LogLevel.DEBUG)
-            callback(message)
         } else {
             logError("未找到回调 ID: $callbackId", LogLevel.DEBUG)
         }
@@ -272,15 +298,7 @@ abstract class LuaPandaTransporter(private val logger: DebugLogger? = null) {
      * 处理普通消息
      */
     private fun handleNormalMessage(message: LuaPandaMessage) {
-        messageHandler?.invoke(message)
-    }
-    
-    /**
-     * 清理超时的回调（简化版，实际项目中可以实现更复杂的超时机制）
-     */
-    private fun cleanupTimeoutCallbacks() {
-        // 这里可以实现超时清理逻辑
-        // 参照VSCode插件中的timeOut处理
+        eventDispatcher { messageHandler?.invoke(message) }
     }
     
     /**
@@ -288,9 +306,12 @@ abstract class LuaPandaTransporter(private val logger: DebugLogger? = null) {
      * 用于停止调试时清理资源
      */
     fun clearCallbacks() {
-        callbacks.clear()
+        requestRegistry.cancelAll(CancellationException("LuaPanda transport stopped"))
         logInfo("已清理所有待处理的回调", LogLevel.DEBUG)
     }
+
+    internal val pendingRequestCount: Int
+        get() = requestRegistry.pendingCount
     
     // ========== 日志工具方法 ==========
     
@@ -338,10 +359,10 @@ class LuaPandaTcpClientTransporter(
     private var socket: Socket? = null
     private var _writer: PrintWriter? = null
     private var reader: BufferedReader? = null
-    private var isRunning = false
+    @Volatile private var isRunning = false
     private var connectThread: Thread? = null
-    private var isConnected = false
-    private var connectionFlag = false
+    @Volatile private var isConnected = false
+    @Volatile private var connectionFlag = false
     
     // 实现抽象的writer属性
     override val writer: PrintWriter? get() = _writer
@@ -571,7 +592,7 @@ class LuaPandaTcpServerTransporter(
     private var clientSocket: Socket? = null
     private var _writer: PrintWriter? = null
     private var reader: BufferedReader? = null
-    private var isRunning = false
+    @Volatile private var isRunning = false
     private var serverThread: Thread? = null
     
     // 实现抽象的writer属性
