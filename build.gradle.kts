@@ -14,12 +14,9 @@
  * limitations under the License.
  */
 
-import de.undercouch.gradle.tasks.download.*
-
 plugins {
     id("org.jetbrains.intellij.platform").version("2.7.0")
     id("org.jetbrains.kotlin.jvm").version("2.1.20")
-    id("de.undercouch.download").version("5.3.0")
 }
 
 data class BuildData(
@@ -62,8 +59,6 @@ val buildVersion = System.getProperty("IDEA_VER") ?: buildDataList.first().ideaS
 
 val buildVersionData = buildDataList.find { it.ideaSDKShortVersion == buildVersion }!!
 
-val emmyDebuggerVersion = "1.3.0"
-
 val resDir = "src/main/resources"
 
 val isCI = System.getenv("CI") != null
@@ -93,12 +88,11 @@ project(":") {
 
     dependencies {
         implementation(fileTree(baseDir = "libs") { include("*.jar") })
-        implementation("com.google.code.gson:gson:2.8.6")
+        implementation("com.google.code.gson:gson:2.11.0")
         implementation("org.scala-sbt.ipcsocket:ipcsocket:1.3.0")
-        implementation("org.luaj:luaj-jse:3.0.1")
         implementation("org.eclipse.mylyn.github:org.eclipse.egit.github.core:2.1.5")
-        implementation("com.jgoodies:forms:1.2.1")
         implementation(project(":modules:debugger-core"))
+        implementation(project(":modules:debugger-transport"))
         implementation(project(":modules:debugger-emmy-protocol"))
         implementation(project(":modules:debugger-luapanda-protocol"))
         
@@ -122,6 +116,12 @@ project(":") {
     java {
         sourceCompatibility = buildVersionData.targetCompatibilityLevel
         targetCompatibility = buildVersionData.targetCompatibilityLevel
+    }
+
+    kotlin {
+        compilerOptions {
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.fromTarget(buildVersionData.jvmTarget))
+        }
     }
 
     intellijPlatform {
@@ -150,12 +150,6 @@ project(":") {
         buildPlugin {
         }
 
-        compileKotlin {
-            compilerOptions {
-                jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.fromTarget(buildVersionData.jvmTarget))
-            }
-        }
-        
         // 确保 instrumentCode 在 Java 和 Kotlin 编译之后运行
         // 解决 "Class to bind does not exist" 警告
         named("instrumentCode") {

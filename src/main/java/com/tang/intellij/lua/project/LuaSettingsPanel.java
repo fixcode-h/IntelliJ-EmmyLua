@@ -28,8 +28,8 @@ import com.intellij.openapi.util.text.StringUtil;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.util.FileContentUtil;
+import com.tang.intellij.lua.debugger.SourceMappingService;
 import com.tang.intellij.lua.lang.LuaLanguageLevel;
-import com.tang.intellij.lua.LuaBundle;
 import org.jetbrains.annotations.Nls;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -38,6 +38,11 @@ import javax.swing.*;
 import javax.swing.text.AttributeSet;
 import javax.swing.text.BadLocationException;
 import javax.swing.text.PlainDocument;
+import java.awt.BorderLayout;
+import java.awt.Dimension;
+import java.awt.GridBagConstraints;
+import java.awt.GridBagLayout;
+import java.awt.Insets;
 import java.util.Arrays;
 import java.util.Objects;
 
@@ -45,6 +50,7 @@ import java.util.Objects;
  * Created by tangzx on 2017/6/12.
  */
 public class LuaSettingsPanel implements SearchableConfigurable, Configurable.NoScroll {
+    private final Project project;
     private final LuaSettings settings;
     private final LuaProjectSettings projectSettings;
     private JScrollPane myPanel;
@@ -74,8 +80,10 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
     private JCheckBox enableDevModeCheckBox;
 
     public LuaSettingsPanel(Project project) {
+        this.project = project;
         this.settings = LuaSettings.Companion.getInstance();
         this.projectSettings = LuaProjectSettings.getInstance(project);
+        buildUi();
         constructorNames.setText(settings.getConstructorNamesString());
         strictDoc.setSelected(settings.isStrictDoc());
         smartCloseEnd.setSelected(settings.isSmartCloseEnd());
@@ -162,6 +170,137 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
         });
     }
 
+    private void buildUi() {
+        constructorNames = new JTextField();
+        strictDoc = new JCheckBox("Strict documentation checks");
+        smartCloseEnd = new JCheckBox("Automatically close statements with end");
+        showWordsInFile = new JCheckBox("Show words from current file");
+        enforceTypeSafety = new JCheckBox("Enforce type safety");
+        nilStrict = new JCheckBox("Strict nil checks");
+        recognizeGlobalNameAsCheckBox = new JCheckBox("Recognize global names as types");
+        additionalRoots = new LuaAdditionalSourcesRootPanel();
+        additionalRoots.setPreferredSize(new Dimension(480, 130));
+        enableGenericCheckBox = new JCheckBox("Enable generics");
+        languageLevel = new JComboBox<>();
+        requireFunctionNames = new JTextField();
+        tooLargerFileThreshold = new JTextField();
+
+        ueProcessNamesField = new JTextField();
+        debugProcessBlacklistField = new JTextField();
+        customHelperPathField = new JTextField();
+        browseCustomHelperPathButton = new JButton("Browse...");
+        customHelperExtNameField = new JTextField();
+        browseCustomHelperExtNameButton = new JButton("Browse...");
+        enableDevModeCheckBox = new JCheckBox("Load debugger scripts from project sources");
+
+        enableCustomFileTemplateCheckBox = new JCheckBox("Enable custom Lua file template");
+        customFileTemplateTextArea = new JTextArea(14, 60);
+        customFileTemplateTextArea.setLineWrap(false);
+        enableFileNameReplacementCheckBox = new JCheckBox("Replace file-name placeholder");
+        fileNamePlaceholderField = new JTextField();
+
+        contentPanel = new JTabbedPane();
+        contentPanel.addTab("Language", createLanguagePanel());
+        contentPanel.addTab("Debugger", createDebuggerPanel());
+        contentPanel.addTab("File Template", createTemplatePanel());
+
+        myPanel = new JScrollPane(contentPanel);
+        myPanel.setBorder(BorderFactory.createEmptyBorder());
+        myPanel.getVerticalScrollBar().setUnitIncrement(16);
+    }
+
+    private JPanel createLanguagePanel() {
+        JPanel panel = createGridPanel();
+        int row = 0;
+        addRow(panel, row++, "Constructor functions", constructorNames);
+        addRow(panel, row++, "Require-like functions", requireFunctionNames);
+        addRow(panel, row++, "Large file threshold (KB)", tooLargerFileThreshold);
+        addRow(panel, row++, "Lua language level", languageLevel);
+        addFullRow(panel, row++, strictDoc);
+        addFullRow(panel, row++, smartCloseEnd);
+        addFullRow(panel, row++, showWordsInFile);
+        addFullRow(panel, row++, enforceTypeSafety);
+        addFullRow(panel, row++, nilStrict);
+        addFullRow(panel, row++, recognizeGlobalNameAsCheckBox);
+        addFullRow(panel, row++, enableGenericCheckBox);
+        addFullRow(panel, row++, additionalRoots);
+        addVerticalGlue(panel, row);
+        return panel;
+    }
+
+    private JPanel createDebuggerPanel() {
+        JPanel panel = createGridPanel();
+        int row = 0;
+        addRow(panel, row++, "Unreal Engine process names", ueProcessNamesField);
+        addRow(panel, row++, "Process blacklist", debugProcessBlacklistField);
+        addRow(panel, row++, "Custom helper directory", withBrowseButton(customHelperPathField, browseCustomHelperPathButton));
+        addRow(panel, row++, "Custom helper script", withBrowseButton(customHelperExtNameField, browseCustomHelperExtNameButton));
+        addFullRow(panel, row++, enableDevModeCheckBox);
+        addVerticalGlue(panel, row);
+        return panel;
+    }
+
+    private JPanel createTemplatePanel() {
+        JPanel panel = createGridPanel();
+        int row = 0;
+        addFullRow(panel, row++, enableCustomFileTemplateCheckBox);
+        addFullRow(panel, row++, new JScrollPane(customFileTemplateTextArea));
+        addFullRow(panel, row++, enableFileNameReplacementCheckBox);
+        addRow(panel, row++, "File-name placeholder", fileNamePlaceholderField);
+        addVerticalGlue(panel, row);
+        return panel;
+    }
+
+    private static JPanel createGridPanel() {
+        JPanel panel = new JPanel(new GridBagLayout());
+        panel.setBorder(BorderFactory.createEmptyBorder(12, 12, 12, 12));
+        return panel;
+    }
+
+    private static JPanel withBrowseButton(JTextField field, JButton button) {
+        JPanel panel = new JPanel(new BorderLayout(6, 0));
+        panel.add(field, BorderLayout.CENTER);
+        panel.add(button, BorderLayout.EAST);
+        return panel;
+    }
+
+    private static void addRow(JPanel panel, int row, String label, JComponent component) {
+        GridBagConstraints labelConstraints = constraints(0, row, 0.0);
+        labelConstraints.anchor = GridBagConstraints.WEST;
+        panel.add(new JLabel(label), labelConstraints);
+
+        GridBagConstraints componentConstraints = constraints(1, row, 1.0);
+        componentConstraints.fill = GridBagConstraints.HORIZONTAL;
+        panel.add(component, componentConstraints);
+    }
+
+    private static void addFullRow(JPanel panel, int row, JComponent component) {
+        GridBagConstraints constraints = constraints(0, row, 1.0);
+        constraints.gridwidth = 2;
+        constraints.fill = component instanceof JScrollPane || component instanceof LuaAdditionalSourcesRootPanel
+                ? GridBagConstraints.BOTH
+                : GridBagConstraints.HORIZONTAL;
+        constraints.weighty = component instanceof JScrollPane || component instanceof LuaAdditionalSourcesRootPanel ? 1.0 : 0.0;
+        panel.add(component, constraints);
+    }
+
+    private static void addVerticalGlue(JPanel panel, int row) {
+        GridBagConstraints constraints = constraints(0, row, 1.0);
+        constraints.gridwidth = 2;
+        constraints.weighty = 1.0;
+        constraints.fill = GridBagConstraints.VERTICAL;
+        panel.add(Box.createVerticalGlue(), constraints);
+    }
+
+    private static GridBagConstraints constraints(int column, int row, double weightX) {
+        GridBagConstraints constraints = new GridBagConstraints();
+        constraints.gridx = column;
+        constraints.gridy = row;
+        constraints.weightx = weightX;
+        constraints.insets = new Insets(4, 4, 4, 8);
+        return constraints;
+    }
+
     @NotNull
     @Override
     public String getId() {
@@ -219,6 +358,7 @@ public class LuaSettingsPanel implements SearchableConfigurable, Configurable.No
         settings.setNilStrict(nilStrict.isSelected());
         settings.setRecognizeGlobalNameAsType(recognizeGlobalNameAsCheckBox.isSelected());
         projectSettings.setAdditionalSourcesRoot(additionalRoots.getRoots());
+        SourceMappingService.Companion.getInstance(project).invalidate();
         settings.setEnableGeneric(enableGenericCheckBox.isSelected());
         
         //Custom helper path

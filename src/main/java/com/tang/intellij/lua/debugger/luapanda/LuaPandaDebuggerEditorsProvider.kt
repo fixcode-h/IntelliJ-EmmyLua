@@ -22,6 +22,7 @@ import com.intellij.openapi.fileTypes.FileType
 import com.intellij.openapi.project.Project
 import com.intellij.xdebugger.evaluation.EvaluationMode
 import com.intellij.xdebugger.evaluation.XDebuggerEditorsProvider
+import com.intellij.xdebugger.XExpression
 import com.tang.intellij.lua.lang.LuaFileType
 
 /**
@@ -34,13 +35,12 @@ class LuaPandaDebuggerEditorsProvider : XDebuggerEditorsProvider() {
         return LuaFileType.INSTANCE
     }
 
-    @Deprecated("This method overrides a deprecated member")
     override fun createDocument(
-        project: Project, 
-        text: String, 
+        project: Project,
+        expression: XExpression,
         sourcePosition: com.intellij.xdebugger.XSourcePosition?, 
         mode: EvaluationMode
     ): Document {
-        return EditorFactory.getInstance().createDocument(text)
+        return EditorFactory.getInstance().createDocument(expression.expression)
     }
 }

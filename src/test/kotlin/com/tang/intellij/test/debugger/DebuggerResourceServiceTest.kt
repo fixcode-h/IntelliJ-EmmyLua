@@ -50,6 +50,35 @@ class DebuggerResourceServiceTest {
         }
     }
 
+    @Test
+    fun `extraction repairs an existing incomplete content directory`() {
+        val parent = Files.createTempDirectory("emmylua-resource-repair-test")
+        val resources = linkedMapOf(
+            "x86/emmy_tool.exe" to bytes("x86-tool"),
+            "x86/emmy_hook.dll" to bytes("x86-hook"),
+            "x64/emmy_tool.exe" to bytes("x64-tool"),
+            "x64/emmy_hook.dll" to bytes("x64-hook")
+        )
+        val target = parent.resolve(DebuggerResourceService.contentHash(resources))
+        try {
+            Files.createDirectories(target.resolve("x64"))
+            Files.write(target.resolve("x64/emmy_hook.dll"), resources.getValue("x64/emmy_hook.dll"))
+            Files.write(target.resolve("x64/emmy_tool.exe"), bytes("bad-tool"))
+
+            val extracted = DebuggerResourceService.extractResources(resources, parent)
+
+            assertEquals(target, extracted)
+            for ((relativePath, expected) in resources) {
+                assertArrayEquals(expected, Files.readAllBytes(extracted.resolve(relativePath)))
+            }
+            Files.walk(target).use { paths ->
+                assertTrue(paths.noneMatch { it.fileName.toString().contains(".tmp-") })
+            }
+        } finally {
+            deleteRecursively(parent)
+        }
+    }
+
     private fun bytes(value: String): ByteArray = value.toByteArray(Charsets.UTF_8)
 
     private fun deleteRecursively(path: Path) {

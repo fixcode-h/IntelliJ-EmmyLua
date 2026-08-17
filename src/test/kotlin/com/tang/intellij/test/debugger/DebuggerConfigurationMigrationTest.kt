@@ -3,6 +3,7 @@ package com.tang.intellij.test.debugger
 import com.intellij.openapi.util.JDOMExternalizerUtil
 import com.intellij.openapi.util.Disposer
 import com.tang.intellij.lua.debugger.DebugLogLevel
+import com.tang.intellij.lua.debugger.DebuggerConfigurationSchema
 import com.tang.intellij.lua.debugger.emmy.ConfiguredEmmyTargetBootstrap
 import com.tang.intellij.lua.debugger.emmy.EmmyDebugConfiguration
 import com.tang.intellij.lua.debugger.emmy.EmmyDebugConfigurationType
@@ -42,7 +43,7 @@ class DebuggerConfigurationMigrationTest : LuaTestBase() {
         assertEquals("tcp-server", JDOMExternalizerUtil.readField(saved, "TYPE"))
         assertEquals("x86", JDOMExternalizerUtil.readField(saved, "WIN_ARCH"))
         assertEquals("1", JDOMExternalizerUtil.readField(saved, "LOG_LEVEL"))
-        assertEquals("3", JDOMExternalizerUtil.readField(saved, "SCHEMA_VERSION"))
+        assertEquals("4", JDOMExternalizerUtil.readField(saved, "SCHEMA_VERSION"))
     }
 
     fun testAttachReadsLegacyArchAndWritesStableId() {
@@ -60,7 +61,7 @@ class DebuggerConfigurationMigrationTest : LuaTestBase() {
         configuration.writeExternal(saved)
         assertEquals("x86", JDOMExternalizerUtil.readField(saved, "WIN_ARCH"))
         assertEquals("1", JDOMExternalizerUtil.readField(saved, "LOG_LEVEL"))
-        assertEquals("3", JDOMExternalizerUtil.readField(saved, "SCHEMA_VERSION"))
+        assertEquals("4", JDOMExternalizerUtil.readField(saved, "SCHEMA_VERSION"))
     }
 
     fun testLuaPandaReadsLegacyOrdinalAndWritesStableId() {
@@ -75,7 +76,22 @@ class DebuggerConfigurationMigrationTest : LuaTestBase() {
         configuration.writeExternal(saved)
         assertEquals("tcp-client", saved.getAttributeValue("transportType"))
         assertEquals("1", saved.getAttributeValue("logLevel"))
-        assertEquals("3", saved.getAttributeValue("schemaVersion"))
+        assertEquals("4", saved.getAttributeValue("schemaVersion"))
+    }
+
+    fun testSchemaMigratorRunsEveryVersionInOrderWithoutMutatingSource() {
+        val source = Element("configuration")
+        val visited = mutableListOf<Int>()
+
+        val migrated = DebuggerConfigurationSchema.ATTRIBUTE.migrate(source, 4) { version, state ->
+            visited += version
+            state.setAttribute("v$version", "done")
+        }
+
+        assertEquals(listOf(0, 1, 2, 3), visited)
+        assertNull(source.getAttributeValue("schemaVersion"))
+        assertEquals("4", migrated.getAttributeValue("schemaVersion"))
+        assertEquals("done", migrated.getAttributeValue("v3"))
     }
 
     fun testUnifiedDebuggerLogLevelThresholds() {

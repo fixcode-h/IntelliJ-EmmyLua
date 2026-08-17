@@ -33,6 +33,7 @@ import com.tang.intellij.lua.debugger.LuaCommandLineState
 import com.tang.intellij.lua.debugger.LuaConfigurationFactory
 import com.tang.intellij.lua.debugger.LuaRunConfiguration
 import com.tang.intellij.lua.debugger.DebugLogLevel
+import com.tang.intellij.lua.debugger.DebuggerConfigurationSchema
 import com.tang.intellij.lua.debugger.emmy.EmmyWinArch
 import com.tang.intellij.lua.lang.LuaIcons
 import org.jdom.Element
@@ -123,7 +124,7 @@ class EmmyAttachDebugConfiguration(project: Project, factory: EmmyAttachDebugger
 
     override fun writeExternal(element: Element) {
         super.writeExternal(element)
-        JDOMExternalizerUtil.writeField(element, "SCHEMA_VERSION", CURRENT_SCHEMA_VERSION.toString())
+        DebuggerConfigurationSchema.FIELD.writeCurrentVersion(element, CURRENT_SCHEMA_VERSION)
         JDOMExternalizerUtil.writeField(element, "PID", pid.toString())
         JDOMExternalizerUtil.writeField(element, "PROCESS_NAME", processName)
         JDOMExternalizerUtil.writeField(element, "WIN_ARCH", winArch.configId)
@@ -136,24 +137,30 @@ class EmmyAttachDebugConfiguration(project: Project, factory: EmmyAttachDebugger
 
     override fun readExternal(element: Element) {
         super.readExternal(element)
-        val pidStr = JDOMExternalizerUtil.readField(element, "PID")
+        val state = DebuggerConfigurationSchema.FIELD.migrate(element, CURRENT_SCHEMA_VERSION) { version, migrated ->
+            if (version == 0) {
+                EmmyWinArch.fromStoredValue(JDOMExternalizerUtil.readField(migrated, "WIN_ARCH"))
+                    ?.let { JDOMExternalizerUtil.writeField(migrated, "WIN_ARCH", it.configId) }
+            }
+        }
+        val pidStr = JDOMExternalizerUtil.readField(state, "PID")
         pid = pidStr?.toIntOrNull() ?: 0
-        processName = JDOMExternalizerUtil.readField(element, "PROCESS_NAME") ?: ""
-        val archStr = JDOMExternalizerUtil.readField(element, "WIN_ARCH")
+        processName = JDOMExternalizerUtil.readField(state, "PROCESS_NAME") ?: ""
+        val archStr = JDOMExternalizerUtil.readField(state, "WIN_ARCH")
         winArch = EmmyWinArch.fromStoredValue(archStr) ?: EmmyWinArch.X64
-        val captureLogStr = JDOMExternalizerUtil.readField(element, "CAPTURE_LOG")
+        val captureLogStr = JDOMExternalizerUtil.readField(state, "CAPTURE_LOG")
         captureLog = captureLogStr?.toBoolean() ?: false
-        val autoAttachStr = JDOMExternalizerUtil.readField(element, "AUTO_ATTACH_SINGLE_PROCESS")
+        val autoAttachStr = JDOMExternalizerUtil.readField(state, "AUTO_ATTACH_SINGLE_PROCESS")
         autoAttachSingleProcess = autoAttachStr?.toBoolean() ?: true
-        val filterUEStr = JDOMExternalizerUtil.readField(element, "FILTER_UE_PROCESSES")
+        val filterUEStr = JDOMExternalizerUtil.readField(state, "FILTER_UE_PROCESSES")
         filterUEProcesses = filterUEStr?.toBoolean() ?: true  // 默认勾选过滤虚幻引擎进程
-        val blacklistStr = JDOMExternalizerUtil.readField(element, "THREAD_FILTER_BLACKLIST")
+        val blacklistStr = JDOMExternalizerUtil.readField(state, "THREAD_FILTER_BLACKLIST")
         threadFilterBlacklist = if (blacklistStr.isNullOrEmpty()) listOf() else blacklistStr.split(",")
-        val logLevelStr = JDOMExternalizerUtil.readField(element, "LOG_LEVEL")
+        val logLevelStr = JDOMExternalizerUtil.readField(state, "LOG_LEVEL")
         logLevel = DebugLogLevel.fromValue(logLevelStr?.toIntOrNull())
     }
 
     companion object {
-        const val CURRENT_SCHEMA_VERSION = 3
+        const val CURRENT_SCHEMA_VERSION = 4
     }
 }

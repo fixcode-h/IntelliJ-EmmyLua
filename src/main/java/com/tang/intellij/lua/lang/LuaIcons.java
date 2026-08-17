@@ -42,8 +42,8 @@ public class LuaIcons {
     public static final Icon CLASS_METHOD = AllIcons.Nodes.Method;
     public static final Icon CLASS_METHOD_OVERRIDING = new RowIcon(AllIcons.Nodes.Method, AllIcons.Gutter.OverridingMethod);
 
-    public static final Icon GLOBAL_FUNCTION = new LayeredIcon(AllIcons.Nodes.Function, AllIcons.Nodes.StaticMark);
-    public static final Icon GLOBAL_VAR = new LayeredIcon(AllIcons.Nodes.Variable, AllIcons.Nodes.StaticMark);
+    public static final Icon GLOBAL_FUNCTION = LayeredIcon.create(AllIcons.Nodes.Function, AllIcons.Nodes.StaticMark);
+    public static final Icon GLOBAL_VAR = LayeredIcon.create(AllIcons.Nodes.Variable, AllIcons.Nodes.StaticMark);
 
     public static final Icon LOCAL_VAR = AllIcons.Nodes.Variable;
     public static final Icon LOCAL_FUNCTION = AllIcons.Nodes.Function;

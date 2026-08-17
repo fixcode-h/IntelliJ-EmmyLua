@@ -75,7 +75,7 @@ class ProcessSelector(private val project: Project) {
             val outputStr = String(output, Charset.forName("CP936"))
             parseProcessList(outputStr, processName, emptyList(), filterUEProcesses)
         } catch (e: Exception) {
-            throw Exception("获取进程列表失败: ${e.message}")
+            throw Exception("获取进程列表失败: ${e.message}", e)
         }
     }
 
@@ -151,14 +151,7 @@ class ProcessSelector(private val project: Project) {
             override fun compute(indicator: ProgressIndicator): ProcessInfo? {
                 indicator.text = "正在获取系统进程列表..."
                 
-                val processes = try {
-                    getProcessList(processName, autoAttachSingleProcess, filterUEProcesses)
-                } catch (e: Exception) {
-                    ApplicationManager.getApplication().invokeLater {
-                        Messages.showErrorDialog(project, e.message, "错误")
-                    }
-                    return null
-                }
+                val processes = getProcessList(processName, autoAttachSingleProcess, filterUEProcesses)
 
                 if (indicator.isCanceled) return null
 

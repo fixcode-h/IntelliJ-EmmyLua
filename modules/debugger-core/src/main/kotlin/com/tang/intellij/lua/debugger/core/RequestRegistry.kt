@@ -65,34 +65,55 @@ class RequestRegistry<T>(
         return true
     }
 
+    internal fun discard(requestId: String): Boolean {
+        val request = pending.remove(requestId) ?: return false
+        request.timeout.get()?.cancel(false)
+        return true
+    }
+
     fun cancelAll(cause: Throwable = CancellationException("Request registry closed")): Int {
         val requests = pending.entries.toList()
         var cancelled = 0
+        var cancellation: CancellationException? = null
         for ((id, request) in requests) {
             if (pending.remove(id, request)) {
                 request.timeout.get()?.cancel(false)
-                deliver(request, Result.failure(cause))
                 cancelled++
+                try {
+                    deliver(request, Result.failure(cause))
+                } catch (error: CancellationException) {
+                    if (cancellation == null) cancellation = error
+                }
             }
         }
+        cancellation?.let { throw it }
         return cancelled
     }
 
     fun contains(requestId: String): Boolean = pending.containsKey(requestId)
 
+    internal fun deliverFailure(callback: (Result<T>) -> Unit, cause: Throwable) {
+        deliver(Pending(callback), Result.failure(cause))
+    }
+
     val pendingCount: Int
         get() = pending.size
 
     override fun close() {
-        cancelAll()
-        if (closeScheduler) {
-            scheduler.shutdownNow()
+        try {
+            cancelAll()
+        } finally {
+            if (closeScheduler) {
+                scheduler.shutdownNow()
+            }
         }
     }
 
     private fun deliver(request: Pending<T>, result: Result<T>) {
         try {
             request.callback(result)
+        } catch (cancellation: CancellationException) {
+            throw cancellation
         } catch (error: Throwable) {
             callbackErrorHandler(error)
         }

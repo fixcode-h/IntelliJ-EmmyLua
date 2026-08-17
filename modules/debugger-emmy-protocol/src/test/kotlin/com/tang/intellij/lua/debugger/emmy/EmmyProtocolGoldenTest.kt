@@ -34,6 +34,19 @@ class EmmyProtocolGoldenTest {
     }
 
     @Test
+    fun `run to cursor breakpoint serializes its temporary flag`() {
+        val message = AddBreakPointReq(
+            listOf(BreakPoint("C:/game/main.lua", 12, hitCondition = ">= 3", runToHere = true))
+        )
+        val breakpoint = JsonParser.parseString(message.toJSON())
+            .asJsonObject.getAsJsonArray("breakPoints")[0].asJsonObject
+
+        assertEquals(true, breakpoint.get("runToHere").asBoolean)
+        assertEquals(">= 3", breakpoint.get("hitCondition").asString)
+        assertEquals(12, breakpoint.get("line").asInt)
+    }
+
+    @Test
     fun `request sequences are unique across threads`() {
         val executor = Executors.newFixedThreadPool(8)
         try {

@@ -32,6 +32,7 @@ import com.tang.intellij.lua.debugger.LuaCommandLineState
 import com.tang.intellij.lua.debugger.LuaConfigurationFactory
 import com.tang.intellij.lua.debugger.LuaRunConfiguration
 import com.tang.intellij.lua.debugger.DebugLogLevel
+import com.tang.intellij.lua.debugger.DebuggerConfigurationSchema
 import com.tang.intellij.lua.lang.LuaIcons
 import org.jdom.Element
 import javax.swing.Icon
@@ -125,7 +126,7 @@ class EmmyDebugConfiguration(project: Project, factory: EmmyDebuggerConfiguratio
 
     override fun writeExternal(element: Element) {
         super.writeExternal(element)
-        JDOMExternalizerUtil.writeField(element, "SCHEMA_VERSION", CURRENT_SCHEMA_VERSION.toString())
+        DebuggerConfigurationSchema.FIELD.writeCurrentVersion(element, CURRENT_SCHEMA_VERSION)
         JDOMExternalizerUtil.writeField(element, "TYPE", type.configId)
         JDOMExternalizerUtil.writeField(element, "HOST", host)
         JDOMExternalizerUtil.writeField(element, "PORT", port.toString())
@@ -136,21 +137,29 @@ class EmmyDebugConfiguration(project: Project, factory: EmmyDebuggerConfiguratio
 
     override fun readExternal(element: Element) {
         super.readExternal(element)
-        JDOMExternalizerUtil.readField(element, "HOST")?.let {
+        val state = DebuggerConfigurationSchema.FIELD.migrate(element, CURRENT_SCHEMA_VERSION) { version, migrated ->
+            if (version == 0) {
+                EmmyDebugTransportType.fromStoredValue(JDOMExternalizerUtil.readField(migrated, "TYPE"))
+                    ?.let { JDOMExternalizerUtil.writeField(migrated, "TYPE", it.configId) }
+                EmmyWinArch.fromStoredValue(JDOMExternalizerUtil.readField(migrated, "WIN_ARCH"))
+                    ?.let { JDOMExternalizerUtil.writeField(migrated, "WIN_ARCH", it.configId) }
+            }
+        }
+        JDOMExternalizerUtil.readField(state, "HOST")?.let {
             host = it
         }
-        JDOMExternalizerUtil.readField(element, "PORT")?.let {
+        JDOMExternalizerUtil.readField(state, "PORT")?.let {
             port = it.toIntOrNull() ?: port
         }
-        JDOMExternalizerUtil.readField(element, "PIPE")?.let {
+        JDOMExternalizerUtil.readField(state, "PIPE")?.let {
             pipeName = it
         }
-        EmmyDebugTransportType.fromStoredValue(JDOMExternalizerUtil.readField(element, "TYPE"))?.let { type = it }
-        EmmyWinArch.fromStoredValue(JDOMExternalizerUtil.readField(element, "WIN_ARCH"))?.let { winArch = it }
-        logLevel = DebugLogLevel.fromValue(JDOMExternalizerUtil.readField(element, "LOG_LEVEL")?.toIntOrNull())
+        EmmyDebugTransportType.fromStoredValue(JDOMExternalizerUtil.readField(state, "TYPE"))?.let { type = it }
+        EmmyWinArch.fromStoredValue(JDOMExternalizerUtil.readField(state, "WIN_ARCH"))?.let { winArch = it }
+        logLevel = DebugLogLevel.fromValue(JDOMExternalizerUtil.readField(state, "LOG_LEVEL")?.toIntOrNull())
     }
 
     companion object {
-        const val CURRENT_SCHEMA_VERSION = 3
+        const val CURRENT_SCHEMA_VERSION = 4
     }
 }

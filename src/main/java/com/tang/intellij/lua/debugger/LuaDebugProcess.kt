@@ -51,7 +51,6 @@ abstract class LuaDebugProcess protected constructor(session: XDebugSession) : X
 
     override fun registerAdditionalActions(leftToolbar: DefaultActionGroup, topToolbar: DefaultActionGroup, settings: DefaultActionGroup) {
         val actionManager = ActionManager.getInstance()
-        topToolbar.remove(actionManager.getAction(XDebuggerActions.RUN_TO_CURSOR))
         topToolbar.remove(actionManager.getAction(XDebuggerActions.FORCE_STEP_INTO))
     }
 

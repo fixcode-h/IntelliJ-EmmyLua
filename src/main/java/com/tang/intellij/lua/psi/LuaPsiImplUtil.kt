@@ -21,6 +21,7 @@ package com.tang.intellij.lua.psi
 import com.intellij.extapi.psi.StubBasedPsiElementBase
 import com.intellij.icons.AllIcons
 import com.intellij.navigation.ItemPresentation
+import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.psi.*
 import com.intellij.psi.impl.source.resolve.reference.ReferenceProvidersRegistry
 import com.intellij.psi.search.GlobalSearchScope
@@ -89,6 +90,8 @@ fun getComment(declaration: LuaCommentOwner): LuaComment? {
         }
         
         return LuaCommentUtil.findComment(declaration)
+    } catch (e: ProcessCanceledException) {
+        throw e
     } catch (e: Exception) {
         // 捕获Stub索引不匹配等异常，避免插件崩溃
         return null
@@ -289,7 +292,7 @@ fun guessParentType(indexExpr: LuaIndexExpr, context: SearchContext): ITy {
             if (assignStat != null) {
                 val varExprList = assignStat.varExprList
                 val valueExprList = assignStat.valueExprList
-                if (varExprList != null && valueExprList != null) {
+                if (valueExprList != null) {
                     val index = varExprList.exprList.indexOf(resolved.parent)
                     if (index != -1) {
                         val valueExpr = valueExprList.exprList.getOrNull(index)

@@ -1,6 +1,8 @@
 package com.tang.intellij.lua.debugger.core
 
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CancellationException
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
@@ -23,6 +25,7 @@ class DebugSessionEventLoop(
     private val stateMachine = DebugSessionStateMachine()
     private val stateRef = AtomicReference(DebugSessionState.CREATED)
     private val closed = AtomicBoolean()
+    private val idleWaiters = ConcurrentHashMap.newKeySet<CompletableFuture<Unit>>()
 
     val state: DebugSessionState
         get() = stateRef.get()
@@ -54,28 +57,34 @@ class DebugSessionEventLoop(
 
     fun awaitIdle(): CompletableFuture<Unit> {
         val future = CompletableFuture<Unit>()
+        idleWaiters.add(future)
         if (closed.get()) {
-            future.complete(Unit)
+            completeIdleWaiter(future)
             return future
         }
         val token = currentGeneration.get()
-        submit(token) { future.complete(Unit) }
+        if (!submit(token) { completeIdleWaiter(future) }) {
+            completeIdleWaiter(future)
+        }
         return future
     }
 
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
         currentGeneration.incrementAndGet()
+        idleWaiters.toList().forEach(::completeIdleWaiter)
         executor.shutdownNow()
     }
 
-    private fun submit(token: Long, action: () -> Unit) {
-        if (closed.get() || token != currentGeneration.get()) return
+    private fun submit(token: Long, action: () -> Unit): Boolean {
+        if (closed.get() || token != currentGeneration.get()) return false
         try {
             executor.execute {
                 if (closed.get() || token != currentGeneration.get()) return@execute
                 try {
                     action()
+                } catch (cancellation: CancellationException) {
+                    throw cancellation
                 } catch (error: Throwable) {
                     val transition = stateMachine.transition(DebugSessionEvent.FAILED)
                     if (transition != null) {
@@ -85,8 +94,15 @@ class DebugSessionEventLoop(
                     errorHandler(error)
                 }
             }
+            return true
         } catch (error: RejectedExecutionException) {
             if (!closed.get()) errorHandler(error)
+            return false
         }
+    }
+
+    private fun completeIdleWaiter(future: CompletableFuture<Unit>) {
+        idleWaiters.remove(future)
+        future.complete(Unit)
     }
 }

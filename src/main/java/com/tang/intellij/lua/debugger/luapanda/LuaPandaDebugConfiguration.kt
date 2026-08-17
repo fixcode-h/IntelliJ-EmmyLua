@@ -30,6 +30,7 @@ import com.intellij.openapi.util.InvalidDataException
 import com.intellij.openapi.util.WriteExternalException
 import com.tang.intellij.lua.debugger.LuaRunConfiguration
 import com.tang.intellij.lua.debugger.DebugLogLevel
+import com.tang.intellij.lua.debugger.DebuggerConfigurationSchema
 import org.jdom.Element
 
 class LuaPandaDebugConfiguration(
@@ -85,29 +86,35 @@ class LuaPandaDebugConfiguration(
     @Throws(InvalidDataException::class)
     override fun readExternal(element: Element) {
         super.readExternal(element)
-        transportType = LuaPandaTransportType.fromStoredValue(element.getAttributeValue("transportType"))
+        val state = DebuggerConfigurationSchema.ATTRIBUTE.migrate(element, CURRENT_SCHEMA_VERSION) { version, migrated ->
+            if (version == 0) {
+                LuaPandaTransportType.fromStoredValue(migrated.getAttributeValue("transportType"))
+                    ?.let { migrated.setAttribute("transportType", it.configId) }
+            }
+        }
+        transportType = LuaPandaTransportType.fromStoredValue(state.getAttributeValue("transportType"))
             ?: LuaPandaTransportType.TCP_SERVER
-        host = element.getAttributeValue("host") ?: "localhost"
-        port = element.getAttributeValue("port")?.toIntOrNull() ?: 8818
-        stopOnEntry = element.getAttributeValue("stopOnEntry")?.toBoolean() ?: false
-        useCHook = element.getAttributeValue("useCHook")?.toBoolean() ?: true
-        logLevel = DebugLogLevel.fromValue(element.getAttributeValue("logLevel")?.toIntOrNull())
-        stopConfirmTimeout = element.getAttributeValue("stopConfirmTimeout")?.toIntOrNull() ?: 3
-        autoReconnect = element.getAttributeValue("autoReconnect")?.toBoolean() ?: true
+        host = state.getAttributeValue("host") ?: "localhost"
+        port = state.getAttributeValue("port")?.toIntOrNull() ?: 8818
+        stopOnEntry = state.getAttributeValue("stopOnEntry")?.toBoolean() ?: false
+        useCHook = state.getAttributeValue("useCHook")?.toBoolean() ?: true
+        logLevel = DebugLogLevel.fromValue(state.getAttributeValue("logLevel")?.toIntOrNull())
+        stopConfirmTimeout = state.getAttributeValue("stopConfirmTimeout")?.toIntOrNull() ?: 3
+        autoReconnect = state.getAttributeValue("autoReconnect")?.toBoolean() ?: true
         
         // 读取新添加的配置项
-        luaFileExtension = element.getAttributeValue("luaFileExtension") ?: "lua"
-        tempFilePath = element.getAttributeValue("tempFilePath") ?: ""
-        autoPathMode = element.getAttributeValue("autoPathMode")?.toBoolean() ?: false
-        distinguishSameNameFile = element.getAttributeValue("distinguishSameNameFile")?.toBoolean() ?: false
-        truncatedOPath = element.getAttributeValue("truncatedOPath") ?: ""
-        developmentMode = element.getAttributeValue("developmentMode")?.toBoolean() ?: false
+        luaFileExtension = state.getAttributeValue("luaFileExtension") ?: "lua"
+        tempFilePath = state.getAttributeValue("tempFilePath") ?: ""
+        autoPathMode = state.getAttributeValue("autoPathMode")?.toBoolean() ?: false
+        distinguishSameNameFile = state.getAttributeValue("distinguishSameNameFile")?.toBoolean() ?: false
+        truncatedOPath = state.getAttributeValue("truncatedOPath") ?: ""
+        developmentMode = state.getAttributeValue("developmentMode")?.toBoolean() ?: false
     }
 
     @Throws(WriteExternalException::class)
     override fun writeExternal(element: Element) {
         super.writeExternal(element)
-        element.setAttribute("schemaVersion", CURRENT_SCHEMA_VERSION.toString())
+        DebuggerConfigurationSchema.ATTRIBUTE.writeCurrentVersion(element, CURRENT_SCHEMA_VERSION)
         element.setAttribute("transportType", transportType.configId)
         element.setAttribute("host", host)
         element.setAttribute("port", port.toString())
@@ -127,6 +134,6 @@ class LuaPandaDebugConfiguration(
     }
 
     companion object {
-        const val CURRENT_SCHEMA_VERSION = 3
+        const val CURRENT_SCHEMA_VERSION = 4
     }
 }

@@ -70,10 +70,9 @@ object DebuggerResourceService {
 
     internal fun extractResources(resources: Map<String, ByteArray>, parent: Path): Path {
         require(resources.isNotEmpty()) { "Debugger resources must not be empty" }
-        val relativeFiles = resources.keys.toList()
         val hash = contentHash(resources)
         val target = parent.resolve(hash)
-        if (isComplete(target, relativeFiles)) return target
+        if (isComplete(target, resources)) return target
 
         Files.createDirectories(parent)
         val normalizedParent = parent.toAbsolutePath().normalize()
@@ -82,31 +81,64 @@ object DebuggerResourceService {
             val lockPath = parent.resolve(".extract.lock")
             FileChannel.open(lockPath, StandardOpenOption.CREATE, StandardOpenOption.WRITE).use { channel ->
                 channel.lock().use {
-                    if (isComplete(target, relativeFiles)) return target
-                    val temporary = parent.resolve(".$hash.tmp-${UUID.randomUUID()}")
-                    try {
-                        for ((relativePath, bytes) in resources) {
-                            val output = temporary.resolve(relativePath)
-                            Files.createDirectories(output.parent)
-                            Files.write(output, bytes, StandardOpenOption.CREATE_NEW)
-                            if (relativePath.endsWith(".exe")) output.toFile().setExecutable(true)
-                        }
-                        try {
-                            Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE)
-                        } catch (_: AtomicMoveNotSupportedException) {
-                            Files.move(temporary, target)
-                        } catch (_: java.nio.file.FileAlreadyExistsException) {
-                            deleteRecursively(temporary)
-                        }
-                    } catch (error: Throwable) {
-                        deleteRecursively(temporary)
-                        throw error
+                    if (isComplete(target, resources)) return target
+                    if (Files.exists(target)) {
+                        repairIncompleteDirectory(resources, target)
+                    } else {
+                        publishDirectory(resources, parent, target, hash)
                     }
                 }
             }
         }
-        check(isComplete(target, relativeFiles)) { "Debugger resource extraction is incomplete: $target" }
+        check(isComplete(target, resources)) { "Debugger resource extraction is incomplete: $target" }
         return target
+    }
+
+    private fun publishDirectory(resources: Map<String, ByteArray>, parent: Path, target: Path, hash: String) {
+        val temporary = parent.resolve(".$hash.tmp-${UUID.randomUUID()}")
+        try {
+            for ((relativePath, bytes) in resources) {
+                writeResource(temporary.resolve(relativePath), relativePath, bytes)
+            }
+            try {
+                Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE)
+            } catch (_: AtomicMoveNotSupportedException) {
+                Files.move(temporary, target)
+            } catch (_: java.nio.file.FileAlreadyExistsException) {
+                deleteRecursively(temporary)
+                repairIncompleteDirectory(resources, target)
+            }
+        } catch (error: Throwable) {
+            deleteRecursively(temporary)
+            throw error
+        }
+    }
+
+    private fun repairIncompleteDirectory(resources: Map<String, ByteArray>, target: Path) {
+        Files.createDirectories(target)
+        for ((relativePath, bytes) in resources) {
+            val output = target.resolve(relativePath)
+            if (hasExpectedContent(output, bytes)) continue
+
+            Files.createDirectories(output.parent)
+            val staged = output.resolveSibling(".${output.fileName}.tmp-${UUID.randomUUID()}")
+            try {
+                writeResource(staged, relativePath, bytes)
+                try {
+                    Files.move(staged, output, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+                } catch (_: AtomicMoveNotSupportedException) {
+                    Files.move(staged, output, StandardCopyOption.REPLACE_EXISTING)
+                }
+            } finally {
+                Files.deleteIfExists(staged)
+            }
+        }
+    }
+
+    private fun writeResource(output: Path, relativePath: String, bytes: ByteArray) {
+        Files.createDirectories(output.parent)
+        Files.write(output, bytes, StandardOpenOption.CREATE_NEW)
+        if (relativePath.endsWith(".exe")) output.toFile().setExecutable(true)
     }
 
     internal fun contentHash(resources: Map<String, ByteArray>): String {
@@ -122,8 +154,15 @@ object DebuggerResourceService {
     private fun pluginVersion(): String =
         PluginManagerCore.getPlugin(PluginId.getId(PLUGIN_ID))?.version ?: "dev"
 
-    private fun isComplete(directory: Path, relativeFiles: List<String>): Boolean =
-        Files.isDirectory(directory) && relativeFiles.all { Files.isRegularFile(directory.resolve(it)) }
+    private fun isComplete(directory: Path, resources: Map<String, ByteArray>): Boolean =
+        Files.isDirectory(directory) && resources.all { (relativePath, bytes) ->
+            hasExpectedContent(directory.resolve(relativePath), bytes)
+        }
+
+    private fun hasExpectedContent(path: Path, expected: ByteArray): Boolean =
+        Files.isRegularFile(path) &&
+            Files.size(path) == expected.size.toLong() &&
+            Files.readAllBytes(path).contentEquals(expected)
 
     private fun deleteRecursively(path: Path) {
         if (!Files.exists(path)) return

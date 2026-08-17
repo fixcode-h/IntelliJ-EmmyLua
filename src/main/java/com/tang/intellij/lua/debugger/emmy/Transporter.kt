@@ -20,6 +20,8 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.util.SystemInfoRt
 import com.tang.intellij.lua.debugger.DebugLogLevel
 import com.tang.intellij.lua.debugger.DebugLogger
+import com.tang.intellij.lua.debugger.transport.BoundedTransportQueue
+import com.tang.intellij.lua.debugger.transport.TransportChannel
 import org.scalasbt.ipcsocket.UnixDomainServerSocket
 import org.scalasbt.ipcsocket.UnixDomainSocket
 import org.scalasbt.ipcsocket.Win32NamedPipeServerSocket
@@ -32,7 +34,8 @@ import java.net.Socket
 import java.nio.ByteBuffer
 import java.nio.channels.ServerSocketChannel
 import java.nio.channels.SocketChannel
-import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.CancellationException
+import java.util.concurrent.atomic.AtomicBoolean
 
 class StopSign : Message(MessageCMD.Unknown)
 
@@ -42,15 +45,16 @@ interface ITransportHandler {
     fun onConnect(suc: Boolean)
 }
 
-abstract class Transporter {
+abstract class Transporter : TransportChannel<IMessage> {
 
     var handler: ITransportHandler? = null
 
     var logger: DebugLogger? = null
 
     private var eventDispatcher: ((() -> Unit) -> Unit) = { action -> action() }
+    private val disconnectNotified = AtomicBoolean()
 
-    protected val messageQueue = LinkedBlockingQueue<IMessage>()
+    protected val messageQueue = BoundedTransportQueue<IMessage>()
 
     @Volatile protected var stopped = false
 
@@ -58,24 +62,28 @@ abstract class Transporter {
         eventDispatcher = dispatcher
     }
 
-    open fun start() {
+    open override fun start() {
 
     }
 
-    open fun close() {
+    open override fun close() {
         stopped = true
+        messageQueue.force(StopSign())
     }
 
-    fun send(msg: IMessage) {
-        messageQueue.put(msg)
+    override fun send(message: IMessage) {
+        if (stopped && message !is StopSign) throw IOException("Emmy transport is closed")
+        messageQueue.offer(message)
     }
 
     protected fun onConnect(suc: Boolean) {
+        if (suc) disconnectNotified.set(false)
         eventDispatcher { handler?.onConnect(suc) }
         // 移除简单的"Connected."消息，保留更详细的连接信息
     }
 
     protected open fun onDisconnect() {
+        if (!disconnectNotified.compareAndSet(false, true)) return
         eventDispatcher { handler?.onDisconnect() }
     }
 
@@ -83,6 +91,8 @@ abstract class Transporter {
         eventDispatcher {
             try {
                 handler?.onReceiveMessage(type, json)
+            } catch (cancellation: CancellationException) {
+                throw cancellation
             } catch (e: Exception) {
                 logger?.log("Emmy protocol callback failed: ${e.message}", DebugLogLevel.ERROR)
             }
@@ -120,12 +130,14 @@ abstract class SocketChannelTransporter : Transporter() {
                 val cmd = cmdValue.toInt()
                 val json = reader.readLine()
                 onReceiveMessage(MessageCMD.fromWireId(cmd), json)
+            } catch (cancellation: CancellationException) {
+                throw cancellation
             } catch (e: Exception) {
-                onDisconnect()
+                terminateConnection(e)
                 break
             }
         }
-        send(StopSign())
+        messageQueue.force(StopSign())
         logger?.log("Emmy transport receive loop stopped", DebugLogLevel.DEBUG)
     }
 
@@ -138,10 +150,18 @@ abstract class SocketChannelTransporter : Transporter() {
                 val json = msg.toJSON()
                 write("${msg.cmd}\n$json\n".toByteArray())
             } catch (e: IOException) {
+                terminateConnection(e)
                 break
             }
         }
         logger?.log("Emmy transport send loop stopped", DebugLogLevel.DEBUG)
+    }
+
+    private fun terminateConnection(cause: Throwable) {
+        logger?.log("Emmy transport connection failed: ${cause.message}", DebugLogLevel.ERROR)
+        runCatching { close() }
+            .onFailure { error -> logger?.log("Emmy transport close failed: ${error.message}", DebugLogLevel.WARNING) }
+        onDisconnect()
     }
 
     override fun close() {

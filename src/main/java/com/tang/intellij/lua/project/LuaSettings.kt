@@ -24,6 +24,15 @@ import com.intellij.util.xmlb.XmlSerializerUtil
 import com.tang.intellij.lua.Constants
 import com.tang.intellij.lua.lang.LuaLanguageLevel
 
+internal data class LegacyLuaProjectSettings(
+    val additionalSourcesRoot: Array<String>,
+    val customHelperPath: String,
+    val customHelperExtName: String,
+    val ueProcessNames: Array<String>,
+    val debugProcessBlacklist: Array<String>,
+    val enableDevMode: Boolean
+)
+
 /**
  *
  * Created by tangzx on 2017/6/12.
@@ -53,6 +62,7 @@ class LuaSettings : PersistentStateComponent<LuaSettings> {
 
     var isRecognizeGlobalNameAsType = true
 
+    @Deprecated("Compatibility-only state. Use LuaProjectSettings.")
     var additionalSourcesRoot = arrayOf<String>()
 
     /**
@@ -77,6 +87,7 @@ class LuaSettings : PersistentStateComponent<LuaSettings> {
      * Custom helper directory path
      * 自定义 helper 目录路径（包含自定义脚本的目录）
      */
+    @Deprecated("Compatibility-only state. Use LuaProjectSettings.")
     var customHelperPath = ""
     
     /**
@@ -84,11 +95,13 @@ class LuaSettings : PersistentStateComponent<LuaSettings> {
      * 自定义扩展脚本名称（不含 .lua 后缀，如 "emmyHelper_custom"）
      * 如果为空，使用内置的 "emmyHelper_ue"
      */
+    @Deprecated("Compatibility-only state. Use LuaProjectSettings.")
     var customHelperExtName = ""
 
     /**
      * UE进程名称列表，用于调试器进程过滤
      */
+    @Deprecated("Compatibility-only state. Use LuaProjectSettings.")
     var ueProcessNames: Array<String> = arrayOf(
         "UnrealEngine", "UE4Editor", "UE5Editor", "UnrealEditor"
     )
@@ -96,6 +109,7 @@ class LuaSettings : PersistentStateComponent<LuaSettings> {
     /**
      * 调试器进程黑名单，用于过滤不需要显示的系统进程
      */
+    @Deprecated("Compatibility-only state. Use LuaProjectSettings.")
     var debugProcessBlacklist: Array<String> = arrayOf(
         "winlogon", "csrss", "wininit", "services"
     )
@@ -127,6 +141,7 @@ class LuaSettings : PersistentStateComponent<LuaSettings> {
      * 
      * 开发模式会自动检测项目根目录下的 src/main/resources 目录
      */
+    @Deprecated("Compatibility-only state. Use LuaProjectSettings.")
     var enableDevMode: Boolean = false
 
     override fun getState(): LuaSettings {
@@ -153,21 +168,15 @@ class LuaSettings : PersistentStateComponent<LuaSettings> {
             requireLikeFunctionNames = value.split(";").toTypedArray()
         }
 
-    var ueProcessNamesString: String
-        get() {
-            return ueProcessNames.joinToString(";")
-        }
-        set(value) {
-            ueProcessNames = value.split(";").filter { it.isNotBlank() }.toTypedArray()
-        }
-
-    var debugProcessBlacklistString: String
-        get() {
-            return debugProcessBlacklist.joinToString(";")
-        }
-        set(value) {
-            debugProcessBlacklist = value.split(";").filter { it.isNotBlank() }.toTypedArray()
-        }
+    @Suppress("DEPRECATION")
+    internal fun legacyProjectSettings(): LegacyLuaProjectSettings = LegacyLuaProjectSettings(
+        additionalSourcesRoot.copyOf(),
+        customHelperPath,
+        customHelperExtName,
+        ueProcessNames.copyOf(),
+        debugProcessBlacklist.copyOf(),
+        enableDevMode
+    )
 
     companion object {
 

@@ -21,6 +21,7 @@ import com.intellij.execution.configurations.RunProfileState
 import com.intellij.execution.executors.DefaultDebugExecutor
 import com.intellij.execution.runners.ExecutionEnvironment
 import com.intellij.execution.ui.RunContentDescriptor
+import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.openapi.ui.Messages
 import com.intellij.xdebugger.XDebugProcess
 import com.intellij.xdebugger.XDebugProcessStarter
@@ -80,8 +81,7 @@ class EmmyAttachDebugRunner : LuaRunner() {
                 val detectedArch = ProcessUtils.detectProcessArch(process.pid)
                 configuration.winArch = detectedArch.toEmmyWinArch()
             } ?: run {
-                // 用户取消了进程选择，静默退出而不显示错误
-                throw RuntimeException("用户取消了进程选择")
+                throw ProcessCanceledException()
             }
         }
 

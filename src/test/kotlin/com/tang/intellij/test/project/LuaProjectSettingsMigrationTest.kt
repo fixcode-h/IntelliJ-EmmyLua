@@ -7,6 +7,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
+@Suppress("DEPRECATION")
 class LuaProjectSettingsMigrationTest {
     @Test
     fun `legacy application settings migrate once into project settings`() {
@@ -20,7 +21,7 @@ class LuaProjectSettingsMigrationTest {
         }
         val settings = LuaProjectSettings()
 
-        settings.migrateFromApplicationSettings(legacy)
+        settings.migrateFromApplicationSettings(legacy.legacyProjectSettings())
 
         assertArrayEquals(arrayOf("src/shared"), settings.additionalSourcesRoot)
         assertEquals("helpers", settings.customHelperPath)
@@ -31,7 +32,7 @@ class LuaProjectSettingsMigrationTest {
         assertTrue(settings.migratedFromApplicationSettings)
 
         legacy.customHelperPath = "changed"
-        settings.migrateFromApplicationSettings(legacy)
+        settings.migrateFromApplicationSettings(legacy.legacyProjectSettings())
         assertEquals("helpers", settings.customHelperPath)
     }
 }

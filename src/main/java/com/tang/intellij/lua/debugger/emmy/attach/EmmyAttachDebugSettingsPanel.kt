@@ -18,6 +18,7 @@ package com.tang.intellij.lua.debugger.emmy.attach
 
 import com.intellij.openapi.options.SettingsEditor
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.util.SystemInfoRt
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.JBUI
@@ -145,9 +146,12 @@ class EmmyAttachDebugSettingsPanel(private val project: Project) : SettingsEdito
         val autoAttachSingle = autoAttachSingleCheckBox.isSelected
         val filterUEProcesses = filterUEProcessesCheckBox.isSelected
 
-        val selectedProcess = processSelector.showProcessSelectionDialog(
-            "", autoAttachSingle, filterUEProcesses
-        )
+        val selectedProcess = try {
+            processSelector.showProcessSelectionDialog("", autoAttachSingle, filterUEProcesses)
+        } catch (error: Exception) {
+            Messages.showErrorDialog(project, error.message ?: "获取进程列表失败", "错误")
+            null
+        }
 
         selectedProcess?.let { process ->
             pidField.text = process.pid.toString()

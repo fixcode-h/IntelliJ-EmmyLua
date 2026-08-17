@@ -6,6 +6,7 @@ import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.CancellationException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicInteger
@@ -72,5 +73,32 @@ class RequestRegistryTest {
             assertTrue(registry.complete("good", "ok"))
             assertEquals(1, callbackErrors.get())
         }
+    }
+
+    @Test
+    fun `callback cancellation is not swallowed`() {
+        RequestRegistry<String>(1_000).use { registry ->
+            registry.register("cancelled") { throw CancellationException("cancelled") }
+
+            org.junit.Assert.assertThrows(CancellationException::class.java) {
+                registry.complete("cancelled", "ignored")
+            }
+            assertEquals(0, registry.pendingCount)
+        }
+    }
+
+    @Test
+    fun `cancel all drains every request before propagating callback cancellation`() {
+        val scheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor()
+        val registry = RequestRegistry<String>(1_000, scheduler = scheduler)
+        val secondDelivered = AtomicInteger()
+        registry.register("cancelling") { throw CancellationException("callback cancelled") }
+        registry.register("remaining") { secondDelivered.incrementAndGet() }
+
+        org.junit.Assert.assertThrows(CancellationException::class.java) { registry.close() }
+
+        assertEquals(1, secondDelivered.get())
+        assertEquals(0, registry.pendingCount)
+        assertTrue(scheduler.isShutdown)
     }
 }

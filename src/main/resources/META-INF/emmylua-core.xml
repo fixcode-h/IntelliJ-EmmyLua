@@ -156,14 +156,11 @@
 
         <!--lua settings-->
         <applicationService serviceImplementation="com.tang.intellij.lua.project.LuaSettings"/>
+        <postStartupActivity implementation="com.tang.intellij.lua.project.LuaPandaVersionChecker"/>
         <projectConfigurable groupId="language"
                                  displayName="EmmyLua"
                                  id="preferences.Lua"
-                                 instance="com.tang.intellij.lua.project.LuaSettingsPanel">
-            <!--<configurable instance="com.tang.intellij.lua.project.CompletionSettingsPanel"
-                          displayName="Emmy Completion"
-                          id="preferences.Lua.Completion"/>-->
-        </projectConfigurable>
+                                 instance="com.tang.intellij.lua.project.LuaSettingsPanel"/>
 
         <!--intentions-->
         <intentionAction>
@@ -347,8 +344,6 @@
     <applicationListeners>
         <listener class="com.tang.intellij.lua.psi.LuaFileManager"
                   topic="com.intellij.openapi.fileTypes.FileTypeListener"/>
-        <listener class="com.tang.intellij.lua.project.LuaPandaVersionChecker"
-                  topic="com.intellij.openapi.project.ProjectManagerListener"/>
     </applicationListeners>
 
     <actions>

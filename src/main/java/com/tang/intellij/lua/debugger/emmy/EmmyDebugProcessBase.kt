@@ -18,7 +18,6 @@ package com.tang.intellij.lua.debugger.emmy
 
 import com.google.gson.Gson
 import com.intellij.openapi.application.ApplicationManager
-import com.intellij.openapi.util.Key
 import com.intellij.xdebugger.XDebugSession
 import com.intellij.xdebugger.XDebuggerManager
 import com.intellij.xdebugger.XSourcePosition
@@ -27,22 +26,36 @@ import com.intellij.xdebugger.evaluation.XDebuggerEditorsProvider
 import com.intellij.xdebugger.frame.XSuspendContext
 import com.tang.intellij.lua.debugger.*
 import com.tang.intellij.lua.debugger.core.DebugSessionEvent
-import com.tang.intellij.lua.debugger.core.DebugSessionEventLoop
+import com.tang.intellij.lua.debugger.core.DebugSessionController
 import com.tang.intellij.lua.debugger.core.DebugSessionState
+import com.tang.intellij.lua.debugger.core.RequestBroker
+import com.tang.intellij.lua.debugger.core.RequestRegistry
 import com.tang.intellij.lua.debugger.resources.DebuggerResourceService
 import com.tang.intellij.lua.psi.LuaFileManager
 import com.tang.intellij.lua.project.LuaSettings
 import com.tang.intellij.lua.project.LuaProjectSettings
 import java.io.File
+import java.io.IOException
+import java.util.IdentityHashMap
+import java.util.concurrent.CancellationException
+import java.util.concurrent.atomic.AtomicBoolean
 
 abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(session), ITransportHandler {
     private val editorsProvider = LuaDebuggerEditorsProvider()
-    private val evalHandlers = mutableListOf<IEvalResultHandler>()
+    private val evaluationRequests = RequestBroker(
+        RequestRegistry<EvalRsp>(
+            defaultTimeoutMillis = 10_000,
+            callbackErrorHandler = { error -> this.error("Emmy evaluation callback failed: ${error.message}") }
+        )
+    )
     private val breakpoints = mutableMapOf<Int, BreakPoint>()
+    private val breakpointIds = IdentityHashMap<XLineBreakpoint<*>, Int>()
     private var idCounter = 0;
+    private var temporaryBreakpoint: BreakPoint? = null
+    private val failureTerminationStarted = AtomicBoolean()
     protected var transporter: Transporter? = null
     private lateinit var targetBootstrap: EmmyTargetBootstrap
-    private val lifecycle = DebugSessionEventLoop(
+    private val lifecycle = DebugSessionController(
         threadName = "Emmy-Session",
         transitionListener = { transition ->
             log(
@@ -50,13 +63,12 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
                 DebugLogLevel.DEBUG
             )
         },
-        errorHandler = { error -> this.error("Emmy session event failed: ${error.message}") }
+        errorHandler = { error ->
+            this.error("Emmy session event failed: ${error.message}")
+            terminateFailedSession()
+        }
     )
     @Volatile private var sessionGeneration = 0L
-
-    companion object {
-        private val ID = Key.create<Int>("lua.breakpoint")
-    }
 
     override fun sessionInitialized() {
         super.sessionInitialized()
@@ -68,10 +80,12 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
                 lifecycle.post(sessionGeneration, DebugSessionEvent.TARGET_READY) {
                     startTransportCandidates(candidates)
                 }
+            } catch (cancellation: CancellationException) {
+                throw cancellation
             } catch (error: Throwable) {
                 lifecycle.post(sessionGeneration, DebugSessionEvent.FAILED) {
                     this.error("准备调试目标失败: ${error.message}")
-                    stopTargetAndSession()
+                    terminateFailedSession()
                 }
             }
         }
@@ -90,6 +104,8 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
                     transporter = candidate
                     candidate.start()
                     return@executeOnPooledThread
+                } catch (cancellation: CancellationException) {
+                    throw cancellation
                 } catch (error: Throwable) {
                     lastError = error
                     runCatching { candidate.close() }
@@ -97,88 +113,71 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
             }
             lifecycle.post(sessionGeneration, DebugSessionEvent.FAILED) {
                 this.error("连接调试目标失败: ${lastError?.message ?: "没有可用传输通道"}")
-                stopTargetAndSession()
+                terminateFailedSession()
             }
         }
     }
 
     private fun sendInitReq() {
-        // 在后台线程执行文件读取操作，避免EDT违规
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
-                // 清理旧会话的断点状态，确保新会话从干净状态开始
-                resetBreakpointState()
-                
-                // send init - 发送 emmyHelper 目录路径、自定义目录路径和脚本名称
                 val emmyHelperPath = getEmmyHelperDirPath()
                     ?: throw IllegalStateException("无法获取 emmyHelper 目录路径")
                 val customHelperPath = getCustomHelperDirPath()
                 val emmyHelperExtName = getEmmyHelperExtName()
-                
                 val extList = LuaFileManager.extensions
-                transporter?.send(InitMessage(
-                    emmyHelperPath = emmyHelperPath,
-                    customHelperPath = customHelperPath,
-                    emmyHelperName = "emmyHelper",
-                    emmyHelperExtName = emmyHelperExtName,
-                    ext = extList
-                ))
-                
-                // send bps - 重新同步所有断点到调试器端
-                val breakpoints = XDebuggerManager.getInstance(session.project)
-                    .breakpointManager
-                    .getBreakpoints(LuaLineBreakpointType::class.java)
-                breakpoints.forEach { breakpoint ->
-                    breakpoint.sourcePosition?.let { position ->
-                        registerBreakpoint(position, breakpoint)
+                lifecycle.execute(sessionGeneration) {
+                    resetBreakpointState()
+                    transporter?.send(InitMessage(
+                        emmyHelperPath = emmyHelperPath,
+                        customHelperPath = customHelperPath,
+                        emmyHelperName = "emmyHelper",
+                        emmyHelperExtName = emmyHelperExtName,
+                        ext = extList
+                    ))
+
+                    val ideBreakpoints = XDebuggerManager.getInstance(session.project)
+                        .breakpointManager
+                        .getBreakpoints(LuaLineBreakpointType::class.java)
+                    ideBreakpoints.forEach { breakpoint ->
+                        breakpoint.sourcePosition?.let { position ->
+                            upsertBreakpoint(position, breakpoint, sendUpdate = false)
+                        }
                     }
+                    if (breakpoints.isNotEmpty()) {
+                        transporter?.send(AddBreakPointReq(breakpoints.values.toList()))
+                    }
+                    transporter?.send(Message(MessageCMD.ReadyReq))
                 }
-                // send ready
-                transporter?.send(Message(MessageCMD.ReadyReq))
+            } catch (cancellation: CancellationException) {
+                throw cancellation
             } catch (e: Exception) {
                 lifecycle.post(sessionGeneration, DebugSessionEvent.FAILED) {
                     error("发送初始化请求失败: ${e.message}")
-                    stopTargetAndSession()
+                    terminateFailedSession()
                 }
             }
         }
     }
     
-    /**
-     * 重置断点状态，用于新调试会话开始时清理旧状态
-     * 这确保了：
-     * 1. ID计数器从0开始，避免ID无限增长
-     * 2. 断点映射被清空，避免残留的旧断点数据
-     * 3. 所有断点的userData中的ID被清除，确保重新注册时获得正确的新ID
-     */
+    /** 重建当前会话的完整断点快照。仅在 lifecycle 线程调用。 */
     private fun resetBreakpointState() {
-        // 清空本地断点映射
         breakpoints.clear()
-        // 重置ID计数器
+        breakpointIds.clear()
         idCounter = 0
-        
-        // 清除所有断点的旧ID userData
-        // 这很重要，因为断点对象是IDE持久化的，userData会跨会话保留
-        try {
-            val allBreakpoints = XDebuggerManager.getInstance(session.project)
-                .breakpointManager
-                .getBreakpoints(LuaLineBreakpointType::class.java)
-            allBreakpoints.forEach { breakpoint ->
-                breakpoint.putUserData(ID, null)
-            }
-        } catch (e: Exception) {
-            // 忽略清理userData时的异常，不影响主流程
-        }
     }
     
-    private fun getEmmyHelperDirPath(): String? = runCatching {
+    private fun getEmmyHelperDirPath(): String? = try {
         DebuggerResourceService.emmyHelperDirectory(
             session.project,
             LuaProjectSettings.getInstance(session.project).enableDevMode
         ).toString()
-    }.onFailure { error ->
+    } catch (cancellation: CancellationException) {
+        throw cancellation
+    } catch (error: Throwable) {
         this.error("无法准备 Emmy Helper 资源: ${error.message}")
-    }.getOrNull()
+        null
+    }
     
     /**
      * 获取自定义 helper 目录路径
@@ -226,19 +225,21 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
         } else {
             lifecycle.post(sessionGeneration, DebugSessionEvent.FAILED) {
                 this.error("调试传输连接失败")
-                stopTargetAndSession()
+                terminateFailedSession()
             }
         }
     }
 
     final override fun onDisconnect() {
-        if (lifecycle.state == DebugSessionState.STOPPING) {
-            finishStop()
-            return
-        }
-        lifecycle.post(sessionGeneration, DebugSessionEvent.FAILED) {
-            this.error("调试传输连接已断开")
-            stopTargetAndSession()
+        cancelEvaluationsThen(IOException("Emmy transport disconnected")) {
+            if (lifecycle.state == DebugSessionState.STOPPING) {
+                finishStop()
+            } else {
+                lifecycle.post(sessionGeneration, DebugSessionEvent.FAILED) {
+                    this.error("调试传输连接已断开")
+                    terminateFailedSession()
+                }
+            }
         }
     }
 
@@ -276,36 +277,40 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
     }
 
     override fun registerBreakpoint(sourcePosition: XSourcePosition, breakpoint: XLineBreakpoint<*>) {
-        val file = sourcePosition.file
-        val shortPath = file.canonicalPath
-        if (shortPath != null) {
-            val newId = idCounter++
-            breakpoint.putUserData(ID, newId)
+        val token = sessionGeneration
+        if (token == 0L) return
+        lifecycle.execute(token) { upsertBreakpoint(sourcePosition, breakpoint, sendUpdate = true) }
+    }
 
-            if (breakpoint.isLogMessage) {
-                breakpoints[newId] =
-                    BreakPoint(shortPath, breakpoint.line + 1, null, breakpoint.logExpressionObject?.expression)
-            } else {
-                breakpoints[newId] =
-                    BreakPoint(shortPath, breakpoint.line + 1, breakpoint.conditionExpression?.expression)
-            }
-            val bp = breakpoints.getOrDefault(newId, null)
+    override fun unregisterBreakpoint(sourcePosition: XSourcePosition, breakpoint: XLineBreakpoint<*>) {
+        val token = sessionGeneration
+        if (token == 0L) return
+        lifecycle.execute(token) {
+            val id = breakpointIds.remove(breakpoint)
+            val bp = breakpoints.remove(id)
             if (bp != null) {
-                send(AddBreakPointReq(listOf(bp)))
+                send(RemoveBreakPointReq(listOf(bp)))
             }
         }
     }
 
-    override fun unregisterBreakpoint(sourcePosition: XSourcePosition, breakpoint: XLineBreakpoint<*>) {
-        val file = sourcePosition.file
-        val shortPath = file.canonicalPath
-        if (shortPath != null) {
-            val id = breakpoint.getUserData(ID)
-            val bp = breakpoints.getOrDefault(id, null)
-            if (bp != null) {
-                breakpoints.remove(id)
-                send(RemoveBreakPointReq(listOf(bp)))
-            }
+    private fun upsertBreakpoint(
+        sourcePosition: XSourcePosition,
+        breakpoint: XLineBreakpoint<*>,
+        sendUpdate: Boolean
+    ) {
+        val shortPath = sourcePosition.file.canonicalPath ?: sourcePosition.file.path
+        val id = breakpointIds[breakpoint] ?: idCounter++.also { breakpointIds[breakpoint] = it }
+        val protocolBreakpoint = if (breakpoint.isLogMessage) {
+            BreakPoint(shortPath, breakpoint.line + 1, logMessage = breakpoint.logExpressionObject?.expression)
+        } else {
+            BreakPoint(shortPath, breakpoint.line + 1, condition = breakpoint.conditionExpression?.expression)
+        }
+        val previous = breakpoints.put(id, protocolBreakpoint)
+        if (sendUpdate && previous != protocolBreakpoint &&
+            lifecycle.state in setOf(DebugSessionState.INITIALIZING, DebugSessionState.RUNNING)) {
+            if (previous != null) send(RemoveBreakPointReq(listOf(previous)))
+            send(AddBreakPointReq(listOf(protocolBreakpoint)))
         }
     }
 
@@ -315,12 +320,27 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
 
     override fun runToPosition(position: XSourcePosition, context: XSuspendContext?) {
         clearInlineSnapshot()
-        send(AddBreakPointReq(listOf(BreakPoint(position.file.path, position.line + 1, null, null, null))))
-        send(DebugActionMessage(DebugAction.Continue))
+        lifecycle.execute(sessionGeneration) {
+            removeTemporaryBreakpoint()
+            val breakpoint = BreakPoint(
+                position.file.canonicalPath ?: position.file.path,
+                position.line + 1,
+                runToHere = true
+            )
+            temporaryBreakpoint = breakpoint
+            send(AddBreakPointReq(listOf(breakpoint)))
+            send(DebugActionMessage(DebugAction.Continue))
+        }
     }
 
     private fun onBreak(data: BreakNotify) {
-        evalHandlers.clear()
+        removeTemporaryBreakpoint()
+        cancelEvaluationsThen(CancellationException("Emmy stack frame was replaced")) {
+            handleBreak(data)
+        }
+    }
+
+    private fun handleBreak(data: BreakNotify) {
         val frames = data.stacks.map { EmmyDebugStackFrame(it, this) }
         val top = frames.firstOrNull { it.sourcePosition != null }
             ?: frames.firstOrNull { it.data.line > 0 }
@@ -361,62 +381,95 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
     }
 
     private fun onEvalRsp(rsp: EvalRsp) {
-        evalHandlers.forEach { it.handleMessage(rsp) }
+        if (!evaluationRequests.complete(rsp.seq.toString(), rsp)) {
+            log("Ignored late Emmy evaluation response: ${rsp.seq}", DebugLogLevel.DEBUG)
+        }
     }
 
     override fun run() {
         clearInlineSnapshot()
-        send(DebugActionMessage(DebugAction.Continue))
+        cancelEvaluationsThen(CancellationException("Emmy execution resumed")) {
+            send(DebugActionMessage(DebugAction.Continue))
+        }
+    }
+
+    private fun removeTemporaryBreakpoint() {
+        val breakpoint = temporaryBreakpoint ?: return
+        temporaryBreakpoint = null
+        send(RemoveBreakPointReq(listOf(breakpoint)))
     }
 
     final override fun stop() {
         clearInlineSnapshot()
-        lifecycle.post(sessionGeneration, DebugSessionEvent.STOP_REQUESTED) {
-            send(DebugActionMessage(DebugAction.Stop))
-            send(StopSign())
-            runCatching { transporter?.close() }
-            transporter = null
-            if (::targetBootstrap.isInitialized) {
-                runCatching { targetBootstrap.stop() }
+        cancelEvaluationsThen(CancellationException("Emmy debug session stopped")) {
+            lifecycle.post(sessionGeneration, DebugSessionEvent.STOP_REQUESTED) {
+                removeTemporaryBreakpoint()
+                send(DebugActionMessage(DebugAction.Stop))
+                send(StopSign())
+                runCatching { transporter?.close() }
+                transporter = null
+                if (::targetBootstrap.isInitialized) {
+                    runCatching { targetBootstrap.stop() }
+                }
+                finishStop()
             }
-            finishStop()
         }
     }
 
     private fun finishStop() {
         lifecycle.post(sessionGeneration, DebugSessionEvent.TERMINATED) {
-            evalHandlers.clear()
-            breakpoints.clear()
-            lifecycle.close()
+            try {
+                evaluationRequests.close()
+            } finally {
+                breakpoints.clear()
+                breakpointIds.clear()
+                lifecycle.close()
+            }
         }
     }
 
-    private fun stopTargetAndSession() {
+    private fun terminateFailedSession() {
+        if (!failureTerminationStarted.compareAndSet(false, true)) return
         clearInlineSnapshot()
-        runCatching { transporter?.close() }
-        transporter = null
-        if (::targetBootstrap.isInitialized) {
-            runCatching { targetBootstrap.stop() }
+        temporaryBreakpoint = null
+        cancelEvaluationsThen(IOException("Emmy debug target stopped")) {
+            runCatching { transporter?.close() }
+            transporter = null
+            if (::targetBootstrap.isInitialized) {
+                runCatching { targetBootstrap.stop() }
+            }
+            ApplicationManager.getApplication().invokeLater {
+                if (!session.isStopped) session.stop()
+            }
+            try {
+                evaluationRequests.close()
+            } finally {
+                breakpoints.clear()
+                breakpointIds.clear()
+                lifecycle.close()
+            }
         }
-        ApplicationManager.getApplication().invokeLater {
-            if (!session.isStopped) session.stop()
-        }
-        lifecycle.close()
     }
 
     override fun startStepOver(context: XSuspendContext?) {
         clearInlineSnapshot()
-        send(DebugActionMessage(DebugAction.StepOver))
+        cancelEvaluationsThen(CancellationException("Emmy execution resumed")) {
+            send(DebugActionMessage(DebugAction.StepOver))
+        }
     }
 
     override fun startStepInto(context: XSuspendContext?) {
         clearInlineSnapshot()
-        send(DebugActionMessage(DebugAction.StepIn))
+        cancelEvaluationsThen(CancellationException("Emmy execution resumed")) {
+            send(DebugActionMessage(DebugAction.StepIn))
+        }
     }
 
     override fun startStepOut(context: XSuspendContext?) {
         clearInlineSnapshot()
-        send(DebugActionMessage(DebugAction.StepOut))
+        cancelEvaluationsThen(CancellationException("Emmy execution resumed")) {
+            send(DebugActionMessage(DebugAction.StepOut))
+        }
     }
 
     private fun clearInlineSnapshot() {
@@ -427,12 +480,33 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
         return editorsProvider
     }
 
-    fun addEvalResultHandler(handler: IEvalResultHandler) {
-        evalHandlers.add(handler)
+    fun requestEvaluation(request: EvalReq, callback: (Result<EvalRsp>) -> Unit) {
+        evaluationRequests.request(
+            requestId = request.seq.toString(),
+            send = {
+                val activeTransport = transporter ?: throw IOException("Emmy transport is not connected")
+                activeTransport.send(request)
+            },
+            callback = callback
+        )
     }
 
-    fun removeMessageHandler(handler: IEvalResultHandler) {
-        evalHandlers.remove(handler)
+    private fun cancelEvaluations(cause: Throwable): CancellationException? = try {
+        evaluationRequests.cancelAll(cause)
+        null
+    } catch (cancellation: CancellationException) {
+        cancellation
+    }
+
+    private inline fun cancelEvaluationsThen(cause: Throwable, action: () -> Unit) {
+        val cancellation = cancelEvaluations(cause)
+        try {
+            action()
+        } catch (error: Throwable) {
+            if (cancellation != null) error.addSuppressed(cancellation)
+            throw error
+        }
+        if (cancellation != null) throw cancellation
     }
 
     fun send(msg: IMessage) {

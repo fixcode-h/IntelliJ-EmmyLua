@@ -27,7 +27,9 @@ class LuaProjectSettings : PersistentStateComponent<LuaProjectSettings> {
     }
 
     @Synchronized
-    internal fun migrateFromApplicationSettings(legacy: LuaSettings = LuaSettings.instance) {
+    internal fun migrateFromApplicationSettings(
+        legacy: LegacyLuaProjectSettings = LuaSettings.instance.legacyProjectSettings()
+    ) {
         if (migratedFromApplicationSettings) return
         additionalSourcesRoot = legacy.additionalSourcesRoot.copyOf()
         customHelperPath = legacy.customHelperPath

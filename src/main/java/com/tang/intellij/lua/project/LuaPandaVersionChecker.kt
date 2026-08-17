@@ -24,12 +24,11 @@ import com.intellij.notification.Notifications
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.project.ProjectManagerListener
+import com.intellij.openapi.startup.StartupActivity
 import com.intellij.ide.plugins.PluginManagerCore
 import com.intellij.openapi.extensions.PluginId
-import com.intellij.openapi.ui.Messages
+import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VirtualFile
-import com.intellij.openapi.vfs.VirtualFileManager
 import com.tang.intellij.lua.debugger.luapanda.LuaPandaDebugConfiguration
 import java.io.File
 import java.io.IOException
@@ -39,7 +38,7 @@ import java.util.regex.Pattern
  * LuaPanda 版本检查器
  * 在项目打开时检查 LuaPanda.lua 文件是否存在以及版本是否需要更新
  */
-class LuaPandaVersionChecker : ProjectManagerListener {
+class LuaPandaVersionChecker : StartupActivity.DumbAware {
     
     companion object {
         private const val LUAPANDA_FILE_NAME = "LuaPanda.lua"
@@ -48,8 +47,7 @@ class LuaPandaVersionChecker : ProjectManagerListener {
         private val VERSION_PATTERN = Pattern.compile("debuggerVer\\s*=\\s*[\"']([^\"']+)[\"']")
     }
     
-    @Deprecated("This method overrides a deprecated member")
-    override fun projectOpened(project: Project) {
+    override fun runActivity(project: Project) {
         // 在后台线程执行文件系统操作，避免EDT违规
         ApplicationManager.getApplication().executeOnPooledThread {
             checkLuaPandaVersion(project)
@@ -62,8 +60,7 @@ class LuaPandaVersionChecker : ProjectManagerListener {
             return // 如果没有配置 LuaPanda 调试，则不进行检查
         }
         
-        @Suppress("DEPRECATION")
-        val projectRoot = project.baseDir ?: return
+        val projectRoot = findProjectRoot(project) ?: return
         val luaPandaFile = projectRoot.findChild(LUAPANDA_FILE_NAME)
         
         if (luaPandaFile == null) {
@@ -195,8 +192,7 @@ class LuaPandaVersionChecker : ProjectManagerListener {
     private fun copyLuaPandaToProject(project: Project) {
         ApplicationManager.getApplication().runWriteAction {
             try {
-                @Suppress("DEPRECATION")
-                val projectRoot = project.baseDir ?: return@runWriteAction
+                val projectRoot = findProjectRoot(project) ?: return@runWriteAction
                 
                 // 从插件项目根目录获取 LuaPanda.lua 文件
                 val content = getLuaPandaResourceContent()
@@ -210,9 +206,6 @@ class LuaPandaVersionChecker : ProjectManagerListener {
                 }
                 
                 targetFile.setBinaryContent(content)
-                
-                // 刷新文件系统
-                VirtualFileManager.getInstance().syncRefresh()
                 
                 val successNotification = Notification(
                     NOTIFICATION_GROUP_ID,
@@ -291,4 +284,7 @@ class LuaPandaVersionChecker : ProjectManagerListener {
             throw RuntimeException("读取 LuaPanda.lua 文件时发生错误: ${e.message}")
         }
     }
+
+    private fun findProjectRoot(project: Project): VirtualFile? =
+        project.basePath?.let { LocalFileSystem.getInstance().findFileByPath(it) }
 }
