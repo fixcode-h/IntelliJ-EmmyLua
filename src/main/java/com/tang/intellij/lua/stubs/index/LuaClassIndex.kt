@@ -16,6 +16,7 @@
 
 package com.tang.intellij.lua.stubs.index
 
+import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.openapi.project.Project
 import com.intellij.psi.search.GlobalSearchScope
 import com.intellij.psi.search.ProjectAndLibrariesScope
@@ -67,12 +68,16 @@ class LuaClassIndex : StringStubIndexExtension<LuaDocTagClass>() {
                     try {
                         val containingFile = element.containingFile
                         containingFile != null && containingFile.isValid
+                    } catch (e: ProcessCanceledException) {
+                        throw e
                     } catch (e: Exception) {
                         false
                     }
                 }
                 
                 return ContainerUtil.process(validElements, processor)
+            } catch (e: ProcessCanceledException) {
+                throw e
             } catch (e: Exception) {
                 // 如果访问Stub索引失败，返回true继续处理
                 return true

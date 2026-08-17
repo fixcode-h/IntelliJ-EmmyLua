@@ -31,6 +31,8 @@ import com.intellij.openapi.util.JDOMExternalizerUtil
 import com.tang.intellij.lua.debugger.LuaCommandLineState
 import com.tang.intellij.lua.debugger.LuaConfigurationFactory
 import com.tang.intellij.lua.debugger.LuaRunConfiguration
+import com.tang.intellij.lua.debugger.DebugLogLevel
+import com.tang.intellij.lua.debugger.DebuggerConfigurationSchema
 import com.tang.intellij.lua.lang.LuaIcons
 import org.jdom.Element
 import javax.swing.Icon
@@ -57,23 +59,39 @@ class EmmyDebugConfigurationType : ConfigurationType {
     }
 }
 
-enum class EmmyDebugTransportType(val desc: String) {
-    TCP_CLIENT("Tcp ( IDE connect debugger )"),
-    TCP_SERVER("Tcp ( Debugger connect IDE )"),
-    PIPE_CLIENT("Pipeline ( IDE connect debugger )"),
-    PIPE_SERVER("Pipeline ( Debugger connect IDE )");
+enum class EmmyDebugTransportType(val configId: String, val desc: String) {
+    TCP_CLIENT("tcp-client", "Tcp ( IDE connect debugger )"),
+    TCP_SERVER("tcp-server", "Tcp ( Debugger connect IDE )"),
+    PIPE_CLIENT("pipe-client", "Pipeline ( IDE connect debugger )"),
+    PIPE_SERVER("pipe-server", "Pipeline ( Debugger connect IDE )");
 
     override fun toString(): String {
         return desc
     }
+
+    companion object {
+        fun fromStoredValue(value: String?): EmmyDebugTransportType? {
+            if (value == null) return null
+            return entries.firstOrNull { it.configId == value || it.name == value }
+                ?: value.toIntOrNull()?.let(entries::getOrNull)
+        }
+    }
 }
 
-enum class EmmyWinArch(val desc: String) {
-    X86("x86"),
-    X64("x64");
+enum class EmmyWinArch(val configId: String, val desc: String) {
+    X86("x86", "x86"),
+    X64("x64", "x64");
 
     override fun toString(): String {
-        return desc;
+        return desc
+    }
+
+    companion object {
+        fun fromStoredValue(value: String?): EmmyWinArch? {
+            if (value == null) return null
+            return entries.firstOrNull { it.configId == value || it.name == value }
+                ?: value.toIntOrNull()?.let(entries::getOrNull)
+        }
     }
 }
 
@@ -90,6 +108,7 @@ class EmmyDebugConfiguration(project: Project, factory: EmmyDebuggerConfiguratio
     var port = 9966
     var winArch = EmmyWinArch.X64
     var pipeName = "emmy"
+    var logLevel = DebugLogLevel.RUNTIME
 
     override fun getConfigurationEditor(): SettingsEditor<out RunConfiguration> {
         val group = SettingsEditorGroup<EmmyDebugConfiguration>()
@@ -107,31 +126,40 @@ class EmmyDebugConfiguration(project: Project, factory: EmmyDebuggerConfiguratio
 
     override fun writeExternal(element: Element) {
         super.writeExternal(element)
-        JDOMExternalizerUtil.writeField(element, "TYPE", type.ordinal.toString())
+        DebuggerConfigurationSchema.FIELD.writeCurrentVersion(element, CURRENT_SCHEMA_VERSION)
+        JDOMExternalizerUtil.writeField(element, "TYPE", type.configId)
         JDOMExternalizerUtil.writeField(element, "HOST", host)
         JDOMExternalizerUtil.writeField(element, "PORT", port.toString())
         JDOMExternalizerUtil.writeField(element, "PIPE", pipeName)
-        JDOMExternalizerUtil.writeField(element, "WIN_ARCH", winArch.ordinal.toString())
+        JDOMExternalizerUtil.writeField(element, "WIN_ARCH", winArch.configId)
+        JDOMExternalizerUtil.writeField(element, "LOG_LEVEL", logLevel.value.toString())
     }
 
     override fun readExternal(element: Element) {
         super.readExternal(element)
-        JDOMExternalizerUtil.readField(element, "HOST")?.let {
+        val state = DebuggerConfigurationSchema.FIELD.migrate(element, CURRENT_SCHEMA_VERSION) { version, migrated ->
+            if (version == 0) {
+                EmmyDebugTransportType.fromStoredValue(JDOMExternalizerUtil.readField(migrated, "TYPE"))
+                    ?.let { JDOMExternalizerUtil.writeField(migrated, "TYPE", it.configId) }
+                EmmyWinArch.fromStoredValue(JDOMExternalizerUtil.readField(migrated, "WIN_ARCH"))
+                    ?.let { JDOMExternalizerUtil.writeField(migrated, "WIN_ARCH", it.configId) }
+            }
+        }
+        JDOMExternalizerUtil.readField(state, "HOST")?.let {
             host = it
         }
-        JDOMExternalizerUtil.readField(element, "PORT")?.let {
-            port = it.toInt()
+        JDOMExternalizerUtil.readField(state, "PORT")?.let {
+            port = it.toIntOrNull() ?: port
         }
-        JDOMExternalizerUtil.readField(element, "PIPE")?.let {
+        JDOMExternalizerUtil.readField(state, "PIPE")?.let {
             pipeName = it
         }
-        JDOMExternalizerUtil.readField(element, "TYPE")?.let { value ->
-            val i = value.toInt()
-            type = EmmyDebugTransportType.values().find { it.ordinal == i } ?: EmmyDebugTransportType.TCP_SERVER
-        }
-        JDOMExternalizerUtil.readField(element, "WIN_ARCH")?.let { value ->
-            val i = value.toInt()
-            winArch = EmmyWinArch.values().find { it.ordinal == i } ?: EmmyWinArch.X64
-        }
+        EmmyDebugTransportType.fromStoredValue(JDOMExternalizerUtil.readField(state, "TYPE"))?.let { type = it }
+        EmmyWinArch.fromStoredValue(JDOMExternalizerUtil.readField(state, "WIN_ARCH"))?.let { winArch = it }
+        logLevel = DebugLogLevel.fromValue(JDOMExternalizerUtil.readField(state, "LOG_LEVEL")?.toIntOrNull())
+    }
+
+    companion object {
+        const val CURRENT_SCHEMA_VERSION = 4
     }
 }

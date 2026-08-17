@@ -18,22 +18,19 @@ package com.tang.intellij.lua.debugger.emmy
 
 import com.intellij.ui.ColoredTextContainer
 import com.intellij.ui.SimpleTextAttributes
-import com.intellij.util.SlowOperations
 import com.intellij.xdebugger.XSourcePosition
 import com.intellij.xdebugger.frame.XCompositeNode
 import com.intellij.xdebugger.frame.XStackFrame
 import com.intellij.xdebugger.frame.XValueChildrenList
-import com.intellij.xdebugger.impl.XSourcePositionImpl
+import com.tang.intellij.lua.debugger.SourceMappingService
 import com.tang.intellij.lua.debugger.emmy.value.LuaXValue
-import com.tang.intellij.lua.psi.LuaFileUtil
 
 class EmmyDebugStackFrame(val data: Stack, val process: EmmyDebugProcessBase) : XStackFrame() {
     private val values = XValueChildrenList()
     private var evaluator: EmmyEvaluator? = null
     
-    // 缓存 sourcePosition，避免重复计算
-    private var _sourcePosition: XSourcePosition? = null
-    private var _sourcePositionComputed = false
+    private val sourceMapping = SourceMappingService.getInstance(process.session.project)
+    private val sourcePosition = sourceMapping.createPosition(data.file, data.line)
 
     init {
         data.localVariables.forEach {
@@ -56,14 +53,7 @@ class EmmyDebugStackFrame(val data: Stack, val process: EmmyDebugProcessBase) : 
     }
 
     private fun getRelativePath(filePath: String): String {
-        val projectBasePath = process.session.project.basePath
-        return if (projectBasePath != null && filePath.startsWith(projectBasePath)) {
-            filePath.substring(projectBasePath.length + 1).replace('\\', '/')
-        } else {
-            // 如果不在项目目录下，尝试获取文件名
-            val file = java.io.File(filePath)
-            file.name
-        }
+        return sourceMapping.displayPath(filePath)
     }
 
     private fun addValue(node: LuaXValue) {
@@ -74,16 +64,5 @@ class EmmyDebugStackFrame(val data: Stack, val process: EmmyDebugProcessBase) : 
         node.addChildren(values, true)
     }
 
-    override fun getSourcePosition(): XSourcePosition? {
-        if (!_sourcePositionComputed) {
-            // 使用 knownIssue 标记这是一个已知的 EDT 慢操作问题
-            // getSourcePosition 由 XDebuggerFramesList 在 EDT 上调用，无法避免
-            SlowOperations.knownIssue("EMMYLUA-EDT-StackFrame").use {
-                val file = LuaFileUtil.findFile(process.session.project, data.file)
-                _sourcePosition = if (file == null) null else XSourcePositionImpl.create(file, data.line - 1)
-            }
-            _sourcePositionComputed = true
-        }
-        return _sourcePosition
-    }
+    override fun getSourcePosition(): XSourcePosition? = sourcePosition
 }

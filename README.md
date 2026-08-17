@@ -26,7 +26,7 @@ EmmyLua 是一个功能强大的 Lua 语言支持插件，专为 IntelliJ IDEA �
   - 实时变量监视和表达式求值
   - 调用栈跟踪和线程管理
 - **Emmy 调试器支持** - 内置 Emmy 调试器，支持多平台调试
-- **附加调试** - 支持附加到正在运行的 Lua 进程进行调试
+- **Emmy Attach 调试** - 支持附加到正在运行的 Lua 进程进行调试
 - **调试控制台** - 交互式调试控制台，支持表达式求值
 
 ### 📚 文档支持
@@ -106,13 +106,13 @@ EmmyLua 是一个功能强大的 Lua 语言支持插件，专为 IntelliJ IDEA �
 
 4. **创建调试配置**
    - 进入 `Run` → `Edit Configurations`
-   - 点击 `+` → `LuaPanda Debug`
+   - 点击 `+` → `LuaPandaDebugger`
    - 配置调试参数（主机、端口等）
 
 #### Emmy 调试器配置
 1. **创建 Emmy 调试配置**
    - 进入 `Run` → `Edit Configurations`
-   - 点击 `+` → `Emmy Debugger`
+   - 点击 `+` → `Emmy Debugger(NEW)` 或 `Emmy Attach Debugger`
    - 设置目标 Lua 应用程序路径
 
 2. **启动调试会话**

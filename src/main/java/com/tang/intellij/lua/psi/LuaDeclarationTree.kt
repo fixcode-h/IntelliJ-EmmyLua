@@ -16,6 +16,7 @@
 
 package com.tang.intellij.lua.psi
 
+import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.openapi.util.Key
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
@@ -38,6 +39,8 @@ interface LuaDeclarationTree {
                     manager = LuaDeclarationTreeStub(file)
                     try {
                         manager.buildTree(file)
+                    } catch (e: ProcessCanceledException) {
+                        throw e
                     } catch (e: Exception) {
                         manager = null
                     }

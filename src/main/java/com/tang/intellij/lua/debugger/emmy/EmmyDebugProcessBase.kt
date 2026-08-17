@@ -17,9 +17,7 @@
 package com.tang.intellij.lua.debugger.emmy
 
 import com.google.gson.Gson
-import com.intellij.execution.ui.ConsoleViewContentType
 import com.intellij.openapi.application.ApplicationManager
-import com.intellij.openapi.util.Key
 import com.intellij.xdebugger.XDebugSession
 import com.intellij.xdebugger.XDebuggerManager
 import com.intellij.xdebugger.XSourcePosition
@@ -27,45 +25,109 @@ import com.intellij.xdebugger.breakpoints.XLineBreakpoint
 import com.intellij.xdebugger.evaluation.XDebuggerEditorsProvider
 import com.intellij.xdebugger.frame.XSuspendContext
 import com.tang.intellij.lua.debugger.*
+import com.tang.intellij.lua.debugger.core.DebugSessionEvent
+import com.tang.intellij.lua.debugger.core.DebugSessionController
+import com.tang.intellij.lua.debugger.core.DebugSessionState
+import com.tang.intellij.lua.debugger.core.RequestBroker
+import com.tang.intellij.lua.debugger.core.RequestRegistry
+import com.tang.intellij.lua.debugger.resources.DebuggerResourceService
 import com.tang.intellij.lua.psi.LuaFileManager
-import com.tang.intellij.lua.psi.LuaFileUtil
 import com.tang.intellij.lua.project.LuaSettings
+import com.tang.intellij.lua.project.LuaProjectSettings
 import java.io.File
+import java.io.IOException
+import java.util.IdentityHashMap
+import java.util.concurrent.CancellationException
+import java.util.concurrent.atomic.AtomicBoolean
 
 abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(session), ITransportHandler {
     private val editorsProvider = LuaDebuggerEditorsProvider()
-    private val evalHandlers = mutableListOf<IEvalResultHandler>()
+    private val evaluationRequests = RequestBroker(
+        RequestRegistry<EvalRsp>(
+            defaultTimeoutMillis = 10_000,
+            callbackErrorHandler = { error -> this.error("Emmy evaluation callback failed: ${error.message}") }
+        )
+    )
     private val breakpoints = mutableMapOf<Int, BreakPoint>()
+    private val breakpointIds = IdentityHashMap<XLineBreakpoint<*>, Int>()
     private var idCounter = 0;
+    private var temporaryBreakpoint: BreakPoint? = null
+    private val failureTerminationStarted = AtomicBoolean()
     protected var transporter: Transporter? = null
-
-    companion object {
-        private val ID = Key.create<Int>("lua.breakpoint")
-    }
+    private lateinit var targetBootstrap: EmmyTargetBootstrap
+    private val lifecycle = DebugSessionController(
+        threadName = "Emmy-Session",
+        transitionListener = { transition ->
+            log(
+                "Emmy session: ${transition.previous} --${transition.event}--> ${transition.current}",
+                DebugLogLevel.DEBUG
+            )
+        },
+        errorHandler = { error ->
+            this.error("Emmy session event failed: ${error.message}")
+            terminateFailedSession()
+        }
+    )
+    @Volatile private var sessionGeneration = 0L
 
     override fun sessionInitialized() {
         super.sessionInitialized()
+        sessionGeneration = lifecycle.start()
         ApplicationManager.getApplication().executeOnPooledThread {
-            setupTransporter()
+            try {
+                targetBootstrap = createTargetBootstrap()
+                val candidates = targetBootstrap.prepareTransports()
+                lifecycle.post(sessionGeneration, DebugSessionEvent.TARGET_READY) {
+                    startTransportCandidates(candidates)
+                }
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (error: Throwable) {
+                lifecycle.post(sessionGeneration, DebugSessionEvent.FAILED) {
+                    this.error("准备调试目标失败: ${error.message}")
+                    terminateFailedSession()
+                }
+            }
         }
     }
 
-    protected abstract fun setupTransporter()
+    protected abstract fun createTargetBootstrap(): EmmyTargetBootstrap
+
+    private fun startTransportCandidates(candidates: List<Transporter>) {
+        ApplicationManager.getApplication().executeOnPooledThread {
+            var lastError: Throwable? = null
+            for (candidate in candidates) {
+                try {
+                    candidate.handler = this
+                    candidate.logger = this
+                    candidate.setEventDispatcher { action -> lifecycle.execute(sessionGeneration, action) }
+                    transporter = candidate
+                    candidate.start()
+                    return@executeOnPooledThread
+                } catch (cancellation: CancellationException) {
+                    throw cancellation
+                } catch (error: Throwable) {
+                    lastError = error
+                    runCatching { candidate.close() }
+                }
+            }
+            lifecycle.post(sessionGeneration, DebugSessionEvent.FAILED) {
+                this.error("连接调试目标失败: ${lastError?.message ?: "没有可用传输通道"}")
+                terminateFailedSession()
+            }
+        }
+    }
 
     private fun sendInitReq() {
-        // 在后台线程执行文件读取操作，避免EDT违规
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
-                // 清理旧会话的断点状态，确保新会话从干净状态开始
-                resetBreakpointState()
-                
-                // send init - 发送 emmyHelper 目录路径、自定义目录路径和脚本名称
                 val emmyHelperPath = getEmmyHelperDirPath()
+                    ?: throw IllegalStateException("无法获取 emmyHelper 目录路径")
                 val customHelperPath = getCustomHelperDirPath()
                 val emmyHelperExtName = getEmmyHelperExtName()
-                
-                if (emmyHelperPath != null) {
-                    val extList = LuaFileManager.extensions
+                val extList = LuaFileManager.extensions
+                lifecycle.execute(sessionGeneration) {
+                    resetBreakpointState()
                     transporter?.send(InitMessage(
                         emmyHelperPath = emmyHelperPath,
                         customHelperPath = customHelperPath,
@@ -73,181 +135,48 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
                         emmyHelperExtName = emmyHelperExtName,
                         ext = extList
                     ))
-                } else {
-                    error("无法获取 emmyHelper 目录路径")
-                }
-                
-                // send bps - 重新同步所有断点到调试器端
-                val breakpoints = XDebuggerManager.getInstance(session.project)
-                    .breakpointManager
-                    .getBreakpoints(LuaLineBreakpointType::class.java)
-                breakpoints.forEach { breakpoint ->
-                    breakpoint.sourcePosition?.let { position ->
-                        registerBreakpoint(position, breakpoint)
-                    }
-                }
-                // send ready
-                transporter?.send(Message(MessageCMD.ReadyReq))
-            } catch (e: Exception) {
-                error("发送初始化请求失败: ${e.message}")
-            }
-        }
-    }
-    
-    /**
-     * 重置断点状态，用于新调试会话开始时清理旧状态
-     * 这确保了：
-     * 1. ID计数器从0开始，避免ID无限增长
-     * 2. 断点映射被清空，避免残留的旧断点数据
-     * 3. 所有断点的userData中的ID被清除，确保重新注册时获得正确的新ID
-     */
-    private fun resetBreakpointState() {
-        // 清空本地断点映射
-        breakpoints.clear()
-        // 重置ID计数器
-        idCounter = 0
-        
-        // 清除所有断点的旧ID userData
-        // 这很重要，因为断点对象是IDE持久化的，userData会跨会话保留
-        try {
-            val allBreakpoints = XDebuggerManager.getInstance(session.project)
-                .breakpointManager
-                .getBreakpoints(LuaLineBreakpointType::class.java)
-            allBreakpoints.forEach { breakpoint ->
-                breakpoint.putUserData(ID, null)
-            }
-        } catch (e: Exception) {
-            // 忽略清理userData时的异常，不影响主流程
-        }
-    }
-    
-    /**
-     * 获取 emmyHelper 目录路径
-     * 
-     * 支持开发模式和生产模式：
-     * - 开发模式：直接返回 src/main/resources/debugger/emmy/code 目录路径
-     * - 生产模式：将资源解压到临时目录并返回路径
-     */
-    private fun getEmmyHelperDirPath(): String? {
-        // 1. 尝试开发模式路径
-        val devPath = getDevResourcePath("debugger/emmy/code")
-        if (devPath != null) {
-            return devPath
-        }
-        
-        // 2. 生产模式：解压资源到临时目录
-        return extractEmmyHelperToTemp()
-    }
-    
-    /**
-     * 获取开发模式下的资源目录路径
-     */
-    private fun getDevResourcePath(relativePath: String): String? {
-        val basePath = session.project.basePath ?: return null
-        val devResourceDir = File(basePath, "src/main/resources/$relativePath")
-        if (devResourceDir.exists() && devResourceDir.isDirectory) {
-            return devResourceDir.absolutePath
-        }
-        return null
-    }
-    
-    /**
-     * 将 emmyHelper 资源解压到临时目录
-     * 递归复制 debugger/emmy/code 目录下的所有 Lua 文件
-     */
-    private fun extractEmmyHelperToTemp(): String? {
-        try {
-            val tempDir = File(System.getProperty("java.io.tmpdir"), "emmy_helper")
-            if (!tempDir.exists()) {
-                tempDir.mkdirs()
-            }
-            
-            // 递归复制 code 目录下的所有文件
-            val codeResourceBase = "debugger/emmy/code"
-            extractCodeDirectory(codeResourceBase, tempDir)
-            
-            return tempDir.absolutePath
-        } catch (e: Exception) {
-            return null
-        }
-    }
-    
-    /**
-     * 递归提取 code 目录下的所有 Lua 文件
-     */
-    private fun extractCodeDirectory(resourceBase: String, targetDir: File) {
-        val settings = LuaSettings.instance
-        val classLoader = LuaFileUtil::class.java.classLoader
-        
-        // 开发模式：从文件系统递归复制
-        if (settings.enableDevMode) {
-            val projectBasePath = session.project.basePath
-            if (projectBasePath != null) {
-                val resourceDir = File(projectBasePath, "src/main/resources/$resourceBase")
-                if (resourceDir.exists() && resourceDir.isDirectory) {
-                    copyDirectoryRecursively(resourceDir, targetDir)
-                    return
-                }
-            }
-        }
-        
-        // 生产模式：从 JAR 包中提取
-        val resourceUrl = classLoader.getResource(resourceBase)
-        if (resourceUrl != null) {
-            when (resourceUrl.protocol) {
-                "file" -> {
-                    // 直接从文件系统复制
-                    val sourceDir = File(resourceUrl.toURI())
-                    copyDirectoryRecursively(sourceDir, targetDir)
-                }
-                "jar" -> {
-                    // 从 JAR 包中提取
-                    extractFromJar(resourceUrl, resourceBase, targetDir)
-                }
-            }
-        }
-    }
-    
-    /**
-     * 递归复制目录
-     */
-    private fun copyDirectoryRecursively(sourceDir: File, targetDir: File) {
-        sourceDir.walkTopDown().forEach { file ->
-            if (file.isFile && file.extension == "lua") {
-                val relativePath = file.relativeTo(sourceDir).path
-                val targetFile = File(targetDir, relativePath)
-                targetFile.parentFile?.mkdirs()
-                file.copyTo(targetFile, overwrite = true)
-            }
-        }
-    }
-    
-    /**
-     * 从 JAR 包中提取资源目录
-     */
-    private fun extractFromJar(resourceUrl: java.net.URL, resourceBase: String, targetDir: File) {
-        val jarPath = resourceUrl.path.substringAfter("file:").substringBefore("!")
-        val jarFile = java.util.jar.JarFile(java.net.URLDecoder.decode(jarPath, "UTF-8"))
-        
-        jarFile.use { jar ->
-            jar.entries().asSequence()
-                .filter { entry ->
-                    !entry.isDirectory && 
-                    entry.name.startsWith("$resourceBase/") && 
-                    entry.name.endsWith(".lua")
-                }
-                .forEach { entry ->
-                    val relativePath = entry.name.removePrefix("$resourceBase/")
-                    val targetFile = File(targetDir, relativePath)
-                    targetFile.parentFile?.mkdirs()
-                    
-                    jar.getInputStream(entry).use { input ->
-                        targetFile.outputStream().use { output ->
-                            input.copyTo(output)
+
+                    val ideBreakpoints = XDebuggerManager.getInstance(session.project)
+                        .breakpointManager
+                        .getBreakpoints(LuaLineBreakpointType::class.java)
+                    ideBreakpoints.forEach { breakpoint ->
+                        breakpoint.sourcePosition?.let { position ->
+                            upsertBreakpoint(position, breakpoint, sendUpdate = false)
                         }
                     }
+                    if (breakpoints.isNotEmpty()) {
+                        transporter?.send(AddBreakPointReq(breakpoints.values.toList()))
+                    }
+                    transporter?.send(Message(MessageCMD.ReadyReq))
                 }
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (e: Exception) {
+                lifecycle.post(sessionGeneration, DebugSessionEvent.FAILED) {
+                    error("发送初始化请求失败: ${e.message}")
+                    terminateFailedSession()
+                }
+            }
         }
+    }
+    
+    /** 重建当前会话的完整断点快照。仅在 lifecycle 线程调用。 */
+    private fun resetBreakpointState() {
+        breakpoints.clear()
+        breakpointIds.clear()
+        idCounter = 0
+    }
+    
+    private fun getEmmyHelperDirPath(): String? = try {
+        DebuggerResourceService.emmyHelperDirectory(
+            session.project,
+            LuaProjectSettings.getInstance(session.project).enableDevMode
+        ).toString()
+    } catch (cancellation: CancellationException) {
+        throw cancellation
+    } catch (error: Throwable) {
+        this.error("无法准备 Emmy Helper 资源: ${error.message}")
+        null
     }
     
     /**
@@ -256,7 +185,7 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
      * 如果用户配置了自定义脚本，返回其所在目录路径
      */
     private fun getCustomHelperDirPath(): String {
-        val settings = LuaSettings.instance
+        val settings = LuaProjectSettings.getInstance(session.project)
         val customPath = settings.customHelperPath
         
         if (!customPath.isNullOrBlank()) {
@@ -276,7 +205,7 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
      * 否则返回默认的 "emmyHelper_ue"
      */
     private fun getEmmyHelperExtName(): String {
-        val settings = LuaSettings.instance
+        val settings = LuaProjectSettings.getInstance(session.project)
         val customExtName = settings.customHelperExtName
         
         return if (!customExtName.isNullOrBlank()) {
@@ -286,77 +215,38 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
         }
     }
     
-    /**
-     * 读取插件资源文件内容，支持开发模式、JAR包和文件系统
-     * 
-     * 开发模式路径自动检测逻辑：
-     * 1. 获取当前项目根目录 (session.project.basePath)
-     * 2. 检查是否存在 src/main/resources 目录
-     * 3. 如果存在且开发模式已启用，则从该目录读取
-     * 4. 否则回退到从 JAR 包读取
-     */
-    private fun readPluginResource(path: String): String? {
-        val settings = LuaSettings.instance
-        
-        // 开发模式：自动检测项目源码目录
-        if (settings.enableDevMode) {
-            val projectBasePath = session.project.basePath
-            if (projectBasePath != null) {
-                // 尝试标准 Maven/Gradle 项目结构
-                val resourceDir = File(projectBasePath, "src/main/resources")
-                if (resourceDir.exists() && resourceDir.isDirectory) {
-                    val devFile = File(resourceDir, path)
-                    if (devFile.exists() && devFile.isFile) {
-                        return try {
-                            val content = devFile.readText()
-                            println("✅ [开发模式] 从项目源码读取: ${devFile.absolutePath}")
-                            content
-                        } catch (e: Exception) {
-                            println("⚠️ [开发模式] 读取失败: ${devFile.absolutePath}, ${e.message}")
-                            null
-                        }
-                    }
-                }
-            }
-        }
-        
-        return try {
-            // 首先尝试使用类加载器从JAR包中读取
-            val classLoader = LuaFileUtil::class.java.classLoader
-            val resource = classLoader.getResource(path)
-            if (resource != null) {
-                val content = resource.readText()
-                content
-            } else {
-                // 如果类加载器无法找到，尝试使用LuaFileUtil的方法
-                val filePath = LuaFileUtil.getPluginVirtualFile(path)
-                if (filePath != null && !filePath.startsWith("jar:")) {
-                    File(filePath).readText()
-                } else {
-                    null
-                }
-            }
-        } catch (e: Exception) {
-            error("读取插件资源失败: $path, ${e.message}")
-            null
-        }
-    }
-
-    override fun onConnect(suc: Boolean) {
+    final override fun onConnect(suc: Boolean) {
         if (suc) {
-            ApplicationManager.getApplication().runReadAction {
-                sendInitReq()
+            lifecycle.post(sessionGeneration, DebugSessionEvent.CONNECTED) {
+                ApplicationManager.getApplication().runReadAction {
+                    sendInitReq()
+                }
             }
-        } else stop()
+        } else {
+            lifecycle.post(sessionGeneration, DebugSessionEvent.FAILED) {
+                this.error("调试传输连接失败")
+                terminateFailedSession()
+            }
+        }
     }
 
-    override fun onDisconnect() {
-        stop()
-        session?.stop()
+    final override fun onDisconnect() {
+        cancelEvaluationsThen(IOException("Emmy transport disconnected")) {
+            if (lifecycle.state == DebugSessionState.STOPPING) {
+                finishStop()
+            } else {
+                lifecycle.post(sessionGeneration, DebugSessionEvent.FAILED) {
+                    this.error("调试传输连接已断开")
+                    terminateFailedSession()
+                }
+            }
+        }
     }
 
-    override fun onReceiveMessage(cmd: MessageCMD, json: String) {
+    final override fun onReceiveMessage(cmd: MessageCMD, json: String) {
         when (cmd) {
+            MessageCMD.ReadyRsp -> markInitialized()
+
             MessageCMD.BreakNotify -> {
                 val data = Gson().fromJson(json, BreakNotify::class.java)
                 onBreak(data)
@@ -369,54 +259,58 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
 
             MessageCMD.LogNotify -> {
                 val notify = Gson().fromJson(json, LogNotify::class.java)
-                // type: 0=Debug, 1=Info, 2=Warning, 3=Error
-                val contentType = when (notify.type) {
-                    0 -> ConsoleViewContentType.LOG_DEBUG_OUTPUT    // Debug
-                    1 -> ConsoleViewContentType.SYSTEM_OUTPUT       // Info
-                    2 -> ConsoleViewContentType.LOG_WARNING_OUTPUT  // Warning
-                    3 -> ConsoleViewContentType.ERROR_OUTPUT        // Error
-                    else -> ConsoleViewContentType.SYSTEM_OUTPUT
-                }
-                println(notify.message, LogConsoleType.NORMAL, contentType)
+                log(notify.message, DebugLogLevel.fromValue(notify.type))
             }
 
             else -> {
-                println("Unknown message: $cmd")
+                if (!handleBackendMessage(cmd, json)) {
+                    log("Unknown Emmy message: $cmd", DebugLogLevel.DEBUG)
+                }
             }
         }
+    }
+
+    protected open fun handleBackendMessage(cmd: MessageCMD, json: String): Boolean = false
+
+    protected fun markInitialized() {
+        lifecycle.post(sessionGeneration, DebugSessionEvent.INITIALIZED)
     }
 
     override fun registerBreakpoint(sourcePosition: XSourcePosition, breakpoint: XLineBreakpoint<*>) {
-        val file = sourcePosition.file
-        val shortPath = file.canonicalPath
-        if (shortPath != null) {
-            val newId = idCounter++
-            breakpoint.putUserData(ID, newId)
+        val token = sessionGeneration
+        if (token == 0L) return
+        lifecycle.execute(token) { upsertBreakpoint(sourcePosition, breakpoint, sendUpdate = true) }
+    }
 
-            if (breakpoint.isLogMessage) {
-                breakpoints[newId] =
-                    BreakPoint(shortPath, breakpoint.line + 1, null, breakpoint.logExpressionObject?.expression)
-            } else {
-                breakpoints[newId] =
-                    BreakPoint(shortPath, breakpoint.line + 1, breakpoint.conditionExpression?.expression)
-            }
-            val bp = breakpoints.getOrDefault(newId, null)
+    override fun unregisterBreakpoint(sourcePosition: XSourcePosition, breakpoint: XLineBreakpoint<*>) {
+        val token = sessionGeneration
+        if (token == 0L) return
+        lifecycle.execute(token) {
+            val id = breakpointIds.remove(breakpoint)
+            val bp = breakpoints.remove(id)
             if (bp != null) {
-                send(AddBreakPointReq(listOf(bp)))
+                send(RemoveBreakPointReq(listOf(bp)))
             }
         }
     }
 
-    override fun unregisterBreakpoint(sourcePosition: XSourcePosition, breakpoint: XLineBreakpoint<*>) {
-        val file = sourcePosition.file
-        val shortPath = file.canonicalPath
-        if (shortPath != null) {
-            val id = breakpoint.getUserData(ID)
-            val bp = breakpoints.getOrDefault(id, null)
-            if (bp != null) {
-                breakpoints.remove(id)
-                send(RemoveBreakPointReq(listOf(bp)))
-            }
+    private fun upsertBreakpoint(
+        sourcePosition: XSourcePosition,
+        breakpoint: XLineBreakpoint<*>,
+        sendUpdate: Boolean
+    ) {
+        val shortPath = sourcePosition.file.canonicalPath ?: sourcePosition.file.path
+        val id = breakpointIds[breakpoint] ?: idCounter++.also { breakpointIds[breakpoint] = it }
+        val protocolBreakpoint = if (breakpoint.isLogMessage) {
+            BreakPoint(shortPath, breakpoint.line + 1, logMessage = breakpoint.logExpressionObject?.expression)
+        } else {
+            BreakPoint(shortPath, breakpoint.line + 1, condition = breakpoint.conditionExpression?.expression)
+        }
+        val previous = breakpoints.put(id, protocolBreakpoint)
+        if (sendUpdate && previous != protocolBreakpoint &&
+            lifecycle.state in setOf(DebugSessionState.INITIALIZING, DebugSessionState.RUNNING)) {
+            if (previous != null) send(RemoveBreakPointReq(listOf(previous)))
+            send(AddBreakPointReq(listOf(protocolBreakpoint)))
         }
     }
 
@@ -425,12 +319,28 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
     }
 
     override fun runToPosition(position: XSourcePosition, context: XSuspendContext?) {
-        send(AddBreakPointReq(listOf(BreakPoint(position.file.path, position.line + 1, null, null, null))))
-        send(DebugActionMessage(DebugAction.Continue))
+        clearInlineSnapshot()
+        lifecycle.execute(sessionGeneration) {
+            removeTemporaryBreakpoint()
+            val breakpoint = BreakPoint(
+                position.file.canonicalPath ?: position.file.path,
+                position.line + 1,
+                runToHere = true
+            )
+            temporaryBreakpoint = breakpoint
+            send(AddBreakPointReq(listOf(breakpoint)))
+            send(DebugActionMessage(DebugAction.Continue))
+        }
     }
 
     private fun onBreak(data: BreakNotify) {
-        evalHandlers.clear()
+        removeTemporaryBreakpoint()
+        cancelEvaluationsThen(CancellationException("Emmy stack frame was replaced")) {
+            handleBreak(data)
+        }
+    }
+
+    private fun handleBreak(data: BreakNotify) {
         val frames = data.stacks.map { EmmyDebugStackFrame(it, this) }
         val top = frames.firstOrNull { it.sourcePosition != null }
             ?: frames.firstOrNull { it.data.line > 0 }
@@ -438,7 +348,19 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
         val stack = LuaExecutionStack(frames)
         if (top != null)
             stack.setTopFrame(top)
-        val breakpoint = top?.sourcePosition?.let { getBreakpoint(it.file, it.line) }
+        val sourcePosition = top?.sourcePosition
+        val breakpoint = sourcePosition?.let { getBreakpoint(it.file, it.line) }
+        if (top != null && sourcePosition != null) {
+            InlineDebugSnapshotStore.getInstance(session.project).update(
+                session,
+                top.data.toInlineSnapshot(
+                    sourcePosition.file.canonicalPath ?: sourcePosition.file.path,
+                    sourcePosition.line
+                )
+            )
+        } else {
+            clearInlineSnapshot()
+        }
         if (breakpoint != null) {
             ApplicationManager.getApplication().invokeLater {
                 session.breakpointReached(breakpoint, null, LuaSuspendContext(stack))
@@ -459,42 +381,132 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
     }
 
     private fun onEvalRsp(rsp: EvalRsp) {
-        evalHandlers.forEach { it.handleMessage(rsp) }
+        if (!evaluationRequests.complete(rsp.seq.toString(), rsp)) {
+            log("Ignored late Emmy evaluation response: ${rsp.seq}", DebugLogLevel.DEBUG)
+        }
     }
 
     override fun run() {
-        send(DebugActionMessage(DebugAction.Continue))
+        clearInlineSnapshot()
+        cancelEvaluationsThen(CancellationException("Emmy execution resumed")) {
+            send(DebugActionMessage(DebugAction.Continue))
+        }
     }
 
-    override fun stop() {
-        send(DebugActionMessage(DebugAction.Stop))
-        send(StopSign())
-        transporter?.close()
-        transporter = null
+    private fun removeTemporaryBreakpoint() {
+        val breakpoint = temporaryBreakpoint ?: return
+        temporaryBreakpoint = null
+        send(RemoveBreakPointReq(listOf(breakpoint)))
+    }
+
+    final override fun stop() {
+        clearInlineSnapshot()
+        cancelEvaluationsThen(CancellationException("Emmy debug session stopped")) {
+            lifecycle.post(sessionGeneration, DebugSessionEvent.STOP_REQUESTED) {
+                removeTemporaryBreakpoint()
+                send(DebugActionMessage(DebugAction.Stop))
+                send(StopSign())
+                runCatching { transporter?.close() }
+                transporter = null
+                if (::targetBootstrap.isInitialized) {
+                    runCatching { targetBootstrap.stop() }
+                }
+                finishStop()
+            }
+        }
+    }
+
+    private fun finishStop() {
+        lifecycle.post(sessionGeneration, DebugSessionEvent.TERMINATED) {
+            try {
+                evaluationRequests.close()
+            } finally {
+                breakpoints.clear()
+                breakpointIds.clear()
+                lifecycle.close()
+            }
+        }
+    }
+
+    private fun terminateFailedSession() {
+        if (!failureTerminationStarted.compareAndSet(false, true)) return
+        clearInlineSnapshot()
+        temporaryBreakpoint = null
+        cancelEvaluationsThen(IOException("Emmy debug target stopped")) {
+            runCatching { transporter?.close() }
+            transporter = null
+            if (::targetBootstrap.isInitialized) {
+                runCatching { targetBootstrap.stop() }
+            }
+            ApplicationManager.getApplication().invokeLater {
+                if (!session.isStopped) session.stop()
+            }
+            try {
+                evaluationRequests.close()
+            } finally {
+                breakpoints.clear()
+                breakpointIds.clear()
+                lifecycle.close()
+            }
+        }
     }
 
     override fun startStepOver(context: XSuspendContext?) {
-        send(DebugActionMessage(DebugAction.StepOver))
+        clearInlineSnapshot()
+        cancelEvaluationsThen(CancellationException("Emmy execution resumed")) {
+            send(DebugActionMessage(DebugAction.StepOver))
+        }
     }
 
     override fun startStepInto(context: XSuspendContext?) {
-        send(DebugActionMessage(DebugAction.StepIn))
+        clearInlineSnapshot()
+        cancelEvaluationsThen(CancellationException("Emmy execution resumed")) {
+            send(DebugActionMessage(DebugAction.StepIn))
+        }
     }
 
     override fun startStepOut(context: XSuspendContext?) {
-        send(DebugActionMessage(DebugAction.StepOut))
+        clearInlineSnapshot()
+        cancelEvaluationsThen(CancellationException("Emmy execution resumed")) {
+            send(DebugActionMessage(DebugAction.StepOut))
+        }
+    }
+
+    private fun clearInlineSnapshot() {
+        InlineDebugSnapshotStore.getInstance(session.project).clear(session)
     }
 
     override fun getEditorsProvider(): XDebuggerEditorsProvider {
         return editorsProvider
     }
 
-    fun addEvalResultHandler(handler: IEvalResultHandler) {
-        evalHandlers.add(handler)
+    fun requestEvaluation(request: EvalReq, callback: (Result<EvalRsp>) -> Unit) {
+        evaluationRequests.request(
+            requestId = request.seq.toString(),
+            send = {
+                val activeTransport = transporter ?: throw IOException("Emmy transport is not connected")
+                activeTransport.send(request)
+            },
+            callback = callback
+        )
     }
 
-    fun removeMessageHandler(handler: IEvalResultHandler) {
-        evalHandlers.remove(handler)
+    private fun cancelEvaluations(cause: Throwable): CancellationException? = try {
+        evaluationRequests.cancelAll(cause)
+        null
+    } catch (cancellation: CancellationException) {
+        cancellation
+    }
+
+    private inline fun cancelEvaluationsThen(cause: Throwable, action: () -> Unit) {
+        val cancellation = cancelEvaluations(cause)
+        try {
+            action()
+        } catch (error: Throwable) {
+            if (cancellation != null) error.addSuppressed(cancellation)
+            throw error
+        }
+        if (cancellation != null) throw cancellation
     }
 
     fun send(msg: IMessage) {

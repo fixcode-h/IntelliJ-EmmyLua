@@ -21,7 +21,6 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.search.FilenameIndex
 import com.intellij.psi.search.ProjectAndLibrariesScope
-import com.intellij.util.SlowOperations
 import com.tang.intellij.lua.search.SearchContext
 
 class LuaFileFuzzyResolver : ILuaFileResolver {
@@ -35,21 +34,19 @@ class LuaFileFuzzyResolver : ILuaFileResolver {
         val fileName = names.lastOrNull()
         if (fileName != null) {
             ApplicationManager.getApplication().runReadAction {
-                SlowOperations.knownIssue("EMMYLUA-EDT-FuzzyResolver").use {
-                    var perfectMatch = Int.MAX_VALUE
-                    for (extName in extNames) {
-                        val files = FilenameIndex.getVirtualFilesByName("$fileName$extName", ProjectAndLibrariesScope(project))
-                        for (file in files) {
-                            val path = file.canonicalPath
-                            if (path != null && perfectMatch > path.length && path.endsWith("$shortUrl$extName")) {
-                                perfect = file
-                                perfectMatch = path.length
-                            }
+                var perfectMatch = Int.MAX_VALUE
+                for (extName in extNames) {
+                    val files = FilenameIndex.getVirtualFilesByName("$fileName$extName", ProjectAndLibrariesScope(project))
+                    for (file in files) {
+                        val path = file.canonicalPath
+                        if (path != null && perfectMatch > path.length && path.endsWith("$shortUrl$extName")) {
+                            perfect = file
+                            perfectMatch = path.length
                         }
-
-                        if (perfect != null)
-                            break
                     }
+
+                    if (perfect != null)
+                        break
                 }
             }
         }

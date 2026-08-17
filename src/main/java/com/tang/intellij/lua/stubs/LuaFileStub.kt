@@ -18,6 +18,7 @@ package com.tang.intellij.lua.stubs
 
 import com.intellij.lang.ASTNode
 import com.intellij.openapi.diagnostic.Logger
+import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.psi.PsiFile
 import com.intellij.psi.StubBuilder
 import com.intellij.psi.stubs.*
@@ -95,6 +96,8 @@ class LuaFileElementType : IStubFileElementType<LuaFileStub>(LuaLanguage.INSTANC
             }
             
             return LuaFileStub(null, StringRef.toString(moduleRef), uid)
+        } catch (e: ProcessCanceledException) {
+            throw e
         } catch (e: Exception) {
             LOG.warn("Failed to deserialize LuaFileStub, creating empty stub", e)
             return LuaFileStub(null, null, "")

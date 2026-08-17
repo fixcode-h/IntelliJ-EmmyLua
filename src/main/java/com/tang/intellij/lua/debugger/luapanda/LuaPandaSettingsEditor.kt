@@ -23,6 +23,7 @@ import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.FormBuilder
 import com.tang.intellij.lua.LuaBundle
+import com.tang.intellij.lua.debugger.DebugLogLevel
 import java.awt.BorderLayout
 import javax.swing.JComponent
 import javax.swing.JPanel
@@ -37,7 +38,7 @@ class LuaPandaSettingsEditor : SettingsEditor<LuaPandaDebugConfiguration>() {
     private val stopOnEntryCheckBox = JBCheckBox(LuaBundle.message("debugger.stop_on_entry"))
     private val useCHookCheckBox = JBCheckBox(LuaBundle.message("debugger.use_c_hook"))
     private val autoReconnectCheckBox = JBCheckBox(LuaBundle.message("debugger.auto_reconnect"))
-    private val logLevelSpinner = JSpinner(SpinnerNumberModel(1, 0, 3, 1))
+    private val logLevelCombo = ComboBox(DebugLogLevel.entries.toTypedArray())
     private val stopConfirmTimeoutSpinner = JSpinner(SpinnerNumberModel(3, 1, 60, 1))
 
     override fun createEditor(): JComponent {
@@ -50,7 +51,7 @@ class LuaPandaSettingsEditor : SettingsEditor<LuaPandaDebugConfiguration>() {
             .addComponent(stopOnEntryCheckBox)
             .addComponent(useCHookCheckBox)
             .addComponent(autoReconnectCheckBox)
-            .addLabeledComponent(JBLabel(LuaBundle.message("debugger.log_level")), logLevelSpinner)
+            .addLabeledComponent(JBLabel(LuaBundle.message("debugger.log_level")), logLevelCombo)
             .addLabeledComponent(JBLabel(LuaBundle.message("debugger.stop_confirm_timeout")), stopConfirmTimeoutSpinner)
         
         panel.add(formBuilder.panel, BorderLayout.NORTH)
@@ -71,7 +72,7 @@ class LuaPandaSettingsEditor : SettingsEditor<LuaPandaDebugConfiguration>() {
         stopOnEntryCheckBox.isSelected = configuration.stopOnEntry
         useCHookCheckBox.isSelected = configuration.useCHook
         autoReconnectCheckBox.isSelected = configuration.autoReconnect
-        logLevelSpinner.value = configuration.logLevel
+        logLevelCombo.selectedItem = configuration.logLevel
         stopConfirmTimeoutSpinner.value = configuration.stopConfirmTimeout
         
         // 更新主机字段状态
@@ -86,7 +87,7 @@ class LuaPandaSettingsEditor : SettingsEditor<LuaPandaDebugConfiguration>() {
         configuration.stopOnEntry = stopOnEntryCheckBox.isSelected
         configuration.useCHook = useCHookCheckBox.isSelected
         configuration.autoReconnect = autoReconnectCheckBox.isSelected
-        configuration.logLevel = logLevelSpinner.value as Int
+        configuration.logLevel = logLevelCombo.selectedItem as DebugLogLevel
         configuration.stopConfirmTimeout = stopConfirmTimeoutSpinner.value as Int
     }
 }

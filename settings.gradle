@@ -14,3 +14,8 @@
  * limitations under the License.
  */
 rootProject.name = 'EmmyLua'
+
+include 'modules:debugger-core'
+include 'modules:debugger-transport'
+include 'modules:debugger-emmy-protocol'
+include 'modules:debugger-luapanda-protocol'

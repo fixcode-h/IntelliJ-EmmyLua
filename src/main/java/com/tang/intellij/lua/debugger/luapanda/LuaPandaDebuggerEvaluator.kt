@@ -35,7 +35,7 @@ class LuaPandaDebuggerEvaluator(
             addProperty("stackId", stackFrame.stackId)
         }
         
-        debugProcess.transporter?.commandToDebugger(LuaPandaCommands.GET_WATCHED_VARIABLE, info, { response ->
+        debugProcess.requestCommand(LuaPandaCommands.GET_WATCHED_VARIABLE, info, { response ->
             try {
                 val infoArray = response.info?.asJsonArray
                 if (infoArray != null && infoArray.size() > 0) {
@@ -55,6 +55,8 @@ class LuaPandaDebuggerEvaluator(
             } catch (e: Exception) {
                 xEvaluationCallback.errorOccurred("求值失败：${e.message}")
             }
-        }, 0)
+        }, { error ->
+            xEvaluationCallback.errorOccurred(error.message ?: "求值请求失败")
+        })
     }
 }

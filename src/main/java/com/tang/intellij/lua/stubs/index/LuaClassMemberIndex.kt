@@ -16,8 +16,7 @@
 
 package com.tang.intellij.lua.stubs.index
 
-import com.intellij.openapi.project.Project
-import com.intellij.psi.search.GlobalSearchScope
+import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.psi.stubs.IndexSink
 import com.intellij.psi.stubs.IntStubIndexExtension
 import com.intellij.psi.stubs.StubIndex
@@ -35,10 +34,6 @@ import com.tang.intellij.lua.ty.TyParameter
 class LuaClassMemberIndex : IntStubIndexExtension<LuaClassMember>() {
     override fun getKey() = StubKeys.CLASS_MEMBER
 
-    @Deprecated("This method is deprecated in the parent class")
-    override fun get(s: Int, project: Project, scope: GlobalSearchScope): Collection<LuaClassMember> =
-            StubIndex.getElements(StubKeys.CLASS_MEMBER, s, project, scope, LuaClassMember::class.java)
-
     companion object {
         val instance = LuaClassMemberIndex()
 
@@ -55,12 +50,16 @@ class LuaClassMemberIndex : IntStubIndexExtension<LuaClassMember>() {
                     try {
                         val containingFile = element.containingFile
                         containingFile != null && containingFile.isValid
+                    } catch (e: ProcessCanceledException) {
+                        throw e
                     } catch (e: Exception) {
                         false
                     }
                 }
                 
                 return ContainerUtil.process(validElements, processor)
+            } catch (e: ProcessCanceledException) {
+                throw e
             } catch (e: Exception) {
                 // 如果访问Stub索引失败，返回true继续处理其他索引
                 return true

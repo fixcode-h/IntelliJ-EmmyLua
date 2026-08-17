@@ -18,6 +18,7 @@ package com.tang.intellij.lua.search
 
 import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 import com.intellij.psi.search.GlobalSearchScope
@@ -66,15 +67,17 @@ class SearchContext private constructor(val project: Project) {
                 val size = stack.size
                 stack.push(ctx)
                 ctx.myInStack = true
-                val result = try {
+                try {
                     action(ctx)
+                } catch (e: ProcessCanceledException) {
+                    throw e
                 } catch (e: Exception) {
                     defaultValue
+                } finally {
+                    ctx.myInStack = false
+                    stack.pop()
+                    assert(size == stack.size)
                 }
-                ctx.myInStack = false
-                stack.pop()
-                assert(size == stack.size)
-                result
             }
         }
 
@@ -95,10 +98,12 @@ class SearchContext private constructor(val project: Project) {
                 val stub = it.myForStub
                 it.myDumb = true
                 it.myForStub = true
-                val ret = action(it)
-                it.myDumb = dumb
-                it.myForStub = stub
-                ret
+                try {
+                    action(it)
+                } finally {
+                    it.myDumb = dumb
+                    it.myForStub = stub
+                }
             }
         }
 
@@ -124,9 +129,11 @@ class SearchContext private constructor(val project: Project) {
     fun <T> withIndex(index: Int, action: () -> T): T {
         val savedIndex = this.index
         myIndex = index
-        val ret = action()
-        myIndex = savedIndex
-        return ret
+        return try {
+            action()
+        } finally {
+            myIndex = savedIndex
+        }
     }
 
     fun guessTuple() = index < 0
@@ -148,9 +155,11 @@ class SearchContext private constructor(val project: Project) {
     fun <T> withScope(scope: GlobalSearchScope, action: () -> T): T {
         val oriScope = myScope
         myScope = scope
-        val ret = action()
-        myScope = oriScope
-        return ret
+        return try {
+            action()
+        } finally {
+            myScope = oriScope
+        }
     }
 
     fun withRecursionGuard(psi: PsiElement, type: GuardType, action: () -> ITy): ITy {
@@ -162,10 +171,12 @@ class SearchContext private constructor(val project: Project) {
         val guard = createGuard(psi, type)
         if (guard != null)
             myGuardList.add(guard)
-        val result = action()
-        if (guard != null)
-            myGuardList.remove(guard)
-        return result
+        return try {
+            action()
+        } finally {
+            if (guard != null)
+                myGuardList.remove(guard)
+        }
     }
 
     // 类型推断递归深度限制
@@ -183,6 +194,8 @@ class SearchContext private constructor(val project: Project) {
             inferDepth++
             try {
                 ILuaTypeInfer.infer(psi, this)
+            } catch (e: ProcessCanceledException) {
+                throw e
             } catch (e: StackOverflowError) {
                 // 捕获栈溢出错误，防止崩溃
                 Ty.UNKNOWN

@@ -28,7 +28,7 @@ import com.intellij.ui.components.JBScrollPane
 import com.intellij.util.ui.JBUI
 import com.tang.intellij.lua.debugger.emmy.attach.ProcessAttachmentManager
 import com.tang.intellij.lua.psi.LuaFileUtil
-import com.tang.intellij.lua.project.LuaSettings
+import com.tang.intellij.lua.project.LuaProjectSettings
 import java.awt.BorderLayout
 import java.awt.Dimension
 import java.awt.event.MouseAdapter
@@ -75,7 +75,7 @@ class ProcessSelector(private val project: Project) {
             val outputStr = String(output, Charset.forName("CP936"))
             parseProcessList(outputStr, processName, emptyList(), filterUEProcesses)
         } catch (e: Exception) {
-            throw Exception("获取进程列表失败: ${e.message}")
+            throw Exception("获取进程列表失败: ${e.message}", e)
         }
     }
 
@@ -103,10 +103,11 @@ class ProcessSelector(private val project: Project) {
                 val processInfo = ProcessInfo(pid, name, title, path)
 
                 // 应用过滤条件
-                val ueProcessNames = LuaSettings.instance.ueProcessNames.toList()
+                val projectSettings = LuaProjectSettings.getInstance(project)
+                val ueProcessNames = projectSettings.ueProcessNames.toList()
                 val isUEProcess = processInfo.isUnrealEngineProcess(ueProcessNames)
                 // 使用插件设置中的黑名单
-                val debugProcessBlacklist = LuaSettings.instance.debugProcessBlacklist.toList()
+                val debugProcessBlacklist = projectSettings.debugProcessBlacklist.toList()
                 val isBlacklisted = processInfo.isInBlacklist(debugProcessBlacklist)
                 // 过滤掉构建工具进程
                 val isBuildTool = processInfo.ueProcessType == UEProcessType.BUILD_TOOL
@@ -150,14 +151,7 @@ class ProcessSelector(private val project: Project) {
             override fun compute(indicator: ProgressIndicator): ProcessInfo? {
                 indicator.text = "正在获取系统进程列表..."
                 
-                val processes = try {
-                    getProcessList(processName, autoAttachSingleProcess, filterUEProcesses)
-                } catch (e: Exception) {
-                    ApplicationManager.getApplication().invokeLater {
-                        Messages.showErrorDialog(project, e.message, "错误")
-                    }
-                    return null
-                }
+                val processes = getProcessList(processName, autoAttachSingleProcess, filterUEProcesses)
 
                 if (indicator.isCanceled) return null
 

@@ -137,13 +137,6 @@
         <langCodeStyleSettingsProvider implementation="com.tang.intellij.lua.editor.formatter.LuaLanguageCodeStyleSettingsProvider"/>
 
         <!-- runner & debugger -->
-        <runConfigurationProducer implementation="com.tang.intellij.lua.debugger.LuaRunConfigurationProducer"/>
-        <!-- Hidden: Lua Remote(Mobdebug) -->
-        <!--<programRunner implementation="com.tang.intellij.lua.debugger.remote.LuaMobDebuggerRunner"/>-->
-        <!--<configurationType implementation="com.tang.intellij.lua.debugger.remote.LuaMobConfigurationType"/>-->
-        <!-- Lua Application -->
-        <programRunner implementation="com.tang.intellij.lua.debugger.app.LuaAppRunner"/>
-        <configurationType implementation="com.tang.intellij.lua.debugger.app.LuaAppConfigurationType"/>
         <programRunner implementation="com.tang.intellij.lua.debugger.emmy.EmmyDebuggerRunner"/>
         <configurationType implementation="com.tang.intellij.lua.debugger.emmy.EmmyDebugConfigurationType"/>
         <programRunner implementation="com.tang.intellij.lua.debugger.emmy.attach.EmmyAttachDebugRunner"/>
@@ -151,8 +144,6 @@
         <programRunner implementation="com.tang.intellij.lua.debugger.luapanda.LuaPandaDebuggerRunner"/>
         <configurationType implementation="com.tang.intellij.lua.debugger.luapanda.LuaPandaConfigurationType"/>
         <xdebugger.breakpointType implementation="com.tang.intellij.lua.debugger.LuaLineBreakpointType"/>
-<!--        <xdebugger.attachDebuggerProvider implementation="com.tang.intellij.lua.debugger.emmyAttach.EmmyAttachDebuggerProvider"/>-->
-
         <!--templates-->
         <defaultLiveTemplates file="/liveTemplates/lua.xml"/>
         <liveTemplateContext contextId="LUA_CODE" implementation="com.tang.intellij.lua.codeInsight.template.context.LuaCodeContextType"/>
@@ -165,14 +156,11 @@
 
         <!--lua settings-->
         <applicationService serviceImplementation="com.tang.intellij.lua.project.LuaSettings"/>
-        <applicationConfigurable groupId="language"
+        <postStartupActivity implementation="com.tang.intellij.lua.project.LuaPandaVersionChecker"/>
+        <projectConfigurable groupId="language"
                                  displayName="EmmyLua"
                                  id="preferences.Lua"
-                                 instance="com.tang.intellij.lua.project.LuaSettingsPanel">
-            <!--<configurable instance="com.tang.intellij.lua.project.CompletionSettingsPanel"
-                          displayName="Emmy Completion"
-                          id="preferences.Lua.Completion"/>-->
-        </applicationConfigurable>
+                                 instance="com.tang.intellij.lua.project.LuaSettingsPanel"/>
 
         <!--intentions-->
         <intentionAction>
@@ -356,8 +344,6 @@
     <applicationListeners>
         <listener class="com.tang.intellij.lua.psi.LuaFileManager"
                   topic="com.intellij.openapi.fileTypes.FileTypeListener"/>
-        <listener class="com.tang.intellij.lua.project.LuaPandaVersionChecker"
-                  topic="com.intellij.openapi.project.ProjectManagerListener"/>
     </applicationListeners>
 
     <actions>

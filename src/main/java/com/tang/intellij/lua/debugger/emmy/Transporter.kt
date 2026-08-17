@@ -16,11 +16,12 @@
 
 package com.tang.intellij.lua.debugger.emmy
 
-import com.intellij.execution.ui.ConsoleViewContentType
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.util.SystemInfoRt
+import com.tang.intellij.lua.debugger.DebugLogLevel
 import com.tang.intellij.lua.debugger.DebugLogger
-import com.tang.intellij.lua.debugger.LogConsoleType
+import com.tang.intellij.lua.debugger.transport.BoundedTransportQueue
+import com.tang.intellij.lua.debugger.transport.TransportChannel
 import org.scalasbt.ipcsocket.UnixDomainServerSocket
 import org.scalasbt.ipcsocket.UnixDomainSocket
 import org.scalasbt.ipcsocket.Win32NamedPipeServerSocket
@@ -33,7 +34,8 @@ import java.net.Socket
 import java.nio.ByteBuffer
 import java.nio.channels.ServerSocketChannel
 import java.nio.channels.SocketChannel
-import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.CancellationException
+import java.util.concurrent.atomic.AtomicBoolean
 
 class StopSign : Message(MessageCMD.Unknown)
 
@@ -43,42 +45,57 @@ interface ITransportHandler {
     fun onConnect(suc: Boolean)
 }
 
-abstract class Transporter {
+abstract class Transporter : TransportChannel<IMessage> {
 
     var handler: ITransportHandler? = null
 
     var logger: DebugLogger? = null
 
-    protected val messageQueue = LinkedBlockingQueue<IMessage>()
+    private var eventDispatcher: ((() -> Unit) -> Unit) = { action -> action() }
+    private val disconnectNotified = AtomicBoolean()
 
-    protected var stopped = false
+    protected val messageQueue = BoundedTransportQueue<IMessage>()
 
-    open fun start() {
+    @Volatile protected var stopped = false
+
+    fun setEventDispatcher(dispatcher: (() -> Unit) -> Unit) {
+        eventDispatcher = dispatcher
+    }
+
+    open override fun start() {
 
     }
 
-    open fun close() {
+    open override fun close() {
         stopped = true
+        messageQueue.force(StopSign())
     }
 
-    fun send(msg: IMessage) {
-        messageQueue.put(msg)
+    override fun send(message: IMessage) {
+        if (stopped && message !is StopSign) throw IOException("Emmy transport is closed")
+        messageQueue.offer(message)
     }
 
     protected fun onConnect(suc: Boolean) {
-        handler?.onConnect(suc)
+        if (suc) disconnectNotified.set(false)
+        eventDispatcher { handler?.onConnect(suc) }
         // 移除简单的"Connected."消息，保留更详细的连接信息
     }
 
     protected open fun onDisconnect() {
-        // 移除简单的"Disconnected."消息，保留更详细的断开连接信息
+        if (!disconnectNotified.compareAndSet(false, true)) return
+        eventDispatcher { handler?.onDisconnect() }
     }
 
     protected fun onReceiveMessage(type: MessageCMD, json: String) {
-        try {
-            handler?.onReceiveMessage(type, json)
-        } catch (e: Exception) {
-            println(e)
+        eventDispatcher {
+            try {
+                handler?.onReceiveMessage(type, json)
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (e: Exception) {
+                logger?.log("Emmy protocol callback failed: ${e.message}", DebugLogLevel.ERROR)
+            }
         }
     }
 }
@@ -112,15 +129,16 @@ abstract class SocketChannelTransporter : Transporter() {
                 val cmdValue = reader.readLine()
                 val cmd = cmdValue.toInt()
                 val json = reader.readLine()
-                val type = MessageCMD.values().find { it.ordinal == cmd }
-                onReceiveMessage(type ?: MessageCMD.Unknown, json)
+                onReceiveMessage(MessageCMD.fromWireId(cmd), json)
+            } catch (cancellation: CancellationException) {
+                throw cancellation
             } catch (e: Exception) {
-                onDisconnect()
+                terminateConnection(e)
                 break
             }
         }
-        send(StopSign())
-        println(">>> stop receive")
+        messageQueue.force(StopSign())
+        logger?.log("Emmy transport receive loop stopped", DebugLogLevel.DEBUG)
     }
 
     private fun doSend() {
@@ -132,10 +150,18 @@ abstract class SocketChannelTransporter : Transporter() {
                 val json = msg.toJSON()
                 write("${msg.cmd}\n$json\n".toByteArray())
             } catch (e: IOException) {
+                terminateConnection(e)
                 break
             }
         }
-        println(">>> stop send")
+        logger?.log("Emmy transport send loop stopped", DebugLogLevel.DEBUG)
+    }
+
+    private fun terminateConnection(cause: Throwable) {
+        logger?.log("Emmy transport connection failed: ${cause.message}", DebugLogLevel.ERROR)
+        runCatching { close() }
+            .onFailure { error -> logger?.log("Emmy transport close failed: ${error.message}", DebugLogLevel.WARNING) }
+        onDisconnect()
     }
 
     override fun close() {
@@ -170,7 +196,6 @@ class SocketClientTransporter(val host: String, val port: Int) : SocketChannelTr
 
     override fun onDisconnect() {
         super.onDisconnect()
-        handler?.onDisconnect()
     }
 }
 
@@ -179,7 +204,7 @@ class SocketServerTransporter(val host: String, val port: Int) : SocketChannelTr
 
     override fun start() {
         server.bind(InetSocketAddress(InetAddress.getByName(host), port))
-        logger?.println("Server($host:$port) open successfully, wait for connection...", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+        logger?.log("Emmy TCP server listening on $host:$port", DebugLogLevel.RUNTIME)
         ApplicationManager.getApplication().executeOnPooledThread {
             while (!stopped) {
                 val channel = try {
@@ -191,7 +216,7 @@ class SocketServerTransporter(val host: String, val port: Int) : SocketChannelTr
                     try {
                         channel.close()
                     } catch (e: Exception) {
-                        e.printStackTrace()
+                        logger?.log("关闭多余的 Emmy TCP 连接失败: ${e.message}", DebugLogLevel.WARNING)
                     }
                 } else {
                     socket = channel
@@ -226,7 +251,7 @@ class PipelineClientTransporter(val name: String) : SocketChannelTransporter() {
         } else {
             UnixDomainSocket(getPipename(name))
         }
-        logger?.println("Pipeline($name) connect successfully.", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+        logger?.log("Emmy pipeline '$name' connected", DebugLogLevel.RUNTIME)
         run()
         onConnect(true)
     }
@@ -246,7 +271,6 @@ class PipelineClientTransporter(val name: String) : SocketChannelTransporter() {
 
     override fun onDisconnect() {
         super.onDisconnect()
-        handler?.onDisconnect()
     }
 }
 
@@ -265,15 +289,14 @@ class PipelineServerTransporter(val name: String) : SocketChannelTransporter() {
             }
             UnixDomainServerSocket(pipeName)
         }
-        logger?.println("Pipeline($name) open successfully, wait for connection...", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+        logger?.log("Emmy pipeline '$name' listening", DebugLogLevel.RUNTIME)
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
                 client = pipe?.accept()
                 run()
                 onConnect(true)
             } catch (e: Exception) {
-                println(e)
-                logger?.println(e.message ?: "Unknown error.", LogConsoleType.NORMAL, ConsoleViewContentType.ERROR_OUTPUT)
+                logger?.log("Emmy pipeline connection failed: ${e.message}", DebugLogLevel.ERROR)
             }
         }
     }

@@ -24,6 +24,7 @@ import com.intellij.openapi.options.SettingsEditor;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.util.SystemInfoRt;
 import com.tang.intellij.lua.lang.LuaFileType;
+import com.tang.intellij.lua.debugger.DebugLogLevel;
 import com.tang.intellij.lua.psi.LuaFileUtil;
 import org.jetbrains.annotations.NotNull;
 
@@ -37,27 +38,30 @@ import java.awt.*;
 import java.util.Objects;
 
 public class EmmyDebugSettingsPanel extends SettingsEditor<EmmyDebugConfiguration> implements DocumentListener {
-    private JComboBox<EmmyDebugTransportType> typeCombox;
-    private JLabel type;
-    private JTextField tcpHostInput;
-    private JTextField tcpPortInput;
-    private JLabel tcpHostLabel;
-    private JLabel tcpPortLabel;
-    private JTextField pipelineInput;
-    private JLabel pipeNameLabel;
-    private JPanel panel;
-    private JPanel codePanel;
-    private JCheckBox waitIDECheckBox;
-    private JCheckBox breakWhenIDEConnectedCheckBox;
+    private final JComboBox<EmmyDebugTransportType> typeCombox = new JComboBox<>();
+    private final JTextField tcpHostInput = new JTextField();
+    private final JTextField tcpPortInput = new JTextField();
+    private final JLabel tcpHostLabel = new JLabel("Host:");
+    private final JLabel tcpPortLabel = new JLabel("Port:");
+    private final JTextField pipelineInput = new JTextField();
+    private final JLabel pipeNameLabel = new JLabel("Pipe:");
+    private final JPanel panel = new JPanel(new GridBagLayout());
+    private final JPanel codePanel = new JPanel(new BorderLayout());
+    private final JCheckBox waitIDECheckBox = new JCheckBox("Block the program and wait for the IDE.");
+    private final JCheckBox breakWhenIDEConnectedCheckBox = new JCheckBox("Force break when connected.");
+    private final JComboBox<DebugLogLevel> logLevelComboBox = new JComboBox<>();
 
-    private JRadioButton x64RadioButton;
-    private JRadioButton x86RadioButton;
-    private JPanel winArchPanel;
-    private ButtonGroup winArchGroup;
+    private final JRadioButton x64RadioButton = new JRadioButton("x64");
+    private final JRadioButton x86RadioButton = new JRadioButton("x86");
+    private final JPanel winArchPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+    private final JLabel winArchLabel = new JLabel("Architecture:");
+    private final ButtonGroup winArchGroup = new ButtonGroup();
 
     private EditorEx editorEx;
 
     public EmmyDebugSettingsPanel(Project project) {
+        buildPanel();
+
         // type
         DefaultComboBoxModel<EmmyDebugTransportType> model = new DefaultComboBoxModel<>();
         model.addElement(EmmyDebugTransportType.TCP_CLIENT);
@@ -65,11 +69,11 @@ public class EmmyDebugSettingsPanel extends SettingsEditor<EmmyDebugConfiguratio
         /*for (EmmyDebugTransportType value : EmmyDebugTransportType.values()) {
             model.addElement(value);
         }*/
+        typeCombox.setModel(model);
         typeCombox.addActionListener(e -> {
             setType((EmmyDebugTransportType) typeCombox.getSelectedItem());
             onChanged();
         });
-        typeCombox.setModel(model);
         // tcp
         tcpHostInput.setText("localhost");
         tcpHostInput.getDocument().addDocumentListener(this);
@@ -83,11 +87,19 @@ public class EmmyDebugSettingsPanel extends SettingsEditor<EmmyDebugConfiguratio
         waitIDECheckBox.addActionListener(e -> onChanged());
         breakWhenIDEConnectedCheckBox.addActionListener(e -> onChanged());
 
+        logLevelComboBox.setModel(new DefaultComboBoxModel<>(DebugLogLevel.values()));
+        logLevelComboBox.setSelectedItem(DebugLogLevel.RUNTIME);
+        logLevelComboBox.setToolTipText("Log0=调试，Log1=运行，Log2=警告，Log3=错误");
+        logLevelComboBox.addActionListener(e -> onChanged());
+
         // arch
-        winArchGroup = new ButtonGroup();
         winArchPanel.setVisible(SystemInfoRt.isWindows);
+        winArchLabel.setVisible(SystemInfoRt.isWindows);
         winArchGroup.add(x64RadioButton);
         winArchGroup.add(x86RadioButton);
+        winArchPanel.add(x64RadioButton);
+        winArchPanel.add(x86RadioButton);
+        x64RadioButton.setSelected(true);
         x64RadioButton.addChangeListener(e -> onChanged());
         x86RadioButton.addChangeListener(e -> onChanged());
 
@@ -95,7 +107,54 @@ public class EmmyDebugSettingsPanel extends SettingsEditor<EmmyDebugConfiguratio
         editorEx = createEditorEx(project);
         codePanel.add(editorEx.getComponent(), BorderLayout.CENTER);
 
+        setType(getType());
+        breakWhenIDEConnectedCheckBox.setEnabled(false);
         updateCode();
+    }
+
+    private void buildPanel() {
+        addRow(0, new JLabel("Connection:"), typeCombox);
+        addRow(1, tcpHostLabel, tcpHostInput);
+        addRow(2, tcpPortLabel, tcpPortInput);
+        addRow(3, pipeNameLabel, pipelineInput);
+        addRow(4, new JLabel("Log level:"), logLevelComboBox);
+        addRow(5, winArchLabel, winArchPanel);
+        addRow(6, new JLabel(), waitIDECheckBox);
+        addRow(7, new JLabel(), breakWhenIDEConnectedCheckBox);
+
+        GridBagConstraints hintConstraints = new GridBagConstraints();
+        hintConstraints.gridx = 0;
+        hintConstraints.gridy = 8;
+        hintConstraints.gridwidth = 2;
+        hintConstraints.anchor = GridBagConstraints.WEST;
+        hintConstraints.insets = new Insets(8, 0, 4, 0);
+        panel.add(new JLabel("Copy following code and paste into the Lua code entry."), hintConstraints);
+
+        GridBagConstraints codeConstraints = new GridBagConstraints();
+        codeConstraints.gridx = 0;
+        codeConstraints.gridy = 9;
+        codeConstraints.gridwidth = 2;
+        codeConstraints.weightx = 1.0;
+        codeConstraints.weighty = 1.0;
+        codeConstraints.fill = GridBagConstraints.BOTH;
+        panel.add(codePanel, codeConstraints);
+    }
+
+    private void addRow(int row, JComponent label, JComponent component) {
+        GridBagConstraints labelConstraints = new GridBagConstraints();
+        labelConstraints.gridx = 0;
+        labelConstraints.gridy = row;
+        labelConstraints.anchor = GridBagConstraints.WEST;
+        labelConstraints.insets = new Insets(2, 0, 2, 8);
+        panel.add(label, labelConstraints);
+
+        GridBagConstraints componentConstraints = new GridBagConstraints();
+        componentConstraints.gridx = 1;
+        componentConstraints.gridy = row;
+        componentConstraints.weightx = 1.0;
+        componentConstraints.fill = GridBagConstraints.HORIZONTAL;
+        componentConstraints.insets = new Insets(2, 0, 2, 0);
+        panel.add(component, componentConstraints);
     }
 
     private void onChanged() {
@@ -117,6 +176,7 @@ public class EmmyDebugSettingsPanel extends SettingsEditor<EmmyDebugConfiguratio
         tcpPortInput.setText(String.valueOf(configuration.getPort()));
 
         pipelineInput.setText(configuration.getPipeName());
+        logLevelComboBox.setSelectedItem(configuration.getLogLevel());
 
         if (SystemInfoRt.isWindows) {
             if (configuration.getWinArch() == EmmyWinArch.X64) {
@@ -137,6 +197,7 @@ public class EmmyDebugSettingsPanel extends SettingsEditor<EmmyDebugConfiguratio
         configuration.setPort(Integer.parseInt(tcpPortInput.getText()));
 
         configuration.setPipeName(pipelineInput.getText());
+        configuration.setLogLevel((DebugLogLevel) logLevelComboBox.getSelectedItem());
         if (SystemInfoRt.isWindows) {
             configuration.setWinArch(x64RadioButton.isSelected() ? EmmyWinArch.X64 : EmmyWinArch.X86);
         }
@@ -185,6 +246,14 @@ public class EmmyDebugSettingsPanel extends SettingsEditor<EmmyDebugConfiguratio
     @Override
     protected JComponent createEditor() {
         return panel;
+    }
+
+    @Override
+    protected void disposeEditor() {
+        if (editorEx != null) {
+            EditorFactory.getInstance().releaseEditor(editorEx);
+            editorEx = null;
+        }
     }
 
     private EditorEx createEditorEx(Project project) {
