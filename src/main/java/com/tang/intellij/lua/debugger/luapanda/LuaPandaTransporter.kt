@@ -18,9 +18,8 @@ package com.tang.intellij.lua.debugger.luapanda
 
 import com.google.gson.Gson
 import com.google.gson.JsonObject
-import com.intellij.execution.ui.ConsoleViewContentType
+import com.tang.intellij.lua.debugger.DebugLogLevel
 import com.tang.intellij.lua.debugger.DebugLogger
-import com.tang.intellij.lua.debugger.LogConsoleType
 import com.tang.intellij.lua.debugger.core.RequestRegistry
 import java.io.*
 import java.net.ServerSocket
@@ -32,14 +31,7 @@ import java.util.concurrent.atomic.AtomicLong
 
 // ========== 枚举和接口定义 ==========
 
-/**
- * 日志级别枚举
- */
-enum class LogLevel(val value: Int, val description: String) {
-    DEBUG(0, "调试日志"),
-    CONNECTION(1, "连接状态日志"),
-    ERROR(2, "错误日志")
-}
+private typealias LogLevel = DebugLogLevel
 
 /**
  * 传输器事件处理接口
@@ -70,7 +62,6 @@ abstract class LuaPandaTransporter(private val logger: DebugLogger? = null) {
         closeScheduler = false,
         callbackErrorHandler = { error -> logError("请求回调执行失败: ${error.message}", LogLevel.ERROR) }
     )
-    private var logLevel: Int = LogLevel.CONNECTION.value
     private var b64EncodeEnabled: Boolean = true // 默认启用Base64编码
     protected abstract val writer: PrintWriter? // 添加抽象的writer属性
     
@@ -91,10 +82,6 @@ abstract class LuaPandaTransporter(private val logger: DebugLogger? = null) {
     abstract fun sendMessage(message: LuaPandaMessage)
     
     // ========== 配置方法 ==========
-    
-    fun setLogLevel(level: Int) {
-        this.logLevel = level
-    }
     
     fun setMessageHandler(handler: (LuaPandaMessage) -> Unit) {
         this.messageHandler = handler
@@ -318,19 +305,15 @@ abstract class LuaPandaTransporter(private val logger: DebugLogger? = null) {
     /**
      * 根据日志级别打印信息日志
      */
-    protected fun logInfo(message: String, level: LogLevel = LogLevel.CONNECTION) {
-        if (level.value >= logLevel) {
-            logger?.println(message, LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT) ?: println(message)
-        }
+    protected fun logInfo(message: String, level: LogLevel = LogLevel.RUNTIME) {
+        logger?.log(message, level)
     }
     
     /**
      * 打印错误日志
      */
     protected fun logError(message: String, level: LogLevel = LogLevel.ERROR) {
-        if (level.value >= logLevel) {
-            logger?.println(message, LogConsoleType.NORMAL, ConsoleViewContentType.ERROR_OUTPUT) ?: println(message)
-        }
+        logger?.log(message, level)
     }
     
     /**
@@ -377,7 +360,7 @@ class LuaPandaTcpClientTransporter(
     // ========== 生命周期管理 ==========
     
     override fun start() {
-        logInfo("TCP客户端开始连接 $host:$port (自动重连: $autoReconnect)", LogLevel.CONNECTION)
+        logInfo("TCP客户端开始连接 $host:$port (自动重连: $autoReconnect)", LogLevel.RUNTIME)
         isRunning = true
         connectionFlag = false
         
@@ -386,7 +369,7 @@ class LuaPandaTcpClientTransporter(
     }
     
     override fun stop() {
-        logInfo("TCP客户端开始停止流程", LogLevel.CONNECTION)
+        logInfo("TCP客户端开始停止流程", LogLevel.RUNTIME)
         
         isRunning = false
         connectionFlag = false
@@ -397,7 +380,7 @@ class LuaPandaTcpClientTransporter(
         connectThread?.interrupt()
         connectThread = null
         
-        logInfo("TCP客户端已停止", LogLevel.CONNECTION)
+        logInfo("TCP客户端已停止", LogLevel.RUNTIME)
     }
     
     /**
@@ -424,16 +407,16 @@ class LuaPandaTcpClientTransporter(
                 // 连接断开后的处理
                 if (isRunning && autoReconnect) {
                     // 只有在启用自动重连时才重试
-                    logInfo("连接断开，1秒后尝试重新连接...", LogLevel.CONNECTION)
+                    logInfo("连接断开，1秒后尝试重新连接...", LogLevel.RUNTIME)
                     waitForRetry(retryCount)
                     retryCount++
                     
                     if (retryCount >= MAX_RETRY_COUNT) {
-                        logInfo("已达到最大重试次数 ($MAX_RETRY_COUNT)，停止重连尝试", LogLevel.CONNECTION)
+                        logInfo("已达到最大重试次数 ($MAX_RETRY_COUNT)，停止重连尝试", LogLevel.RUNTIME)
                         break
                     }
                 } else if (!autoReconnect) {
-                    logInfo("自动重连已禁用，停止连接尝试", LogLevel.CONNECTION)
+                    logInfo("自动重连已禁用，停止连接尝试", LogLevel.RUNTIME)
                     break
                 }
                 
@@ -441,13 +424,13 @@ class LuaPandaTcpClientTransporter(
                 handleConnectionError(e, retryCount)
                 
                 if (!autoReconnect) {
-                    logInfo("自动重连已禁用，连接失败后停止尝试", LogLevel.CONNECTION)
+                    logInfo("自动重连已禁用，连接失败后停止尝试", LogLevel.RUNTIME)
                     break
                 }
                 
                 retryCount++
                 if (retryCount >= MAX_RETRY_COUNT) {
-                    logInfo("已达到最大重试次数 ($MAX_RETRY_COUNT)，停止连接尝试", LogLevel.CONNECTION)
+                    logInfo("已达到最大重试次数 ($MAX_RETRY_COUNT)，停止连接尝试", LogLevel.RUNTIME)
                     break
                 }
                 
@@ -458,16 +441,16 @@ class LuaPandaTcpClientTransporter(
         // 连接循环结束，通知断开
         if (connectionFlag) {
             connectionFlag = false
-            logInfo("连接循环结束", LogLevel.CONNECTION)
+            logInfo("连接循环结束", LogLevel.RUNTIME)
             notifyConnect(false)
         }
     }
     
     private fun attemptConnection(retryCount: Int) {
         if (retryCount > 0) {
-            logInfo("尝试连接 $host:$port (第${retryCount + 1}次)", LogLevel.CONNECTION)
+            logInfo("尝试连接 $host:$port (第${retryCount + 1}次)", LogLevel.RUNTIME)
         } else {
-            logInfo("尝试连接 $host:$port", LogLevel.CONNECTION)
+            logInfo("尝试连接 $host:$port", LogLevel.RUNTIME)
         }
         
         socket = Socket()
@@ -477,7 +460,7 @@ class LuaPandaTcpClientTransporter(
         _writer = PrintWriter(socket!!.getOutputStream(), true)
         reader = BufferedReader(InputStreamReader(socket!!.getInputStream()))
         
-        logInfo("TCP客户端连接成功", LogLevel.CONNECTION)
+        logInfo("TCP客户端连接成功", LogLevel.RUNTIME)
         
         isConnected = true
         connectionFlag = true
@@ -493,13 +476,13 @@ class LuaPandaTcpClientTransporter(
                 if (line != null) {
                     processReceivedMessage(line)
                 } else {
-                    logInfo("检测到连接断开（readLine返回null）", LogLevel.CONNECTION)
+                    logInfo("检测到连接断开（readLine返回null）", LogLevel.RUNTIME)
                     break
                 }
             } catch (e: java.net.SocketTimeoutException) {
                 continue // 读取超时，继续循环
             } catch (e: Exception) {
-                logInfo("检测到连接断开（读取异常）: ${e.message}", LogLevel.CONNECTION)
+                logInfo("检测到连接断开（读取异常）: ${e.message}", LogLevel.RUNTIME)
                 break
             }
         }
@@ -512,14 +495,14 @@ class LuaPandaTcpClientTransporter(
         
         when (e) {
             is java.net.ConnectException -> {
-                logInfo("连接被拒绝，$retryInfo", LogLevel.CONNECTION)
+                logInfo("连接被拒绝，$retryInfo", LogLevel.RUNTIME)
             }
             is java.net.SocketTimeoutException -> {
-                logInfo("连接超时，$retryInfo", LogLevel.CONNECTION)
+                logInfo("连接超时，$retryInfo", LogLevel.RUNTIME)
             }
             else -> {
-                logError("TCP客户端连接异常: ${e.message}", LogLevel.CONNECTION)
-                logInfo(retryInfo, LogLevel.CONNECTION)
+                logError("TCP客户端连接异常: ${e.message}", LogLevel.RUNTIME)
+                logInfo(retryInfo, LogLevel.RUNTIME)
             }
         }
     }
@@ -606,7 +589,7 @@ class LuaPandaTcpServerTransporter(
     // ========== 生命周期管理 ==========
     
     override fun start() {
-        logInfo("TCP服务器监听端口 $port", LogLevel.CONNECTION)
+        logInfo("TCP服务器监听端口 $port", LogLevel.RUNTIME)
         
         // 确保之前的线程已经停止
         if (serverThread?.isAlive == true) {
@@ -647,7 +630,7 @@ class LuaPandaTcpServerTransporter(
         }
         
         serverThread = null
-        logInfo("TCP服务器停止流程完成", LogLevel.CONNECTION)
+        logInfo("TCP服务器停止流程完成", LogLevel.RUNTIME)
     }
     
     // ========== 服务器循环 ==========
@@ -674,9 +657,9 @@ class LuaPandaTcpServerTransporter(
                         
                         if (isRunning) {
                             if (autoReconnect) {
-                                logInfo("客户端连接断开，等待重新连接...", LogLevel.CONNECTION)
+                                logInfo("客户端连接断开，等待重新连接...", LogLevel.RUNTIME)
                             } else {
-                                logInfo("客户端连接断开，自动重连已禁用，停止服务器", LogLevel.CONNECTION)
+                                logInfo("客户端连接断开，自动重连已禁用，停止服务器", LogLevel.RUNTIME)
                                 break
                             }
                         }
@@ -705,7 +688,7 @@ class LuaPandaTcpServerTransporter(
     private fun waitForClientConnection() {
         logInfo("等待客户端连接...", LogLevel.DEBUG)
         clientSocket = serverSocket!!.accept()
-        logInfo("客户端已连接: ${clientSocket!!.remoteSocketAddress}", LogLevel.CONNECTION)
+        logInfo("客户端已连接: ${clientSocket!!.remoteSocketAddress}", LogLevel.RUNTIME)
         
         _writer = PrintWriter(clientSocket!!.getOutputStream(), true)
         reader = BufferedReader(InputStreamReader(clientSocket!!.getInputStream()))
@@ -757,7 +740,7 @@ class LuaPandaTcpServerTransporter(
             serverSocket?.close()
             logInfo("服务器Socket已关闭", LogLevel.DEBUG)
         } catch (e: Exception) {
-            logInfo("关闭服务器Socket异常: ${e.message}", LogLevel.CONNECTION)
+            logInfo("关闭服务器Socket异常: ${e.message}", LogLevel.RUNTIME)
         }
         
         serverSocket = null

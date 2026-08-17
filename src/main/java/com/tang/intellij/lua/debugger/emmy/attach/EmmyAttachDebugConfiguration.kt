@@ -32,6 +32,7 @@ import com.intellij.openapi.util.JDOMExternalizerUtil
 import com.tang.intellij.lua.debugger.LuaCommandLineState
 import com.tang.intellij.lua.debugger.LuaConfigurationFactory
 import com.tang.intellij.lua.debugger.LuaRunConfiguration
+import com.tang.intellij.lua.debugger.DebugLogLevel
 import com.tang.intellij.lua.debugger.emmy.EmmyWinArch
 import com.tang.intellij.lua.lang.LuaIcons
 import org.jdom.Element
@@ -90,7 +91,7 @@ class EmmyAttachDebugConfiguration(project: Project, factory: EmmyAttachDebugger
     var autoAttachSingleProcess: Boolean = true
     var filterUEProcesses: Boolean = true  // 默认勾选过滤虚幻引擎进程
     var threadFilterBlacklist: List<String> = listOf("winlogon", "csrss", "wininit", "services")
-    var logLevel: LogLevel = LogLevel.NORMAL  // 默认日志等级为1级（普通日志）
+    var logLevel: DebugLogLevel = DebugLogLevel.RUNTIME
     var defaultName = ""
 
     /**
@@ -130,7 +131,7 @@ class EmmyAttachDebugConfiguration(project: Project, factory: EmmyAttachDebugger
         JDOMExternalizerUtil.writeField(element, "AUTO_ATTACH_SINGLE_PROCESS", autoAttachSingleProcess.toString())
         JDOMExternalizerUtil.writeField(element, "FILTER_UE_PROCESSES", filterUEProcesses.toString())
         JDOMExternalizerUtil.writeField(element, "THREAD_FILTER_BLACKLIST", threadFilterBlacklist.joinToString(","))
-        JDOMExternalizerUtil.writeField(element, "LOG_LEVEL", logLevel.level.toString())
+        JDOMExternalizerUtil.writeField(element, "LOG_LEVEL", logLevel.value.toString())
     }
 
     override fun readExternal(element: Element) {
@@ -149,10 +150,10 @@ class EmmyAttachDebugConfiguration(project: Project, factory: EmmyAttachDebugger
         val blacklistStr = JDOMExternalizerUtil.readField(element, "THREAD_FILTER_BLACKLIST")
         threadFilterBlacklist = if (blacklistStr.isNullOrEmpty()) listOf() else blacklistStr.split(",")
         val logLevelStr = JDOMExternalizerUtil.readField(element, "LOG_LEVEL")
-        logLevel = LogLevel.fromLevel(logLevelStr?.toIntOrNull() ?: 1)  // 默认为1级（普通日志）
+        logLevel = DebugLogLevel.fromValue(logLevelStr?.toIntOrNull())
     }
 
     companion object {
-        const val CURRENT_SCHEMA_VERSION = 2
+        const val CURRENT_SCHEMA_VERSION = 3
     }
 }

@@ -32,6 +32,7 @@ import com.intellij.xdebugger.frame.XExecutionStack
 import com.intellij.ui.ColoredTextContainer
 import com.intellij.ui.SimpleTextAttributes
 import com.tang.intellij.lua.debugger.LuaDebuggerEditorsProvider
+import com.tang.intellij.lua.debugger.DebugLogLevel
 import com.tang.intellij.lua.psi.LuaFileUtil
 import com.google.gson.Gson
 import com.google.gson.JsonObject
@@ -129,7 +130,10 @@ class LuaPandaStackFrame(
             XDebuggerUtil.getInstance().createPosition(file, lineNumber - 1) // Convert to 0-based
         } else {
             // 如果找不到文件，记录日志以便调试
-            println("LuaPanda: 无法找到源文件: $filePath (oPath: ${stack.oPath}, file: ${stack.file})")
+            debugProcess.logWithLevel(
+                "LuaPanda: 无法找到源文件: $filePath (oPath: ${stack.oPath}, file: ${stack.file})",
+                DebugLogLevel.WARNING
+            )
             null
         }
     }
@@ -178,7 +182,7 @@ class LuaPandaStackFrame(
                     
                     node.addChildren(children, true)
                 } catch (e: Exception) {
-                    println(" 解析栈帧变量响应失败: ${e.message}")
+                    debugProcess.logWithLevel("解析栈帧变量响应失败: ${e.message}", DebugLogLevel.ERROR)
                     node.addChildren(XValueChildrenList.EMPTY, true)
                 }
             }, 0)
@@ -275,7 +279,7 @@ class LuaPandaValue(
                     
                     node.addChildren(children, true)
                 } catch (e: Exception) {
-                    println(" 解析getVariable响应失败: ${e.message}")
+                    debugProcess.logWithLevel("解析 getVariable 响应失败: ${e.message}", DebugLogLevel.ERROR)
                     node.addChildren(XValueChildrenList.EMPTY, true)
                 }
             }, 0)

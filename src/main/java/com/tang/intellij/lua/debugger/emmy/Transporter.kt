@@ -16,11 +16,10 @@
 
 package com.tang.intellij.lua.debugger.emmy
 
-import com.intellij.execution.ui.ConsoleViewContentType
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.util.SystemInfoRt
+import com.tang.intellij.lua.debugger.DebugLogLevel
 import com.tang.intellij.lua.debugger.DebugLogger
-import com.tang.intellij.lua.debugger.LogConsoleType
 import org.scalasbt.ipcsocket.UnixDomainServerSocket
 import org.scalasbt.ipcsocket.UnixDomainSocket
 import org.scalasbt.ipcsocket.Win32NamedPipeServerSocket
@@ -85,7 +84,7 @@ abstract class Transporter {
             try {
                 handler?.onReceiveMessage(type, json)
             } catch (e: Exception) {
-                logger?.error(e.message ?: "Protocol callback failed")
+                logger?.log("Emmy protocol callback failed: ${e.message}", DebugLogLevel.ERROR)
             }
         }
     }
@@ -127,7 +126,7 @@ abstract class SocketChannelTransporter : Transporter() {
             }
         }
         send(StopSign())
-        println(">>> stop receive")
+        logger?.log("Emmy transport receive loop stopped", DebugLogLevel.DEBUG)
     }
 
     private fun doSend() {
@@ -142,7 +141,7 @@ abstract class SocketChannelTransporter : Transporter() {
                 break
             }
         }
-        println(">>> stop send")
+        logger?.log("Emmy transport send loop stopped", DebugLogLevel.DEBUG)
     }
 
     override fun close() {
@@ -185,7 +184,7 @@ class SocketServerTransporter(val host: String, val port: Int) : SocketChannelTr
 
     override fun start() {
         server.bind(InetSocketAddress(InetAddress.getByName(host), port))
-        logger?.println("Server($host:$port) open successfully, wait for connection...", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+        logger?.log("Emmy TCP server listening on $host:$port", DebugLogLevel.RUNTIME)
         ApplicationManager.getApplication().executeOnPooledThread {
             while (!stopped) {
                 val channel = try {
@@ -197,7 +196,7 @@ class SocketServerTransporter(val host: String, val port: Int) : SocketChannelTr
                     try {
                         channel.close()
                     } catch (e: Exception) {
-                        e.printStackTrace()
+                        logger?.log("关闭多余的 Emmy TCP 连接失败: ${e.message}", DebugLogLevel.WARNING)
                     }
                 } else {
                     socket = channel
@@ -232,7 +231,7 @@ class PipelineClientTransporter(val name: String) : SocketChannelTransporter() {
         } else {
             UnixDomainSocket(getPipename(name))
         }
-        logger?.println("Pipeline($name) connect successfully.", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+        logger?.log("Emmy pipeline '$name' connected", DebugLogLevel.RUNTIME)
         run()
         onConnect(true)
     }
@@ -270,15 +269,14 @@ class PipelineServerTransporter(val name: String) : SocketChannelTransporter() {
             }
             UnixDomainServerSocket(pipeName)
         }
-        logger?.println("Pipeline($name) open successfully, wait for connection...", LogConsoleType.NORMAL, ConsoleViewContentType.SYSTEM_OUTPUT)
+        logger?.log("Emmy pipeline '$name' listening", DebugLogLevel.RUNTIME)
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
                 client = pipe?.accept()
                 run()
                 onConnect(true)
             } catch (e: Exception) {
-                println(e)
-                logger?.println(e.message ?: "Unknown error.", LogConsoleType.NORMAL, ConsoleViewContentType.ERROR_OUTPUT)
+                logger?.log("Emmy pipeline connection failed: ${e.message}", DebugLogLevel.ERROR)
             }
         }
     }

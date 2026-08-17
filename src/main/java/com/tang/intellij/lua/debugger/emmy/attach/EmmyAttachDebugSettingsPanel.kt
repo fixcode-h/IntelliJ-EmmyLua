@@ -22,6 +22,7 @@ import com.intellij.openapi.util.SystemInfoRt
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.JBUI
 import com.tang.intellij.lua.debugger.emmy.EmmyWinArch
+import com.tang.intellij.lua.debugger.DebugLogLevel
 import org.jetbrains.annotations.NotNull
 import java.awt.BorderLayout
 import javax.swing.*
@@ -40,7 +41,7 @@ class EmmyAttachDebugSettingsPanel(private val project: Project) : SettingsEdito
     private val autoAttachSingleCheckBox = JCheckBox("自动附加单个进程")
     private val filterUEProcessesCheckBox = JCheckBox("过滤虚幻引擎进程")
 
-    private val logLevelComboBox = JComboBox(LogLevel.values())
+    private val logLevelComboBox = JComboBox(DebugLogLevel.entries.toTypedArray())
 
     private val panel: JPanel
     private val processSelector = ProcessSelector(project)
@@ -74,8 +75,8 @@ class EmmyAttachDebugSettingsPanel(private val project: Project) : SettingsEdito
         logLevelComboBox.addActionListener { fireEditorStateChanged() }
         
         // 设置日志等级默认值和提示
-        logLevelComboBox.selectedItem = LogLevel.NORMAL
-        logLevelComboBox.toolTipText = "设置日志输出等级：0=调试日志，1=普通日志，2=警告日志，3=错误日志"
+        logLevelComboBox.selectedItem = DebugLogLevel.RUNTIME
+        logLevelComboBox.toolTipText = "设置日志输出等级：Log0=调试，Log1=运行，Log2=警告，Log3=错误"
 
         // 创建面板布局
         panel = createPanel()
@@ -184,7 +185,7 @@ class EmmyAttachDebugSettingsPanel(private val project: Project) : SettingsEdito
         configuration.captureLog = captureLogCheckBox.isSelected
         configuration.autoAttachSingleProcess = autoAttachSingleCheckBox.isSelected
         configuration.filterUEProcesses = filterUEProcessesCheckBox.isSelected
-        configuration.logLevel = logLevelComboBox.selectedItem as LogLevel
+        configuration.logLevel = logLevelComboBox.selectedItem as DebugLogLevel
         // 使用插件设置中的黑名单
         configuration.threadFilterBlacklist = emptyList()
     }

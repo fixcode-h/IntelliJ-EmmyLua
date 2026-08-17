@@ -8,7 +8,7 @@
 ---@field minLogLevel number 最低日志级别
 local EmmyLog = {
     enableLog = true,  -- 全局开关，默认开启
-    minLogLevel = 0,   -- 默认 Info 级别
+    minLogLevel = 0,   -- 保留 Log0 调试消息，由 IDE 会话日志等级统一过滤
 }
 
 ---@enum LogLevel

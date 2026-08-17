@@ -1,7 +1,7 @@
 package com.tang.intellij.lua.debugger.emmy.attach
 
-import com.intellij.execution.ui.ConsoleViewContentType
 import com.intellij.openapi.util.SystemInfoRt
+import com.tang.intellij.lua.debugger.DebugLogLevel
 import com.tang.intellij.lua.debugger.emmy.EmmyTargetBootstrap
 import com.tang.intellij.lua.debugger.emmy.SocketClientTransporter
 import com.tang.intellij.lua.debugger.emmy.Transporter
@@ -9,7 +9,7 @@ import java.io.File
 
 class EmmyAttachTargetBootstrap(
     private val configuration: EmmyAttachDebugConfiguration,
-    private val log: (String, LogLevel, ConsoleViewContentType?) -> Unit
+    private val log: (String, DebugLogLevel) -> Unit
 ) : EmmyTargetBootstrap {
     private var attachedPid = 0
 
@@ -20,7 +20,7 @@ class EmmyAttachTargetBootstrap(
         val detectedArch = ProcessUtils.detectProcessArch(configuration.pid)
         val configuredArch = configuration.winArch.toWinArch()
         val selectedArch = if (detectedArch != configuredArch) {
-            log("检测到进程架构为 $detectedArch，配置为 $configuredArch，将使用检测结果", LogLevel.WARNING, null)
+            log("检测到进程架构为 $detectedArch，配置为 $configuredArch，将使用检测结果", DebugLogLevel.WARNING)
             detectedArch
         } else {
             configuredArch
@@ -34,7 +34,7 @@ class EmmyAttachTargetBootstrap(
 
         runAttachTool(toolPath, hookPath, toolDir)
         attachedPid = configuration.pid
-        log("成功附加到进程 ${configuration.pid}", LogLevel.NORMAL, null)
+        log("成功附加到进程 ${configuration.pid}", DebugLogLevel.RUNTIME)
 
         if (configuration.captureLog) {
             startLogCapture(toolPath, toolDir)
@@ -50,7 +50,7 @@ class EmmyAttachTargetBootstrap(
 
     override fun stop() {
         if (attachedPid != 0) {
-            log("附加会话已释放；注入 DLL 由目标进程持有到进程退出", LogLevel.DEBUG, null)
+            log("附加会话已释放；注入 DLL 由目标进程持有到进程退出", DebugLogLevel.DEBUG)
             attachedPid = 0
         }
     }
@@ -68,14 +68,14 @@ class EmmyAttachTargetBootstrap(
         )
         if (configuration.captureLog) commands += "-capture-log"
 
-        log("执行附加命令: ${commands.joinToString(" ")}", LogLevel.DEBUG, null)
+        log("执行附加命令: ${commands.joinToString(" ")}", DebugLogLevel.DEBUG)
         val process = ProcessBuilder(commands)
             .directory(toolDir)
             .redirectErrorStream(true)
             .start()
 
         process.inputStream.bufferedReader().useLines { lines ->
-            lines.forEach { line -> log("attach: $line", LogLevel.DEBUG, null) }
+            lines.forEach { line -> log("attach: $line", DebugLogLevel.DEBUG) }
         }
         val exitCode = process.waitFor()
         check(exitCode == 0) { "附加失败，emmy_tool 退出码: $exitCode" }
@@ -88,9 +88,9 @@ class EmmyAttachTargetBootstrap(
                 .redirectErrorStream(true)
                 .redirectOutput(ProcessBuilder.Redirect.DISCARD)
                 .start()
-            log("已启动目标进程日志捕获", LogLevel.DEBUG, null)
+            log("已启动目标进程日志捕获", DebugLogLevel.DEBUG)
         } catch (error: Exception) {
-            log("启动日志捕获失败: ${error.message}", LogLevel.WARNING, ConsoleViewContentType.LOG_WARNING_OUTPUT)
+            log("启动日志捕获失败: ${error.message}", DebugLogLevel.WARNING)
         }
     }
 
@@ -98,11 +98,11 @@ class EmmyAttachTargetBootstrap(
         val analysis = ProcessUtils.analyzeProcessModules(configuration.pid, arch)
         when {
             analysis.errorMessage != null ->
-                log("模块分析失败: ${analysis.errorMessage}", LogLevel.WARNING, null)
+                log("模块分析失败: ${analysis.errorMessage}", DebugLogLevel.WARNING)
             analysis.hasLuaRuntime ->
-                log("检测到 Lua 运行时: ${analysis.luaModules.joinToString()}", LogLevel.DEBUG, null)
+                log("检测到 Lua 运行时: ${analysis.luaModules.joinToString()}", DebugLogLevel.DEBUG)
             else ->
-                log("未检测到标准 Lua 运行时，调试连接可能失败", LogLevel.WARNING, null)
+                log("未检测到标准 Lua 运行时，调试连接可能失败", DebugLogLevel.WARNING)
         }
     }
 }

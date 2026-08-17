@@ -17,6 +17,7 @@
 package com.tang.intellij.lua.debugger.emmy
 
 import com.intellij.xdebugger.XDebugSession
+import com.tang.intellij.lua.debugger.DebugLogLevel
 
 interface IEvalResultHandler {
     fun handleMessage(msg: EvalRsp)
@@ -24,6 +25,9 @@ interface IEvalResultHandler {
 
 open class EmmyDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(session) {
     private val configuration = session.runProfile as EmmyDebugConfiguration
+
+    override val minimumLogLevel: DebugLogLevel
+        get() = configuration.logLevel
 
     override fun createTargetBootstrap(): EmmyTargetBootstrap =
         ConfiguredEmmyTargetBootstrap(configuration)

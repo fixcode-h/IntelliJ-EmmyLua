@@ -29,6 +29,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.InvalidDataException
 import com.intellij.openapi.util.WriteExternalException
 import com.tang.intellij.lua.debugger.LuaRunConfiguration
+import com.tang.intellij.lua.debugger.DebugLogLevel
 import org.jdom.Element
 
 class LuaPandaDebugConfiguration(
@@ -42,7 +43,7 @@ class LuaPandaDebugConfiguration(
     var port: Int = 8818
     var stopOnEntry: Boolean = false
     var useCHook: Boolean = true
-    var logLevel: Int = 1
+    var logLevel: DebugLogLevel = DebugLogLevel.RUNTIME
     var stopConfirmTimeout: Int = 3
     var autoReconnect: Boolean = true  // 自动重连配置，默认开启
     
@@ -90,7 +91,7 @@ class LuaPandaDebugConfiguration(
         port = element.getAttributeValue("port")?.toIntOrNull() ?: 8818
         stopOnEntry = element.getAttributeValue("stopOnEntry")?.toBoolean() ?: false
         useCHook = element.getAttributeValue("useCHook")?.toBoolean() ?: true
-        logLevel = element.getAttributeValue("logLevel")?.toIntOrNull() ?: 1
+        logLevel = DebugLogLevel.fromValue(element.getAttributeValue("logLevel")?.toIntOrNull())
         stopConfirmTimeout = element.getAttributeValue("stopConfirmTimeout")?.toIntOrNull() ?: 3
         autoReconnect = element.getAttributeValue("autoReconnect")?.toBoolean() ?: true
         
@@ -112,7 +113,7 @@ class LuaPandaDebugConfiguration(
         element.setAttribute("port", port.toString())
         element.setAttribute("stopOnEntry", stopOnEntry.toString())
         element.setAttribute("useCHook", useCHook.toString())
-        element.setAttribute("logLevel", logLevel.toString())
+        element.setAttribute("logLevel", logLevel.value.toString())
         element.setAttribute("stopConfirmTimeout", stopConfirmTimeout.toString())
         element.setAttribute("autoReconnect", autoReconnect.toString())
         
@@ -126,6 +127,6 @@ class LuaPandaDebugConfiguration(
     }
 
     companion object {
-        const val CURRENT_SCHEMA_VERSION = 2
+        const val CURRENT_SCHEMA_VERSION = 3
     }
 }

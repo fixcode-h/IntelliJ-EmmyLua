@@ -16,7 +16,6 @@
 
 package com.tang.intellij.lua.debugger
 
-import com.intellij.execution.ui.ConsoleViewContentType
 import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.openapi.application.ApplicationManager
@@ -40,6 +39,9 @@ import com.intellij.xdebugger.impl.actions.XDebuggerActions
  */
 abstract class LuaDebugProcess protected constructor(session: XDebugSession) : XDebugProcess(session), DebugLogger {
 
+    protected open val minimumLogLevel: DebugLogLevel
+        get() = DebugLogLevel.RUNTIME
+
     override fun sessionInitialized() {
         super.sessionInitialized()
         session.setPauseActionSupported(true)
@@ -53,26 +55,17 @@ abstract class LuaDebugProcess protected constructor(session: XDebugSession) : X
         topToolbar.remove(actionManager.getAction(XDebuggerActions.FORCE_STEP_INTO))
     }
 
-    override fun print(text: String, consoleType: LogConsoleType, contentType: ConsoleViewContentType) {
-        // 安全地访问控制台视图，如果不可用则使用标准输出
+    final override fun log(text: String, level: DebugLogLevel) {
+        if (!level.isEnabledFor(minimumLogLevel)) return
         val consoleView = session.consoleView
         if (consoleView != null) {
-            consoleView.print(text, contentType)
+            consoleView.print("$text\n", level.contentType)
         } else {
-            // 控制台视图不可用时，使用标准输出作为回退
-            kotlin.io.print(text)
+            kotlin.io.println(text)
         }
     }
 
-    override fun println(text: String, consoleType: LogConsoleType, contentType: ConsoleViewContentType) {
-        print("$text\n", consoleType, contentType)
-    }
-
-    override fun error(text: String, consoleType: LogConsoleType) {
-        print("$text\n", consoleType, ConsoleViewContentType.ERROR_OUTPUT)
-    }
-
-    override fun printHyperlink(text: String, consoleType: LogConsoleType, handler: (project: Project) -> Unit) {
+    override fun printHyperlink(text: String, handler: (project: Project) -> Unit) {
         // 安全地访问控制台视图，如果不可用则使用标准输出
         val consoleView = session.consoleView
         if (consoleView != null) {

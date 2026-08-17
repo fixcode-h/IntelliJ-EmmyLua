@@ -31,6 +31,7 @@ import com.intellij.openapi.util.JDOMExternalizerUtil
 import com.tang.intellij.lua.debugger.LuaCommandLineState
 import com.tang.intellij.lua.debugger.LuaConfigurationFactory
 import com.tang.intellij.lua.debugger.LuaRunConfiguration
+import com.tang.intellij.lua.debugger.DebugLogLevel
 import com.tang.intellij.lua.lang.LuaIcons
 import org.jdom.Element
 import javax.swing.Icon
@@ -106,6 +107,7 @@ class EmmyDebugConfiguration(project: Project, factory: EmmyDebuggerConfiguratio
     var port = 9966
     var winArch = EmmyWinArch.X64
     var pipeName = "emmy"
+    var logLevel = DebugLogLevel.RUNTIME
 
     override fun getConfigurationEditor(): SettingsEditor<out RunConfiguration> {
         val group = SettingsEditorGroup<EmmyDebugConfiguration>()
@@ -129,6 +131,7 @@ class EmmyDebugConfiguration(project: Project, factory: EmmyDebuggerConfiguratio
         JDOMExternalizerUtil.writeField(element, "PORT", port.toString())
         JDOMExternalizerUtil.writeField(element, "PIPE", pipeName)
         JDOMExternalizerUtil.writeField(element, "WIN_ARCH", winArch.configId)
+        JDOMExternalizerUtil.writeField(element, "LOG_LEVEL", logLevel.value.toString())
     }
 
     override fun readExternal(element: Element) {
@@ -144,9 +147,10 @@ class EmmyDebugConfiguration(project: Project, factory: EmmyDebuggerConfiguratio
         }
         EmmyDebugTransportType.fromStoredValue(JDOMExternalizerUtil.readField(element, "TYPE"))?.let { type = it }
         EmmyWinArch.fromStoredValue(JDOMExternalizerUtil.readField(element, "WIN_ARCH"))?.let { winArch = it }
+        logLevel = DebugLogLevel.fromValue(JDOMExternalizerUtil.readField(element, "LOG_LEVEL")?.toIntOrNull())
     }
 
     companion object {
-        const val CURRENT_SCHEMA_VERSION = 2
+        const val CURRENT_SCHEMA_VERSION = 3
     }
 }

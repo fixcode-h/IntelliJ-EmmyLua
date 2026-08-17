@@ -17,7 +17,6 @@
 package com.tang.intellij.lua.debugger.emmy
 
 import com.google.gson.Gson
-import com.intellij.execution.ui.ConsoleViewContentType
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.util.Key
 import com.intellij.xdebugger.XDebugSession
@@ -46,10 +45,9 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
     private val lifecycle = DebugSessionEventLoop(
         threadName = "Emmy-Session",
         transitionListener = { transition ->
-            println(
+            log(
                 "Emmy session: ${transition.previous} --${transition.event}--> ${transition.current}",
-                LogConsoleType.EMMY,
-                ConsoleViewContentType.LOG_DEBUG_OUTPUT
+                DebugLogLevel.DEBUG
             )
         },
         errorHandler = { error -> this.error("Emmy session event failed: ${error.message}") }
@@ -260,20 +258,12 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
 
             MessageCMD.LogNotify -> {
                 val notify = Gson().fromJson(json, LogNotify::class.java)
-                // type: 0=Debug, 1=Info, 2=Warning, 3=Error
-                val contentType = when (notify.type) {
-                    0 -> ConsoleViewContentType.LOG_DEBUG_OUTPUT    // Debug
-                    1 -> ConsoleViewContentType.SYSTEM_OUTPUT       // Info
-                    2 -> ConsoleViewContentType.LOG_WARNING_OUTPUT  // Warning
-                    3 -> ConsoleViewContentType.ERROR_OUTPUT        // Error
-                    else -> ConsoleViewContentType.SYSTEM_OUTPUT
-                }
-                println(notify.message, LogConsoleType.NORMAL, contentType)
+                log(notify.message, DebugLogLevel.fromValue(notify.type))
             }
 
             else -> {
                 if (!handleBackendMessage(cmd, json)) {
-                    println("Unknown message: $cmd")
+                    log("Unknown Emmy message: $cmd", DebugLogLevel.DEBUG)
                 }
             }
         }
