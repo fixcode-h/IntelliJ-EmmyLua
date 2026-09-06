@@ -1,0 +1,3 @@
+[submodule "EmmyLuaDebugger"]
+	path = EmmyLuaDebugger
+	url = git@github.com:fixcode-h/EmmyLuaDebugger.git
