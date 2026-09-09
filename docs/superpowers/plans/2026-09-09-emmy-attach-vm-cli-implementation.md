@@ -497,7 +497,7 @@ CLI 请求与响应的最小形态：
 
   运行 CLI protocol 和 IDEA tests；增加 stale descriptor、未信任项目脱敏、NDJSON done/cancel、并发限流和 endpoint 清理测试；提交 `CLI：增加 IDEA 调试会话只读网关基础`。
 
-当前进度说明：任务 8 已完成独立 JSONL DTO、只读 Gateway 核心、loopback IPC listener、descriptor 原子写入/过期清理和基础脱敏测试；Windows named-pipe 优先适配、wait/cancel 流和 IDEA Application 生命周期服务注册仍未完成。
+当前进度说明：任务 8 已完成独立 JSONL DTO、只读 Gateway 核心、loopback IPC listener、descriptor 原子写入/过期清理和基础脱敏测试；Windows named-pipe 优先适配、wait/cancel 流和 IDEA Application 生命周期服务注册仍未完成。当前环境的 JVM loopback socket 被系统策略阻断，server 集成测试会自动跳过，协议/Gateway 单元测试仍可独立验证。
 
 ### 任务 9：CLI 控制、授权租约与 AI Probe
 
