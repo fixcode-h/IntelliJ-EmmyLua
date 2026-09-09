@@ -4,6 +4,9 @@ package com.tang.intellij.lua.debugger.emmy
 interface EmmyTargetBootstrap {
     fun prepareTransports(): List<Transporter>
 
+    /** Reconnect candidates for an already prepared target. */
+    fun prepareReconnectTransports(): List<Transporter> = prepareTransports()
+
     /** Optional one-shot token used by attach-mode Agent authentication. */
     val authToken: String?
         get() = null

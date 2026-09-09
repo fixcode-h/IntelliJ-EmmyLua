@@ -1,5 +1,6 @@
 package com.tang.intellij.lua.debugger.emmy.attach
 
+import com.google.gson.JsonParser
 import com.intellij.openapi.util.SystemInfoRt
 import com.tang.intellij.lua.debugger.DebugLogLevel
 import com.tang.intellij.lua.debugger.emmy.EmmyTargetBootstrap
@@ -13,6 +14,7 @@ class EmmyAttachTargetBootstrap(
     private val log: (String, DebugLogLevel) -> Unit
 ) : EmmyTargetBootstrap {
     private var attachedPid = 0
+    private var debugPort = 0
     private var generatedAuthToken: String? = null
 
     override val authToken: String?
@@ -47,10 +49,17 @@ class EmmyAttachTargetBootstrap(
         }
         reportLuaRuntime(selectedArch)
 
-        Thread.sleep(100)
         val port = ProcessUtils.getPortFromPid(attachedPid)
+        debugPort = port
         return listOf("127.0.0.1", "::1", "localhost").map { host ->
             SocketClientTransporter(host, port)
+        }
+    }
+
+    override fun prepareReconnectTransports(): List<Transporter> {
+        check(debugPort > 0) { "附加调试端点尚未准备完成" }
+        return listOf("127.0.0.1", "::1", "localhost").map { host ->
+            SocketClientTransporter(host, debugPort)
         }
     }
 
@@ -59,6 +68,7 @@ class EmmyAttachTargetBootstrap(
             log("附加会话已释放；注入 DLL 由目标进程持有到进程退出", DebugLogLevel.DEBUG)
             attachedPid = 0
         }
+        debugPort = 0
         generatedAuthToken = null
     }
 
@@ -86,11 +96,24 @@ class EmmyAttachTargetBootstrap(
             .redirectErrorStream(true)
             .start()
 
+        var bootstrapStatus: com.google.gson.JsonObject? = null
         process.inputStream.bufferedReader().useLines { lines ->
-            lines.forEach { line -> log("attach: $line", DebugLogLevel.DEBUG) }
+            lines.forEach { line ->
+                log("attach: $line", DebugLogLevel.DEBUG)
+                val parsed = runCatching { JsonParser.parseString(line).asJsonObject }.getOrNull()
+                if (parsed?.get("schemaVersion")?.asInt == 1) bootstrapStatus = parsed
+            }
         }
         val exitCode = process.waitFor()
         check(exitCode == 0) { "附加失败，emmy_tool 退出码: $exitCode" }
+        val status = checkNotNull(bootstrapStatus) { "附加工具未返回结构化启动状态" }
+        check(status.get("status")?.asString == "auth-ready") {
+            if (status.get("alreadyAttached")?.asBoolean == true) {
+                "目标进程已有 Emmy Agent，当前无法安全重协商认证 token"
+            } else {
+                "Emmy Agent 未进入 auth-ready 状态: ${status.get("status")?.asString}"
+            }
+        }
     }
 
     private fun generateAuthToken(): String {

@@ -39,6 +39,7 @@ import java.io.IOException
 import java.util.IdentityHashMap
 import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(session), ITransportHandler {
     private val editorsProvider = LuaDebuggerEditorsProvider()
@@ -53,6 +54,8 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
     private var idCounter = 0;
     private var temporaryBreakpoint: BreakPoint? = null
     private val failureTerminationStarted = AtomicBoolean()
+    private val reconnectStopped = AtomicBoolean()
+    private val reconnectAttempt = AtomicInteger(0)
     protected var transporter: Transporter? = null
     private lateinit var targetBootstrap: EmmyTargetBootstrap
     private val lifecycle = DebugSessionController(
@@ -72,6 +75,8 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
 
     override fun sessionInitialized() {
         super.sessionInitialized()
+        reconnectStopped.set(false)
+        reconnectAttempt.set(0)
         sessionGeneration = lifecycle.start()
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
@@ -218,15 +223,21 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
     
     final override fun onConnect(suc: Boolean) {
         if (suc) {
+            reconnectAttempt.set(0)
             lifecycle.post(sessionGeneration, DebugSessionEvent.CONNECTED) {
                 ApplicationManager.getApplication().runReadAction {
                     sendInitReq()
                 }
             }
         } else {
-            lifecycle.post(sessionGeneration, DebugSessionEvent.FAILED) {
-                this.error("调试传输连接失败")
-                terminateFailedSession()
+            val attempt = reconnectAttempt.get()
+            if (attempt > 0 && !reconnectStopped.get()) {
+                scheduleReconnect(attempt + 1)
+            } else {
+                lifecycle.post(sessionGeneration, DebugSessionEvent.FAILED) {
+                    this.error("调试传输连接失败")
+                    terminateFailedSession()
+                }
             }
         }
     }
@@ -235,6 +246,8 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
         cancelEvaluationsThen(IOException("Emmy transport disconnected")) {
             if (lifecycle.state == DebugSessionState.STOPPING) {
                 finishStop()
+            } else if (!reconnectStopped.get() && ::targetBootstrap.isInitialized) {
+                scheduleReconnect(1)
             } else {
                 lifecycle.post(sessionGeneration, DebugSessionEvent.FAILED) {
                     this.error("调试传输连接已断开")
@@ -301,6 +314,34 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
                 true
             }
             else -> false
+        }
+    }
+
+    private fun scheduleReconnect(attempt: Int) {
+        if (reconnectStopped.get() || session.isStopped) return
+        if (attempt > 4) {
+            lifecycle.post(sessionGeneration, DebugSessionEvent.FAILED) {
+                this.error("调试传输重连达到最大次数")
+                terminateFailedSession()
+            }
+            return
+        }
+        if (!reconnectAttempt.compareAndSet(attempt - 1, attempt)) return
+        lifecycle.post(sessionGeneration, DebugSessionEvent.RECONNECTING) {
+            log("Emmy 连接断开，准备第 $attempt 次重连", DebugLogLevel.RUNTIME)
+        }
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val delay = (200L shl (attempt - 1)).coerceAtMost(3_000L)
+            try {
+                Thread.sleep(delay)
+            } catch (_: InterruptedException) {
+                return@executeOnPooledThread
+            }
+            if (reconnectStopped.get() || session.isStopped) return@executeOnPooledThread
+            lifecycle.execute(sessionGeneration) {
+                if (reconnectStopped.get() || !::targetBootstrap.isInitialized) return@execute
+                startTransportCandidates(targetBootstrap.prepareReconnectTransports())
+            }
         }
     }
 
@@ -432,6 +473,7 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
     }
 
     final override fun stop() {
+        reconnectStopped.set(true)
         clearInlineSnapshot()
         cancelEvaluationsThen(CancellationException("Emmy debug session stopped")) {
             lifecycle.post(sessionGeneration, DebugSessionEvent.STOP_REQUESTED) {
@@ -462,6 +504,7 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
 
     private fun terminateFailedSession() {
         if (!failureTerminationStarted.compareAndSet(false, true)) return
+        reconnectStopped.set(true)
         clearInlineSnapshot()
         temporaryBreakpoint = null
         cancelEvaluationsThen(IOException("Emmy debug target stopped")) {

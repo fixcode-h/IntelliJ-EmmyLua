@@ -241,7 +241,7 @@ bool ReconcileExistingVms(NativeVmRegistry& destination);
 
   子模块提交：`git commit -m "协议：补齐 Emmy 握手响应与 VM 生命周期事件"`。父仓库提交：`git commit -m "同步：更新 Emmy 协议事件子模块"`。
 
-当前进度说明：任务 3 已完成 wire id、ProtocolSession、InitRsp/ReadyRsp、vm.snapshot、vm.lifecycle、Host/Hook fallback discovery、IDEA v2 分发、接收/发送 frame 上限、解析错误隔离，以及可选 token 认证和失败断开；认证 token 的重复附加重协商、重连退避及 Attach bootstrap machine-readable 状态仍未完成，不能将任务 3 视为整体完成。
+当前进度说明：任务 3 已完成 wire id、ProtocolSession、InitRsp/ReadyRsp、vm.snapshot、vm.lifecycle、Host/Hook fallback discovery、IDEA v2 分发、接收/发送 frame 上限、解析错误隔离、可选 token 认证、失败断开、有限重连以及 Attach bootstrap machine-readable 状态；认证 token 的重复附加重协商、完整旧请求 epoch 淘汰、指数退避终态和 rollback 证据仍未完成，不能将任务 3 视为整体完成。
 
 ### 任务 4：per-VM Debugger、HookState 与控制路由
 
