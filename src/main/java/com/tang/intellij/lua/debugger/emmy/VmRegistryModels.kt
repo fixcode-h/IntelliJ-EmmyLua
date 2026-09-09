@@ -8,6 +8,8 @@ enum class VmApplyStatus {
     INVALID
 }
 
+enum class LegacyAttachStatus { REGISTERED, AMBIGUOUS }
+
 data class VmApplyResult(
     val status: VmApplyStatus,
     val vmId: String? = null,
@@ -26,5 +28,8 @@ data class VmRecordModel(
     val discovery: String,
     val diagnosticStateAddress: String?,
     val lastEventSeq: Long,
-    val activePauseId: Long? = null
+    val activePauseId: Long? = null,
+    val connectionEpoch: Long? = null,
+    val contextGeneration: Long? = null,
+    val sourceEpoch: Long? = null
 )

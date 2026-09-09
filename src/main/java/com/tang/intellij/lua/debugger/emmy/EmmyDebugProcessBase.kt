@@ -119,6 +119,7 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
                 } catch (error: Throwable) {
                     lastError = error
                     runCatching { candidate.close() }
+                    if (transporter === candidate) transporter = null
                 }
             }
             lifecycle.post(sessionGeneration, DebugSessionEvent.FAILED) {
@@ -249,6 +250,7 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
 
     final override fun onDisconnect() {
         pauseSnapshots.clear()
+        vmRegistry.invalidateAllPauses()
         cancelEvaluationsThen(IOException("Emmy transport disconnected")) {
             if (lifecycle.state == DebugSessionState.STOPPING) {
                 finishStop()
@@ -269,15 +271,19 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
 
             MessageCMD.BreakNotify -> {
                 val data = Gson().fromJson(json, BreakNotify::class.java)
-                if (data.vmId != null && data.pauseId != null) {
-                    vmRegistry.setPause(data.vmId, data.pauseId)
-                    pauseSnapshots.put(
-                        PauseSnapshot(
-                            vmId = data.vmId,
-                            pauseId = data.pauseId,
+                val vmId = data.vmId
+                val pauseId = data.pauseId
+                if (vmId != null && pauseId != null) {
+                    vmRegistry.setPause(vmId, pauseId)
+                    val pause = PauseSnapshot(
+                            vmId = vmId,
+                            pauseId = pauseId,
+                            threadId = data.threadId,
+                            scope = data.pauseScope ?: "THREAD",
+                            consistency = data.consistency ?: "THREAD_ONLY",
                             stacks = data.stacks
                         )
-                    )
+                    if (!pauseSnapshots.offer(pause).shouldPresent) return
                 }
                 onBreak(data)
             }
@@ -335,11 +341,55 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
                     val lifecycle = envelope.payload?.let {
                         EmmyJson.gson.fromJson(it, VmLifecycleDto::class.java)
                     }
-                    if (lifecycle?.current == "CLOSING" || lifecycle?.current == "CLOSED") {
+                    if (lifecycle != null && (lifecycle.current == "CLOSING" || lifecycle.current == "CLOSED" ||
+                            lifecycle.contextGeneration != null || lifecycle.sourceEpoch != null)) {
                         pauseSnapshots.invalidate(lifecycle.vmId)
                     }
                 }
                 log("Emmy v2 ${envelope.type} received: ${result.status}", DebugLogLevel.DEBUG)
+                true
+            }
+            "debug.paused" -> {
+                if (!vmRegistry.acceptsEpoch(envelope.agentSessionId, envelope.connectionEpoch)) return true
+                val paused = envelope.payload?.let {
+                    EmmyJson.gson.fromJson(it, DebugPausedDto::class.java)
+                }
+                val vmId = envelope.target?.vmId
+                if (paused != null && vmId != null) {
+                    vmRegistry.setPause(vmId, paused.pauseId)
+                    val pause = PauseSnapshot(
+                            vmId = vmId,
+                            pauseId = paused.pauseId,
+                            threadId = paused.threadId,
+                            scope = paused.pauseScope,
+                            consistency = paused.consistency,
+                            stacks = paused.stacks,
+                            connectionEpoch = envelope.connectionEpoch,
+                            contextGeneration = envelope.contextGeneration,
+                            sourceEpoch = envelope.sourceEpoch
+                        )
+                    if (!pauseSnapshots.offer(pause).shouldPresent) return true
+                    onBreak(BreakNotify(
+                        stacks = paused.stacks,
+                        vmId = vmId,
+                        pauseId = paused.pauseId,
+                        threadId = paused.threadId,
+                        pauseScope = paused.pauseScope,
+                        consistency = paused.consistency,
+                        pauseReason = paused.reason
+                    ))
+                }
+                true
+            }
+            "debug.resumed" -> {
+                if (!vmRegistry.acceptsEpoch(envelope.agentSessionId, envelope.connectionEpoch)) return true
+                envelope.target?.vmId?.let { vmId ->
+                    val resumed = envelope.payload?.let {
+                        EmmyJson.gson.fromJson(it, DebugResumedDto::class.java)
+                    }
+                    vmRegistry.invalidatePause(vmId, resumed?.pauseId)
+                    pauseSnapshots.invalidate(vmId, resumed?.pauseId)
+                }
                 true
             }
             else -> false
@@ -352,6 +402,7 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
         val activeTransport = transporter
         if (activeTransport == null) {
             snapshotRequestOutstanding.set(false)
+            log("无法请求 VM snapshot：当前没有可用传输通道", DebugLogLevel.WARNING)
             return
         }
         activeTransport.send(
@@ -422,10 +473,11 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
     ) {
         val shortPath = sourcePosition.file.canonicalPath ?: sourcePosition.file.path
         val id = breakpointIds[breakpoint] ?: idCounter++.also { breakpointIds[breakpoint] = it }
+        val identity = SourceIdentity.fromPath(shortPath)
         val protocolBreakpoint = if (breakpoint.isLogMessage) {
-            BreakPoint(shortPath, breakpoint.line + 1, logMessage = breakpoint.logExpressionObject?.expression)
+            BreakPoint(shortPath, breakpoint.line + 1, logMessage = breakpoint.logExpressionObject?.expression, sourceIdentity = identity.toWire())
         } else {
-            BreakPoint(shortPath, breakpoint.line + 1, condition = breakpoint.conditionExpression?.expression)
+            BreakPoint(shortPath, breakpoint.line + 1, condition = breakpoint.conditionExpression?.expression, sourceIdentity = identity.toWire())
         }
         val previous = breakpoints.put(id, protocolBreakpoint)
         if (sendUpdate && previous != protocolBreakpoint &&
@@ -446,7 +498,8 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
             val breakpoint = BreakPoint(
                 position.file.canonicalPath ?: position.file.path,
                 position.line + 1,
-                runToHere = true
+                runToHere = true,
+                sourceIdentity = SourceIdentity.fromPath(position.file.path).toWire()
             )
             temporaryBreakpoint = breakpoint
             send(AddBreakPointReq(listOf(breakpoint)))

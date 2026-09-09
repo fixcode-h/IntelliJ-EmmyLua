@@ -49,6 +49,18 @@ class VmRegistryTest {
     }
 
     @Test
+    fun `new epoch accepts zero snapshot even when event sequence repeats`() {
+        val registry = VmRegistry()
+        val vm = VmDto("vm-1", 1, "PIE", "READY", null, "HOST_API")
+        assertEquals(VmApplyStatus.APPLIED, registry.applySnapshot(VmSnapshotDto(5, listOf(vm)), "agent", 1).status)
+        assertEquals(VmApplyStatus.APPLIED, registry.applySnapshot(VmSnapshotDto(0, listOf(vm.copy(state = "RUNNING"))), "agent", 2).status)
+        assertEquals("RUNNING", registry.resolve("vm-1")?.state)
+        assertEquals(VmApplyStatus.STALE_EPOCH, registry.applyLifecycle(
+            VmLifecycleDto("vm-1", 1, "RUNNING", "READY", eventSeq = 1), "agent", 1
+        ).status)
+    }
+
+    @Test
     fun `legacy attached is selectable only when it is the sole VM`() {
         val registry = VmRegistry()
         val legacy = registry.legacyAttached(0x1234)

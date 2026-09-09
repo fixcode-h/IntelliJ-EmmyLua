@@ -162,10 +162,21 @@ class Stack(
 class BreakNotify(
     val stacks: List<Stack>,
     val vmId: String? = null,
-    val pauseId: Long? = null
+    val pauseId: Long? = null,
+    val threadId: String? = null,
+    val pauseScope: String? = null,
+    val consistency: String? = null,
+    val pauseReason: String? = null
 )
 
-class EvalReq(val expr: String, val stackLevel: Int, val cacheId: Int, val depth: Int) : Message(MessageCMD.EvalReq) {
+class EvalReq(
+    val expr: String,
+    val stackLevel: Int,
+    val cacheId: Int,
+    val depth: Int,
+    /** Optional source/frame identity; absent for legacy agents. */
+    val sourceIdentity: SourceIdentityWire? = null
+) : Message(MessageCMD.EvalReq) {
     val seq = makeSeq()
 }
 
@@ -177,7 +188,18 @@ data class BreakPoint(
     val condition: String? = null,
     val logMessage: String? = null,
     val hitCondition: String? = null,
-    val runToHere: Boolean = false
+    val runToHere: Boolean = false,
+    /** Optional identity fields are ignored by v1 agents that do not understand them. */
+    val sourceIdentity: SourceIdentityWire? = null
+)
+
+data class SourceIdentityWire(
+    val canonicalPath: String,
+    val uri: String,
+    val sourceHash: String? = null,
+    val loaderEpoch: Long? = null,
+    val sourceEpoch: Long? = null,
+    val verified: Boolean = false
 )
 
 class AddBreakPointReq(val breakPoints: List<BreakPoint>) : Message(MessageCMD.AddBreakPointReq)

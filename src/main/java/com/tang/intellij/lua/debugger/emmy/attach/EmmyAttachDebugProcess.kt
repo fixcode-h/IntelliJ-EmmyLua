@@ -12,6 +12,7 @@ import com.tang.intellij.lua.debugger.DebugLogLevel
 import com.tang.intellij.lua.debugger.emmy.EmmyDebugProcessBase
 import com.tang.intellij.lua.debugger.emmy.EmmyTargetBootstrap
 import com.tang.intellij.lua.debugger.emmy.MessageCMD
+import com.tang.intellij.lua.debugger.emmy.LegacyAttachStatus
 
 /** Emmy attach uses the shared Emmy session and only customizes target preparation. */
 class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(session) {
@@ -28,7 +29,12 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
         val state = runCatching { Gson().fromJson(json, AttachedNotify::class.java).state }.getOrNull()
         val stateText = state?.let { " 0x${it.toString(16)}" }.orEmpty()
         log("已附加到 Lua 状态$stateText", DebugLogLevel.RUNTIME)
-        state?.let { vmRegistry.legacyAttached(it) }
+        state?.let {
+            vmRegistry.legacyAttached(it)
+            if (vmRegistry.legacyAttachStatus() == LegacyAttachStatus.AMBIGUOUS) {
+                log("legacy AttachedNotify 已注册，但当前存在多个 VM；为避免误控，不会隐式选择 VM", DebugLogLevel.WARNING)
+            }
+        }
         return true
     }
 }

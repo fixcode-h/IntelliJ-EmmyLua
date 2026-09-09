@@ -13,6 +13,7 @@ class VmRegistry {
     private var sessionId: String? = null
     private var epoch: Long? = null
     private var eventSeq: Long = 0
+    private var hasSequence = false
 
     @Synchronized
     fun applySnapshot(
@@ -23,7 +24,7 @@ class VmRegistry {
         if (!acceptEpoch(agentSessionId, connectionEpoch, isSnapshot = true)) {
             return VmApplyResult(VmApplyStatus.STALE_EPOCH, message = "snapshot belongs to an old connection epoch")
         }
-        if (snapshot.snapshotEventSeq <= eventSeq) {
+        if (hasSequence && snapshot.snapshotEventSeq <= eventSeq) {
             return VmApplyResult(VmApplyStatus.DUPLICATE)
         }
         records.clear()
@@ -31,6 +32,7 @@ class VmRegistry {
             records[vm.vmId] = vm.toModel(snapshot.snapshotEventSeq)
         }
         eventSeq = snapshot.snapshotEventSeq
+        hasSequence = true
         return VmApplyResult(VmApplyStatus.APPLIED)
     }
 
@@ -64,14 +66,24 @@ class VmRegistry {
                 luaVersion = null,
                 discovery = "UNKNOWN",
                 diagnosticStateAddress = null,
-                lastEventSeq = lifecycle.eventSeq
+                lastEventSeq = lifecycle.eventSeq,
+                connectionEpoch = epoch,
+                contextGeneration = lifecycle.contextGeneration,
+                sourceEpoch = lifecycle.sourceEpoch
             )
         } else {
             previous.copy(
                 generation = lifecycle.generation,
                 state = lifecycle.current,
                 lastEventSeq = lifecycle.eventSeq,
+                connectionEpoch = epoch,
+                contextGeneration = lifecycle.contextGeneration ?: previous.contextGeneration,
+                sourceEpoch = lifecycle.sourceEpoch ?: previous.sourceEpoch,
                 activePauseId = if (lifecycle.current == "CLOSED" || lifecycle.current == "CLOSING") {
+                    null
+                } else if ((lifecycle.contextGeneration != null && lifecycle.contextGeneration != previous.contextGeneration) ||
+                    (lifecycle.sourceEpoch != null && lifecycle.sourceEpoch != previous.sourceEpoch) ||
+                    lifecycle.generation != previous.generation) {
                     null
                 } else previous.activePauseId
             )
@@ -82,6 +94,7 @@ class VmRegistry {
             records[lifecycle.vmId] = next
         }
         eventSeq = lifecycle.eventSeq
+        hasSequence = true
         return VmApplyResult(VmApplyStatus.APPLIED, lifecycle.vmId)
     }
 
@@ -115,9 +128,14 @@ class VmRegistry {
             diagnosticStateAddress = "0x${stateAddress.toString(16)}",
             lastEventSeq = eventSeq
         )
-        records[legacyId] = record
-        return record
+        val registered = record.copy(connectionEpoch = connectionEpoch)
+        records[legacyId] = registered
+        return registered
     }
+
+    @Synchronized
+    fun legacyAttachStatus(): LegacyAttachStatus =
+        if (records.size > 1) LegacyAttachStatus.AMBIGUOUS else LegacyAttachStatus.REGISTERED
 
     @Synchronized
     fun resolve(vmId: String? = null): VmRecordModel? {
@@ -148,17 +166,29 @@ class VmRegistry {
     @Synchronized
     fun currentEpoch(): Long? = epoch
 
+    @Synchronized
+    fun acceptsEpoch(agentSessionId: String?, connectionEpoch: Long?): Boolean =
+        (agentSessionId == null || sessionId == null || agentSessionId == sessionId) &&
+            (connectionEpoch == null || epoch == null || connectionEpoch == epoch)
+
+    @Synchronized
+    fun invalidateAllPauses() {
+        records.replaceAll { _, value -> value.copy(activePauseId = null) }
+    }
+
     private fun acceptEpoch(newSessionId: String?, newEpoch: Long?, isSnapshot: Boolean): Boolean {
         if (newSessionId != null && sessionId != null && newSessionId != sessionId) {
             if (!isSnapshot) return false
             records.clear()
             eventSeq = 0
+            hasSequence = false
         }
         if (newEpoch != null && epoch != null && newEpoch < epoch!!) return false
         if (newEpoch != null && epoch != null && newEpoch > epoch!!) {
             if (!isSnapshot) return false
             records.clear()
             eventSeq = 0
+            hasSequence = false
         }
         if (newSessionId != null) sessionId = newSessionId
         if (newEpoch != null) epoch = newEpoch
@@ -173,7 +203,10 @@ class VmRegistry {
         luaVersion = luaVersion,
         discovery = discovery,
         diagnosticStateAddress = diagnosticStateAddress,
-        lastEventSeq = lastEventSeq
+        lastEventSeq = lastEventSeq,
+        connectionEpoch = epoch,
+        contextGeneration = contextGeneration,
+        sourceEpoch = sourceEpoch
     )
 }
 

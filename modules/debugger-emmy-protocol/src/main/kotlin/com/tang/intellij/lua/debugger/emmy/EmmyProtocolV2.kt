@@ -36,6 +36,8 @@ data class EmmyV2Envelope(
     val requestId: String? = null,
     val agentSessionId: String? = null,
     val connectionEpoch: Long? = null,
+    val contextGeneration: Long? = null,
+    val sourceEpoch: Long? = null,
     val eventSeq: Long? = null,
     val target: EmmyV2Target? = null,
     val ok: Boolean? = null,
@@ -56,7 +58,9 @@ data class VmDto(
     val state: String,
     val luaVersion: String?,
     val discovery: String,
-    val diagnosticStateAddress: String? = null
+    val diagnosticStateAddress: String? = null,
+    val contextGeneration: Long? = null,
+    val sourceEpoch: Long? = null
 ) : EmmyV2Dto
 
 data class VmSnapshotDto(
@@ -70,7 +74,9 @@ data class VmLifecycleDto(
     val previous: String?,
     val current: String,
     val reason: String? = null,
-    val eventSeq: Long
+    val eventSeq: Long,
+    val contextGeneration: Long? = null,
+    val sourceEpoch: Long? = null
 ) : EmmyV2Dto
 
 data class AgentDescribeDto(
@@ -78,6 +84,20 @@ data class AgentDescribeDto(
     val protocolVersion: Int,
     val processId: Long,
     val capabilities: List<String>
+) : EmmyV2Dto
+
+data class DebugPausedDto(
+    val pauseId: Long,
+    val threadId: String? = null,
+    val pauseScope: String = "THREAD",
+    val consistency: String = "THREAD_ONLY",
+    val reason: String? = null,
+    val stacks: List<Stack> = emptyList()
+) : EmmyV2Dto
+
+data class DebugResumedDto(
+    val pauseId: Long? = null,
+    val reason: String? = null
 ) : EmmyV2Dto
 
 class EmmyV2Message(val envelope: EmmyV2Envelope) : IMessage {
