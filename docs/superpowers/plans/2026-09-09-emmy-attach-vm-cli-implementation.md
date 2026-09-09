@@ -523,9 +523,11 @@ CLI 请求与响应的最小形态：
 - AI Probe 的 autoContinue 只有在暂停原因集合完全由该 Probe 产生、没有 USER/SYSTEM reason 且 lease 仍有效时才执行；IDE 用户在 Probe 等待期间操作时，Probe 进入 `ORPHANED`，不得自动继续。
 - 用户显式操作优先于 AI lease；AI lease 失效、目标取消授权或项目失去信任时，所有 CLI Probe 立即停止并清理。
 
-- [ ] **步骤 1：写授权和 Probe 测试**
+- [x] **步骤 1：写授权和 Probe 测试**
 
   覆盖 TARGET_BUSY、过期 lease、owner 隔离、VM close、stale pause、截断和 autoContinue 冲突；增加 USER+CLI 同位置条件断点合并、IDE 用户抢占、取消不可中断求值、sourceIdentity 不匹配和 rate limit 测试。
+
+当前进度说明：任务 9 已完成授权 grant、独占 lease、受限 VALUE_PATH 解析和 owner-aware 断点合成的纯协议层测试；IDEA 服务接入、真实 Lua 值读取、Probe 生命周期和 autoContinue 安全规则仍未完成。
 
 - [ ] **步骤 2：实现服务**
 
