@@ -49,7 +49,10 @@ enum class MessageCMD(val wireId: Int) {
     StartHookReq(15),
     StartHookRsp(16),
 
-    LogNotify(17);
+    LogNotify(17),
+
+    /** Versioned envelope command. Legacy wire ids 0..17 must never change. */
+    EnvelopeV2(18);
 
     companion object {
         private val byWireId = entries.associateBy(MessageCMD::wireId)
