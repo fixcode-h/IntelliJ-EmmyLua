@@ -221,7 +221,7 @@ bool ReconcileExistingVms(NativeVmRegistry& destination);
 
   `OnInitReq` 先完成认证、检查 requestId 幂等表，再生成/复用 session ID 并回复 InitRsp；`ReadyReq` 设置握手完成、回复 ReadyRsp、发送完整 snapshot 和 pending lifecycle events。任何事件发送失败只记录诊断，不阻塞 Lua owner thread。
 
-- [ ] **步骤 4：实现 frame 上限和 parse error**
+- [x] **步骤 4：实现 frame 上限和 parse error**
 
   在接收缓冲区追加常量上限；超过上限关闭当前连接并调用一次 OnDisconnect；解析异常不让 transport event loop 崩溃。为每条请求校验 requestId 长度、deadline、epoch 和幂等 hash；实现 cancel 请求的明确错误响应。
 
@@ -241,7 +241,7 @@ bool ReconcileExistingVms(NativeVmRegistry& destination);
 
   子模块提交：`git commit -m "协议：补齐 Emmy 握手响应与 VM 生命周期事件"`。父仓库提交：`git commit -m "同步：更新 Emmy 协议事件子模块"`。
 
-当前进度说明：任务 3 已完成 wire id、ProtocolSession、InitRsp/ReadyRsp、vm.snapshot、vm.lifecycle、Host/Hook fallback discovery 和 IDEA v2 分发；frame 上限、parse error 结构化处理、认证、重连退避及 Attach bootstrap 状态仍未完成，不能将任务 3 视为整体完成。
+当前进度说明：任务 3 已完成 wire id、ProtocolSession、InitRsp/ReadyRsp、vm.snapshot、vm.lifecycle、Host/Hook fallback discovery、IDEA v2 分发，以及接收/发送 frame 上限和解析错误隔离；认证、重连退避及 Attach bootstrap 状态仍未完成，不能将任务 3 视为整体完成。
 
 ### 任务 4：per-VM Debugger、HookState 与控制路由
 
