@@ -133,7 +133,8 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
                         customHelperPath = customHelperPath,
                         emmyHelperName = "emmyHelper",
                         emmyHelperExtName = emmyHelperExtName,
-                        ext = extList
+                        ext = extList,
+                        authToken = targetBootstrap.authToken.orEmpty()
                     ))
 
                     val ideBreakpoints = XDebuggerManager.getInstance(session.project)

@@ -4,6 +4,10 @@ package com.tang.intellij.lua.debugger.emmy
 interface EmmyTargetBootstrap {
     fun prepareTransports(): List<Transporter>
 
+    /** Optional one-shot token used by attach-mode Agent authentication. */
+    val authToken: String?
+        get() = null
+
     fun stop() {}
 }
 

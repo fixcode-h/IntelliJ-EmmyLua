@@ -87,7 +87,8 @@ class InitMessage(
     val customHelperPath: String = "", // 自定义 helper 目录路径（可选，可断点调试）
     val emmyHelperName: String = "emmyHelper",      // 主 helper 脚本名称
     val emmyHelperExtName: String = "emmyHelper_ue", // 扩展脚本名称（可自定义）
-    val ext: Array<String>
+    val ext: Array<String>,
+    val authToken: String = ""
 ) : Message(MessageCMD.InitReq)
 
 enum class DebugAction(val wireId: Int) {
