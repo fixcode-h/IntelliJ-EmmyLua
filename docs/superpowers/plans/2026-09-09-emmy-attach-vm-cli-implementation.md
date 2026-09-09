@@ -337,11 +337,11 @@ RouteResult Evaluate(uint64_t vmId, uint64_t pauseId, uint64_t frameId, const Ev
 
   测试 disable 后 callback 不进入 Facade、在途计数归零、重复 disable/unhook 幂等、不同 `LUA_IDSIZE`/layoutHash 被拒绝；增加先由宿主安装 hook、再由 Emmy 安装、再由宿主替换 hook 的 chain 恢复测试。
 
-- [ ] **步骤 2：实现 hook handle 所有权**
+- [x] **步骤 2：实现 hook handle 所有权**
 
   保存每次 `LhInstallHook` 返回的 handle；禁止只依赖泄漏的临时指针；在停止路径统一 disable，再按能力卸载。
 
-- [ ] **步骤 3：修复 Facade 空 Transporter 路径**
+- [x] **步骤 3：修复 Facade 空 Transporter 路径**
 
   `Attach()`、`OnBreak()`、`SendLog()` 先读取连接快照；Transport 不存在或非 Ready 时只入队/返回错误，不解引用空指针。Transporter 停止前先发布 disabled 标志，再等待 callback quiescence；关闭期间拒绝新的 Lua owner task。
 
@@ -356,6 +356,8 @@ RouteResult Evaluate(uint64_t vmId, uint64_t pauseId, uint64_t frameId, const Ev
 - [ ] **步骤 6：运行验证并提交**
 
   构建 x86/x64 native targets；运行 detach 后完整 Lua 调用、PIE close/recreate 和错误 ABI harness；提交 `安全：增加 Emmy hook teardown 屏障与 ABI 校验`。
+
+当前进度说明：任务 5 已完成 EasyHook handle 持有、Destroy 回收和 Facade 空 Transporter 防护；在途回调 quiescence、hook chain 恢复、ABI fingerprint 和 HostValueProvider 仍未完成。
 
 ### 任务 6：IDEA VmRegistry、握手状态和 legacy 边界
 
