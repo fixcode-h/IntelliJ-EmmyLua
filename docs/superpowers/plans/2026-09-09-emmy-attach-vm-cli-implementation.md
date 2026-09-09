@@ -493,11 +493,11 @@ CLI 请求与响应的最小形态：
 
   Gateway 只调用 `DebugTargetRegistry`/`VmRegistry`，不直接持有 XDebugger UI 对象。
 
-- [ ] **步骤 3：运行测试并提交**
+- [x] **步骤 3：运行测试并提交**
 
   运行 CLI protocol 和 IDEA tests；增加 stale descriptor、未信任项目脱敏、NDJSON done/cancel、并发限流和 endpoint 清理测试；提交 `CLI：增加 IDEA 调试会话只读网关基础`。
 
-当前进度说明：任务 8 已完成独立 JSONL DTO、只读 Gateway 核心、descriptor 原子写入/过期清理和基础脱敏测试；实际 IDEA IPC listener、wait/cancel 流和生命周期服务注册仍未完成。
+当前进度说明：任务 8 已完成独立 JSONL DTO、只读 Gateway 核心、loopback IPC listener、descriptor 原子写入/过期清理和基础脱敏测试；Windows named-pipe 优先适配、wait/cancel 流和 IDEA Application 生命周期服务注册仍未完成。
 
 ### 任务 9：CLI 控制、授权租约与 AI Probe
 
