@@ -385,15 +385,15 @@ RouteResult Evaluate(uint64_t vmId, uint64_t pauseId, uint64_t frameId, const Ev
 - `DebugSessionStateMachine` 增加 Agent Ready、Agent Disconnected、Reconnecting、SnapshotApplied 事件；定义最大重连次数、指数退避、旧请求取消和最终终止条件。
 - 增加 `contextGeneration`/`sourceEpoch` reset 事件，覆盖 UnLua HotReload、PIE reset、VM 复用；reset 后旧脚本、cache、frame、Probe 全部失效。
 
-- [ ] **步骤 1：写 VmRegistry 测试**
+- [x] **步骤 1：写 VmRegistry 测试**
 
   覆盖空 snapshot、多 VM、重复事件、序号间隙、CLOSING/CLOSED、地址复用和 legacy 第二 VM；增加两个 VM 同时暂停时当前 UI pause/排队策略、断线重连退避和 context reset 失效测试。
 
-- [ ] **步骤 2：实现纯 Kotlin Registry**
+- [x] **步骤 2：实现纯 Kotlin Registry**
 
   不依赖 IntelliJ SDK；用 immutable DTO 和同步/单线程约束保证 snapshot+event 一致性。
 
-- [ ] **步骤 3：接入 Emmy 消息分发**
+- [x] **步骤 3：接入 Emmy 消息分发**
 
   增加 `EnvelopeV2` 分支和 ReadyRsp 分支；保留旧 BreakNotify/EvalRsp 解析；把 Attach 的 initialized 从 AttachedNotify 改为 ReadyRsp。
 
@@ -412,6 +412,8 @@ RouteResult Evaluate(uint64_t vmId, uint64_t pauseId, uint64_t frameId, const Ev
 - [ ] **步骤 7：本地提交**
 
   `git add src modules && git commit -m "IDEA：增加 VM 注册表并区分 Agent 与 VM 就绪状态"`
+
+当前进度说明：任务 6 已完成纯 Kotlin VmRegistry、eventSeq/epoch 幂等、gap 检测、legacy VM 记录和 v2 消息接入；PauseSnapshotStore、source identity、UI 仲裁和完整重连状态机仍未完成。
 
 ### 任务 7：UE/UnLua 宿主适配示例与契约验证
 

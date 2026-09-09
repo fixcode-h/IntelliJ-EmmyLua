@@ -40,6 +40,7 @@ import java.util.IdentityHashMap
 import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(session), ITransportHandler {
     private val editorsProvider = LuaDebuggerEditorsProvider()
@@ -56,6 +57,9 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
     private val failureTerminationStarted = AtomicBoolean()
     private val reconnectStopped = AtomicBoolean()
     private val reconnectAttempt = AtomicInteger(0)
+    private val v2RequestSequence = AtomicLong()
+    private val snapshotRequestOutstanding = AtomicBoolean()
+    protected val vmRegistry = VmRegistry()
     protected var transporter: Transporter? = null
     private lateinit var targetBootstrap: EmmyTargetBootstrap
     private val lifecycle = DebugSessionController(
@@ -263,6 +267,9 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
 
             MessageCMD.BreakNotify -> {
                 val data = Gson().fromJson(json, BreakNotify::class.java)
+                if (data.vmId != null && data.pauseId != null) {
+                    vmRegistry.setPause(data.vmId, data.pauseId)
+                }
                 onBreak(data)
             }
 
@@ -310,11 +317,36 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
                 true
             }
             "vm.snapshot", "vm.lifecycle" -> {
-                log("Emmy v2 ${envelope.type} received", DebugLogLevel.DEBUG)
+                val result = vmRegistry.applyEnvelope(envelope)
+                if (envelope.type == "vm.snapshot") {
+                    snapshotRequestOutstanding.set(false)
+                } else if (result.requiresSnapshot) {
+                    requestVmSnapshot()
+                }
+                log("Emmy v2 ${envelope.type} received: ${result.status}", DebugLogLevel.DEBUG)
                 true
             }
             else -> false
         }
+    }
+
+    private fun requestVmSnapshot() {
+        if (!snapshotRequestOutstanding.compareAndSet(false, true)) return
+        val requestId = "vm-snapshot-${v2RequestSequence.incrementAndGet()}"
+        val activeTransport = transporter
+        if (activeTransport == null) {
+            snapshotRequestOutstanding.set(false)
+            return
+        }
+        activeTransport.send(
+            EmmyV2Message(
+                EmmyV2Envelope(
+                    kind = "request",
+                    type = "vm.snapshot",
+                    requestId = requestId
+                )
+            )
+        )
     }
 
     private fun scheduleReconnect(attempt: Int) {
@@ -461,6 +493,7 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
 
     override fun run() {
         clearInlineSnapshot()
+        vmRegistry.list().forEach { vmRegistry.invalidatePause(it.vmId) }
         cancelEvaluationsThen(CancellationException("Emmy execution resumed")) {
             send(DebugActionMessage(DebugAction.Continue))
         }

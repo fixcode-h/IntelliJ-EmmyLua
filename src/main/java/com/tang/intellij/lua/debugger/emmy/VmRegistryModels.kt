@@ -1,0 +1,30 @@
+package com.tang.intellij.lua.debugger.emmy
+
+enum class VmApplyStatus {
+    APPLIED,
+    DUPLICATE,
+    GAP,
+    STALE_EPOCH,
+    INVALID
+}
+
+data class VmApplyResult(
+    val status: VmApplyStatus,
+    val vmId: String? = null,
+    val message: String? = null
+) {
+    val accepted: Boolean get() = status == VmApplyStatus.APPLIED || status == VmApplyStatus.DUPLICATE
+    val requiresSnapshot: Boolean get() = status == VmApplyStatus.GAP
+}
+
+data class VmRecordModel(
+    val vmId: String,
+    val generation: Long,
+    val displayName: String,
+    val state: String,
+    val luaVersion: String?,
+    val discovery: String,
+    val diagnosticStateAddress: String?,
+    val lastEventSeq: Long,
+    val activePauseId: Long? = null
+)

@@ -79,3 +79,9 @@ data class AgentDescribeDto(
     val processId: Long,
     val capabilities: List<String>
 ) : EmmyV2Dto
+
+class EmmyV2Message(val envelope: EmmyV2Envelope) : IMessage {
+    override val cmd: Int = EMMY_V2_ENVELOPE_WIRE_ID
+
+    override fun toJSON(): String = envelope.toJson()
+}
