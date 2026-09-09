@@ -1,6 +1,7 @@
 package com.tang.intellij.lua.debugger.emmy
 
 import com.google.gson.JsonParser
+import com.google.gson.Gson
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -8,6 +9,16 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class EmmyProtocolV2Test {
+    @Test
+    fun `legacy break notification carries optional VM pause identity`() {
+        val json = JsonParser.parseString(
+            Gson().toJson(BreakNotify(emptyList(), vmId = "vm-7", pauseId = 12))
+        ).asJsonObject
+
+        assertEquals("vm-7", json.get("vmId").asString)
+        assertEquals(12L, json.get("pauseId").asLong)
+    }
+
     @Test
     fun `handshake and lifecycle envelopes preserve golden fields`() {
         val init = EmmyV2Envelope(

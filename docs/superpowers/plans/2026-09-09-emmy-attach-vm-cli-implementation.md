@@ -278,15 +278,15 @@ RouteResult DoAction(uint64_t vmId, bool hasPauseId, uint64_t pauseId, DebugActi
 RouteResult Evaluate(uint64_t vmId, uint64_t pauseId, uint64_t frameId, const EvalPolicy& policy);
 ```
 
-- [ ] **步骤 1：增加隔离测试**
+- [x] **步骤 1：增加隔离测试**
 
   用两个 Debugger fake 验证 StepOver/StepIn 状态对象地址不同、按 vmId 路由不会读取另一个 VM 的 current state；增加未知 vmId 和 legacy 多 VM 拒绝测试。
 
-- [ ] **步骤 2：实现 per-VM HookState**
+- [x] **步骤 2：实现 per-VM HookState**
 
   删除 Manager 中共享的可变 HookState 成员，移动为 Debugger 私有成员；保持状态类接口不变，先保证单 VM 行为不变。
 
-- [ ] **步骤 3：实现显式路由**
+- [x] **步骤 3：实现显式路由**
 
   Manager 通过 NativeVmRegistry 查找 vmId；找不到返回结构化 `VM_NOT_FOUND`；legacy 请求仅在唯一活动 VM 时转发，否则 `AMBIGUOUS_VM`。
 
@@ -305,6 +305,8 @@ RouteResult Evaluate(uint64_t vmId, uint64_t pauseId, uint64_t frameId, const Ev
 - [ ] **步骤 7：本地提交**
 
   子模块：`git commit -m "调试器：隔离每个 Lua VM 的状态与控制路由"`；父仓库：`git commit -m "同步：更新 per-VM 调试器子模块"`。
+
+当前进度说明：任务 4 已完成 per-VM HookState、opaque vmId 绑定、显式 Action/Eval 路由入口、BreakNotify 身份和 pauseId 校验基础；完整 v2 Eval 响应关联、线程级暂停一致性和并发回归仍未完成。
 
 ### 任务 5：安全 teardown、hook chaining 与 ABI 描述
 
