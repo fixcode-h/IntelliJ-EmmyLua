@@ -397,7 +397,7 @@ RouteResult Evaluate(uint64_t vmId, uint64_t pauseId, uint64_t frameId, const Ev
 
   增加 `EnvelopeV2` 分支和 ReadyRsp 分支；保留旧 BreakNotify/EvalRsp 解析；把 Attach 的 initialized 从 AttachedNotify 改为 ReadyRsp。
 
-- [ ] **步骤 4：加入暂停引用失效**
+- [x] **步骤 4：加入暂停引用失效**
 
   VM lifecycle、resume、disconnect、connectionEpoch 和 `contextGeneration/sourceEpoch` 变化时清空 pause/frame/evaluation references；非当前 VM 的暂停进入队列，用户明确选择后才切换 UI。
 
@@ -413,7 +413,7 @@ RouteResult Evaluate(uint64_t vmId, uint64_t pauseId, uint64_t frameId, const Ev
 
   `git add src modules && git commit -m "IDEA：增加 VM 注册表并区分 Agent 与 VM 就绪状态"`
 
-当前进度说明：任务 6 已完成纯 Kotlin VmRegistry、eventSeq/epoch 幂等、gap 检测、legacy VM 记录和 v2 消息接入；PauseSnapshotStore、source identity、UI 仲裁和完整重连状态机仍未完成。
+当前进度说明：任务 6 已完成纯 Kotlin VmRegistry、eventSeq/epoch 幂等、gap 检测、legacy VM 记录、v2 消息接入和有界 PauseSnapshotStore 失效；SourceIdentity 已定义但未接入断点匹配，UI 仲裁和完整重连状态机仍未完成。
 
 ### 任务 7：UE/UnLua 宿主适配示例与契约验证
 

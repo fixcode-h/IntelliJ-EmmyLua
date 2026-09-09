@@ -60,6 +60,7 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
     private val v2RequestSequence = AtomicLong()
     private val snapshotRequestOutstanding = AtomicBoolean()
     protected val vmRegistry = VmRegistry()
+    protected val pauseSnapshots = PauseSnapshotStore()
     protected var transporter: Transporter? = null
     private lateinit var targetBootstrap: EmmyTargetBootstrap
     private val lifecycle = DebugSessionController(
@@ -247,6 +248,7 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
     }
 
     final override fun onDisconnect() {
+        pauseSnapshots.clear()
         cancelEvaluationsThen(IOException("Emmy transport disconnected")) {
             if (lifecycle.state == DebugSessionState.STOPPING) {
                 finishStop()
@@ -269,6 +271,13 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
                 val data = Gson().fromJson(json, BreakNotify::class.java)
                 if (data.vmId != null && data.pauseId != null) {
                     vmRegistry.setPause(data.vmId, data.pauseId)
+                    pauseSnapshots.put(
+                        PauseSnapshot(
+                            vmId = data.vmId,
+                            pauseId = data.pauseId,
+                            stacks = data.stacks
+                        )
+                    )
                 }
                 onBreak(data)
             }
@@ -322,6 +331,13 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
                     snapshotRequestOutstanding.set(false)
                 } else if (result.requiresSnapshot) {
                     requestVmSnapshot()
+                } else if (envelope.type == "vm.lifecycle") {
+                    val lifecycle = envelope.payload?.let {
+                        EmmyJson.gson.fromJson(it, VmLifecycleDto::class.java)
+                    }
+                    if (lifecycle?.current == "CLOSING" || lifecycle?.current == "CLOSED") {
+                        pauseSnapshots.invalidate(lifecycle.vmId)
+                    }
                 }
                 log("Emmy v2 ${envelope.type} received: ${result.status}", DebugLogLevel.DEBUG)
                 true
@@ -493,6 +509,7 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
 
     override fun run() {
         clearInlineSnapshot()
+        pauseSnapshots.clear()
         vmRegistry.list().forEach { vmRegistry.invalidatePause(it.vmId) }
         cancelEvaluationsThen(CancellationException("Emmy execution resumed")) {
             send(DebugActionMessage(DebugAction.Continue))
@@ -507,6 +524,7 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
 
     final override fun stop() {
         reconnectStopped.set(true)
+        pauseSnapshots.clear()
         clearInlineSnapshot()
         cancelEvaluationsThen(CancellationException("Emmy debug session stopped")) {
             lifecycle.post(sessionGeneration, DebugSessionEvent.STOP_REQUESTED) {
@@ -561,6 +579,7 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
 
     override fun startStepOver(context: XSuspendContext?) {
         clearInlineSnapshot()
+        pauseSnapshots.clear()
         cancelEvaluationsThen(CancellationException("Emmy execution resumed")) {
             send(DebugActionMessage(DebugAction.StepOver))
         }
@@ -568,6 +587,7 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
 
     override fun startStepInto(context: XSuspendContext?) {
         clearInlineSnapshot()
+        pauseSnapshots.clear()
         cancelEvaluationsThen(CancellationException("Emmy execution resumed")) {
             send(DebugActionMessage(DebugAction.StepIn))
         }
@@ -575,6 +595,7 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
 
     override fun startStepOut(context: XSuspendContext?) {
         clearInlineSnapshot()
+        pauseSnapshots.clear()
         cancelEvaluationsThen(CancellationException("Emmy execution resumed")) {
             send(DebugActionMessage(DebugAction.StepOut))
         }
