@@ -94,6 +94,7 @@ project(":") {
         implementation(project(":modules:debugger-core"))
         implementation(project(":modules:debugger-transport"))
         implementation(project(":modules:debugger-emmy-protocol"))
+        implementation(project(":modules:debugger-cli-protocol"))
         implementation(project(":modules:debugger-luapanda-protocol"))
         
         intellijPlatform {
