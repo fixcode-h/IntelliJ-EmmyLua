@@ -65,27 +65,27 @@ assertEquals(18, JsonParser.parseString(encoded).asJsonObject["cmd"].asInt)
 assertEquals("vm.lifecycle", JsonParser.parseString(encoded).asJsonObject["type"].asString)
 ```
 
-- [ ] **步骤 1：写失败测试**
+- [x] **步骤 1：写失败测试**
 
   测试显式断言 v1 wire id 列表、v2 cmd=18、Envelope JSON round-trip、缺省 target/error 字段和 VM snapshot/lifecycle 字段。
 
-- [ ] **步骤 2：运行测试确认失败**
+- [x] **步骤 2：运行测试确认失败**
 
   运行：`./gradlew.bat :modules:debugger-emmy-protocol:test --tests '*EmmyProtocolV2Test'`
 
   预期：由于 `EmmyProtocolV2` 和 `EnvelopeV2` 尚不存在而失败。
 
-- [ ] **步骤 3：实现最小协议模型**
+- [x] **步骤 3：实现最小协议模型**
 
   使用 Gson `JsonObject` 保持 payload 的未知字段；所有 ID 使用显式常量；不要修改 0-17 的含义。
 
-- [ ] **步骤 4：运行测试确认通过**
+- [x] **步骤 4：运行测试确认通过**
 
   运行：`./gradlew.bat :modules:debugger-emmy-protocol:test`
 
   预期：协议模块全部通过。
 
-- [ ] **步骤 5：本地提交**
+- [x] **步骤 5：本地提交**
 
   `git add modules/debugger-emmy-protocol && git commit -m "协议：冻结 Emmy wire id 并新增 v2 DTO"`
 
@@ -136,33 +136,33 @@ bool BeginClose(uint64_t id, const std::string& reason);
 bool ReconcileExistingVms(NativeVmRegistry& destination);
 ```
 
-- [ ] **步骤 1：写失败测试/可执行 harness**
+- [x] **步骤 1：写失败测试/可执行 harness**
 
   在 `vm_registry.cpp` 同目录增加仅在 `EMMY_VM_REGISTRY_TEST` 下编译的纯 C++ harness，覆盖重复注册、状态转换、generation、地址复用和 Begin/EndClose 幂等；不调用 Lua API。
 
-- [ ] **步骤 2：运行 harness 确认失败**
+- [x] **步骤 2：运行 harness 确认失败**
 
   运行：`cmake -S EmmyLuaDebugger -B EmmyLuaDebugger/build-vm-registry -DEMMY_VM_REGISTRY_TEST=ON`；随后构建 `cmake --build EmmyLuaDebugger/build-vm-registry --config Debug --target emmy_debugger`。
 
   预期：新 Registry 符号尚未实现时配置或编译失败。
 
-- [ ] **步骤 3：实现 Host Registry、Native Registry 和激活对账**
+- [x] **步骤 3：实现 Host Registry、Native Registry 和激活对账**
 
   使用静态/原子 ID 生成器；以 main state 地址作为内部索引，以 generation 防止地址复用；不在 Registry 锁内调用 EventSink。Agent 未激活时把 Host API 调用写入进程内 Host Registry，并返回可用于后续生命周期调用的 pending registrationId；InitReq 到达后执行 `ReconcileExistingVms()`，再把事件放入有界 pending 队列；不得在 Agent 激活前返回并丢弃一个可观测 VM。
 
-- [ ] **步骤 4：接入唯一 C ABI 导出并构建**
+- [x] **步骤 4：接入唯一 C ABI 导出并构建**
 
   将两个 `src/vm/*.cpp` 加入 CMake；在 `emmy_debugger_lib.cpp` 用 `extern "C"`、固定调用约定和 Windows 导出宏转发到 `EmmyFacade::Get()`。UE Bridge 只能通过 `GetProcAddress(emmy_hook.dll, "Emmy_*")` 绑定；不要在 `DllMain` 中初始化 Registry，也不要让 Bridge 自己链接 `emmy_debugger`。
 
-- [ ] **步骤 5：运行测试确认通过**
+- [x] **步骤 5：运行测试确认通过**
 
   运行：`cmake --build EmmyLuaDebugger/build-vm-registry --config Debug --target emmy_debugger emmy_core emmy_hook`；执行 harness 并检查退出码为 0。
 
-- [ ] **步骤 6：子模块本地提交**
+- [x] **步骤 6：子模块本地提交**
 
   在 `EmmyLuaDebugger` 内运行：`git add emmy_debugger && git commit -m "原生：新增 Lua VM 生命周期注册表与 Host API"`。
 
-- [ ] **步骤 7：父仓库提交子模块指针**
+- [x] **步骤 7：父仓库提交子模块指针**
 
   在父仓库运行：`git add EmmyLuaDebugger && git commit -m "同步：更新 EmmyDebugger VM 生命周期子模块"`。
 
@@ -209,15 +209,15 @@ bool ReconcileExistingVms(NativeVmRegistry& destination);
 {"cmd":18,"protocolVersion":2,"kind":"response","type":"vm.snapshot","requestId":"r3","ok":true,"payload":{"snapshotEventSeq":4,"vms":[]}}
 ```
 
-- [ ] **步骤 1：写 Kotlin golden tests**
+- [x] **步骤 1：写 Kotlin golden tests**
 
   增加 InitRsp/ReadyRsp/snapshot/lifecycle JSON 样例及未知字段兼容测试。
 
-- [ ] **步骤 2：写 native protocol test vector**
+- [x] **步骤 2：写 native protocol test vector**
 
   在 C++ harness 中构造同样的 JSON，检查 `cmd=18`、`type`、`eventSeq`、`vmId` 和错误对象字段。
 
-- [ ] **步骤 3：实现 native responses/events**
+- [x] **步骤 3：实现 native responses/events**
 
   `OnInitReq` 先完成认证、检查 requestId 幂等表，再生成/复用 session ID 并回复 InitRsp；`ReadyReq` 设置握手完成、回复 ReadyRsp、发送完整 snapshot 和 pending lifecycle events。任何事件发送失败只记录诊断，不阻塞 Lua owner thread。
 
@@ -240,6 +240,8 @@ bool ReconcileExistingVms(NativeVmRegistry& destination);
 - [ ] **步骤 8：本地提交**
 
   子模块提交：`git commit -m "协议：补齐 Emmy 握手响应与 VM 生命周期事件"`。父仓库提交：`git commit -m "同步：更新 Emmy 协议事件子模块"`。
+
+当前进度说明：任务 3 已完成 wire id、ProtocolSession、InitRsp/ReadyRsp、vm.snapshot、vm.lifecycle、Host/Hook fallback discovery 和 IDEA v2 分发；frame 上限、parse error 结构化处理、认证、重连退避及 Attach bootstrap 状态仍未完成，不能将任务 3 视为整体完成。
 
 ### 任务 4：per-VM Debugger、HookState 与控制路由
 

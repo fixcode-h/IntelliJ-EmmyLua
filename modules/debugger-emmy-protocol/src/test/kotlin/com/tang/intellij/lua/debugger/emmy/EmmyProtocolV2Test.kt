@@ -9,6 +9,45 @@ import org.junit.Test
 
 class EmmyProtocolV2Test {
     @Test
+    fun `handshake and lifecycle envelopes preserve golden fields`() {
+        val init = EmmyV2Envelope(
+            kind = "response",
+            type = "agent.describe",
+            agentSessionId = "agent-1",
+            connectionEpoch = 2,
+            payload = JsonParser.parseString(
+                "{\"protocolVersion\":2,\"processId\":42,\"capabilities\":[\"vm.snapshot\"]}"
+            ).asJsonObject
+        )
+        val ready = EmmyV2Envelope(
+            kind = "response",
+            type = "agent.ready",
+            agentSessionId = "agent-1",
+            connectionEpoch = 2,
+            payload = JsonParser.parseString("{\"snapshotEventSeq\":3}").asJsonObject
+        )
+        val lifecycle = EmmyV2Envelope(
+            kind = "event",
+            type = "vm.lifecycle",
+            agentSessionId = "agent-1",
+            connectionEpoch = 2,
+            eventSeq = 4,
+            target = EmmyV2Target(vmId = "vm-7"),
+            payload = JsonParser.parseString("{\"current\":\"READY\"}").asJsonObject
+        )
+
+        val initJson = JsonParser.parseString(init.toJson()).asJsonObject
+        val readyJson = JsonParser.parseString(ready.toJson()).asJsonObject
+        val lifecycleJson = JsonParser.parseString(lifecycle.toJson()).asJsonObject
+
+        assertEquals("agent.describe", initJson.get("type").asString)
+        assertEquals(2L, initJson.get("connectionEpoch").asLong)
+        assertEquals(3L, readyJson.getAsJsonObject("payload").get("snapshotEventSeq").asLong)
+        assertEquals("vm-7", lifecycleJson.getAsJsonObject("target").get("vmId").asString)
+        assertEquals(4L, lifecycleJson.get("eventSeq").asLong)
+    }
+
+    @Test
     fun `v2 envelope uses reserved wire id and omits absent optional fields`() {
         val envelope = EmmyV2Envelope(
             kind = "event",
