@@ -435,11 +435,11 @@ RouteResult Evaluate(uint64_t vmId, uint64_t pauseId, uint64_t frameId, const Ev
 - 提供 `HostValueProvider` 示例：LuaThread 采集 userdata 描述，必要的 UObject/反射字段切换到 GameThread，并返回可序列化副本；禁止把 `UObject*` 或 `FProperty*` 指针放入 DTO。
 - 过滤 UnLua 内部为 userdata header 计算而创建的临时 state，只有注册过的 `FLuaEnv` 才能成为公开 VM。
 
-- [ ] **步骤 1：写契约校验脚本/样例**
+- [x] **步骤 1：写契约校验脚本/样例**
 
   用 JSON fixture 校验函数名、调用顺序、非零 pending registrationId 行为、registrationId=0 失败行为和 ABI 字段。
 
-- [ ] **步骤 2：写宿主适配说明**
+- [x] **步骤 2：写宿主适配说明**
 
   说明 Host API 不在 DllMain 调用，不在 lua_close 返回后读取 state，不把临时 userdata-header state 注册为 VM；给出 `OnLuaStateCreated -> Register -> Ready`、`OnLuaStateDestroyed -> BeginClose -> lua_close -> EndClose/Release` 的固定顺序，并单独列出 HotReload/reset 顺序。
 
@@ -450,6 +450,8 @@ RouteResult Evaluate(uint64_t vmId, uint64_t pauseId, uint64_t frameId, const Ev
 - [ ] **步骤 4：运行文档/JSON 静态检查并提交**
 
   运行 JSON parse、代码围栏和链接检查；提交 `文档：补充 UE UnLua Host API 接入契约`。
+
+当前进度说明：任务 7 已完成 Host API 生命周期契约、动态导出示例、ABI 字段和 UnLua 接入检查表；HostValueProvider 可执行 fixture、真实 UE/PIE 验证仍未完成。
 
 ### 任务 8：CLI Gateway 基础（只读）
 
