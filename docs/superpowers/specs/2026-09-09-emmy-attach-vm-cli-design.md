@@ -623,7 +623,7 @@ int Emmy_SetLuaVmDisplayName(
 - `EmmyVmMetadata` 和 `displayName` 的字符串只在调用期间借用，Agent 必须在返回前复制需要保存的内容。
 - Host 提供的 display name 只用于展示；身份由 Agent 生成。
 - Agent 未激活时 API 必须是低成本 no-op，不影响 Shipping 或非调试构建。
-- Agent 未激活时返回 `registrationId=0`；Host 对 0 视为“未注册”，不得继续调用 Lua 调试操作。
+- Agent 未激活时仍返回非零 pending `registrationId`，Host 可用它继续上报 Ready/Close；只有参数无效或注册失败时才返回 `registrationId=0`。pending registration 不代表 Agent 已 Ready，不能据此执行 Lua 调试操作。
 
 ### 9.3 UE/UnLua 接入时序
 

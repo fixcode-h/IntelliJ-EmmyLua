@@ -113,7 +113,7 @@ assertEquals("vm.lifecycle", JsonParser.parseString(encoded).asJsonObject["type"
 - `class NativeVmRegistry { Register(lua_State*, const VmMetadata&); NotifyReady(uint64_t); BeginClose(uint64_t, const std::string&); EndClose(uint64_t); Release(uint64_t); Find(uint64_t); FindByState(lua_State*); Snapshot(); SetEventSink(...); }`。
 - `class HostVmRegistry { RegisterBeforeAgent(...); MarkReady(...); BeginClose(...); EndClose(...); DrainTo(NativeVmRegistry&); }`：Agent 未激活时先保存宿主注册信息，激活时一次性对账；不能因 `registrationId=0` 丢失事件。
 - C ABI 导出：`Emmy_RegisterLuaVm`、`Emmy_NotifyLuaVmReady`、`Emmy_BeginLuaVmClose`、`Emmy_EndLuaVmClose`、`Emmy_ReleaseLuaVmRegistration`、`Emmy_SetLuaVmDisplayName`。
-- `registrationId=0` 表示 Agent 未激活或注册失败；所有字符串参数只在调用期间借用，Registry 必须复制。
+- `registrationId=0` 只表示参数无效或注册失败；Agent 尚未激活时也必须返回非零 pending registrationId，供后续 Ready/Close 调用关联 Host Registry 记录。所有字符串参数只在调用期间借用，Registry 必须复制。
 - C ABI 必须定义 `EMMY_HOST_API_VERSION`、结构体 `size/version`、Windows `__declspec(dllexport)` 和 `__cdecl` 调用约定；宿主通过 `GetProcAddress` 绑定注入 Agent 的唯一导出，不得静态链接第二份 `EmmyFacade`。
 - Host Registry 必须提供 `ReconcileExistingVms()`；Agent 在 InitReq 前后都可调用，返回已存在 VM 的注册状态和 layout fingerprint。
 
@@ -148,7 +148,7 @@ bool ReconcileExistingVms(NativeVmRegistry& destination);
 
 - [ ] **步骤 3：实现 Host Registry、Native Registry 和激活对账**
 
-  使用静态/原子 ID 生成器；以 main state 地址作为内部索引，以 generation 防止地址复用；不在 Registry 锁内调用 EventSink。Agent 未激活时把 Host API 调用写入进程内 Host Registry，InitReq 到达后执行 `ReconcileExistingVms()`，再把事件放入有界 pending 队列；不得在 Agent 激活前返回并丢弃一个可观测 VM。
+  使用静态/原子 ID 生成器；以 main state 地址作为内部索引，以 generation 防止地址复用；不在 Registry 锁内调用 EventSink。Agent 未激活时把 Host API 调用写入进程内 Host Registry，并返回可用于后续生命周期调用的 pending registrationId；InitReq 到达后执行 `ReconcileExistingVms()`，再把事件放入有界 pending 队列；不得在 Agent 激活前返回并丢弃一个可观测 VM。
 
 - [ ] **步骤 4：接入唯一 C ABI 导出并构建**
 
@@ -429,7 +429,7 @@ RouteResult Evaluate(uint64_t vmId, uint64_t pauseId, uint64_t frameId, const Ev
 
 - [ ] **步骤 1：写契约校验脚本/样例**
 
-  用 JSON fixture 校验函数名、调用顺序、registrationId=0 inactive 行为和 ABI 字段。
+  用 JSON fixture 校验函数名、调用顺序、非零 pending registrationId 行为、registrationId=0 失败行为和 ABI 字段。
 
 - [ ] **步骤 2：写宿主适配说明**
 
