@@ -262,6 +262,12 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
                 log(notify.message, DebugLogLevel.fromValue(notify.type))
             }
 
+            MessageCMD.EnvelopeV2 -> {
+                if (!handleV2Envelope(json)) {
+                    log("Unknown Emmy v2 message", DebugLogLevel.DEBUG)
+                }
+            }
+
             else -> {
                 if (!handleBackendMessage(cmd, json)) {
                     log("Unknown Emmy message: $cmd", DebugLogLevel.DEBUG)
@@ -271,6 +277,31 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
     }
 
     protected open fun handleBackendMessage(cmd: MessageCMD, json: String): Boolean = false
+
+    /**
+     * v2 lifecycle messages are deliberately handled separately from legacy
+     * BreakNotify/EvalRsp DTOs. VmRegistry ownership is added in the next
+     * phase; this hook keeps the wire contract observable without coupling the
+     * transport to XDebugger objects.
+     */
+    protected open fun handleV2Envelope(json: String): Boolean {
+        val envelope = runCatching { EmmyV2Envelope.fromJson(json) }
+            .getOrElse {
+                log("解析 Emmy v2 消息失败: ${it.message}", DebugLogLevel.WARNING)
+                return true
+            }
+        return when (envelope.type) {
+            "agent.ready" -> {
+                markInitialized()
+                true
+            }
+            "vm.snapshot", "vm.lifecycle" -> {
+                log("Emmy v2 ${envelope.type} received", DebugLogLevel.DEBUG)
+                true
+            }
+            else -> false
+        }
+    }
 
     protected fun markInitialized() {
         lifecycle.post(sessionGeneration, DebugSessionEvent.INITIALIZED)

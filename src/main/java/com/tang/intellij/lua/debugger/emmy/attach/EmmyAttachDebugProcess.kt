@@ -28,7 +28,6 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
         val state = runCatching { Gson().fromJson(json, AttachedNotify::class.java).state }.getOrNull()
         val stateText = state?.let { " 0x${it.toString(16)}" }.orEmpty()
         log("已附加到 Lua 状态$stateText", DebugLogLevel.RUNTIME)
-        markInitialized()
         return true
     }
 }
