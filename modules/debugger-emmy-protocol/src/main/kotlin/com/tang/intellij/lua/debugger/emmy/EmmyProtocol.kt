@@ -159,7 +159,11 @@ class Stack(
         val upvalueVariables: List<VariableValue>
 )
 
-class BreakNotify(val stacks: List<Stack>)
+class BreakNotify(
+    val stacks: List<Stack>,
+    val vmId: String? = null,
+    val pauseId: Long? = null
+)
 
 class EvalReq(val expr: String, val stackLevel: Int, val cacheId: Int, val depth: Int) : Message(MessageCMD.EvalReq) {
     val seq = makeSeq()
