@@ -17,3 +17,9 @@
 ## Loopback 限制
 
 本任务没有启动真实 loopback/IDEA UI。验证覆盖 DTO 和纯 Kotlin 状态机边界；真实 attach transport 的断线、重连、snapshot-first 和多 VM UI 行为仍需在 CLI loopback 协议完成并可编译后进行集成验证。
+
+## IDEA CLI Gateway 接入补充
+
+- `EmmyDebugProcessBase` 实现 `EmmyDebugBackend`，以项目 location hash 与运行配置名生成稳定 `targetId`，向 Gateway 提供 VM、pause、stack、scope、variables、evaluate、control、breakpoint 和 probe DTO。
+- control/evaluate/breakpoint mutation 通过 lifecycle executor 串行化，transport 缺失时返回 `TARGET_NOT_READY`；stop/失败终止时注销 target 并清理 CLI breakpoint/probe 状态。
+- pause、resume、VM lifecycle 和 pause-request 事件发布到 target journal；`CliGatewayApplicationService` 已注册到 `plugin.xml`。

@@ -25,6 +25,7 @@ import com.intellij.xdebugger.breakpoints.XLineBreakpoint
 import com.intellij.xdebugger.evaluation.XDebuggerEditorsProvider
 import com.intellij.xdebugger.frame.XSuspendContext
 import com.tang.intellij.lua.debugger.*
+import com.tang.intellij.lua.debugger.cli.*
 import com.tang.intellij.lua.debugger.core.DebugSessionEvent
 import com.tang.intellij.lua.debugger.core.DebugSessionController
 import com.tang.intellij.lua.debugger.core.DebugSessionState
@@ -41,8 +42,10 @@ import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.TimeUnit
 
-abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(session), ITransportHandler {
+abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(session), ITransportHandler, EmmyDebugBackend {
     private val editorsProvider = LuaDebuggerEditorsProvider()
     private val evaluationRequests = RequestBroker(
         RequestRegistry<EvalRsp>(
@@ -59,6 +62,11 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
     private val reconnectAttempt = AtomicInteger(0)
     private val v2RequestSequence = AtomicLong()
     private val snapshotRequestOutstanding = AtomicBoolean()
+    private val cliBreakpointRevision = AtomicLong()
+    private val cliBreakpoints = java.util.concurrent.ConcurrentHashMap<String, CliBreakpointSpec>()
+    private val cliProbes = java.util.concurrent.ConcurrentHashMap<String, CliProbeSpec>()
+    private val cliTargetId = "emmy-${session.project.locationHash}-${session.runProfile?.name ?: "session"}"
+    @Volatile private var cliRegistered = false
     protected val vmRegistry = VmRegistry()
     protected val pauseSnapshots = PauseSnapshotStore()
     protected var transporter: Transporter? = null
@@ -78,8 +86,11 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
     )
     @Volatile private var sessionGeneration = 0L
 
+    override val debugTargetId: String get() = cliTargetId
+
     override fun sessionInitialized() {
         super.sessionInitialized()
+        registerCliTarget()
         reconnectStopped.set(false)
         reconnectAttempt.set(0)
         sessionGeneration = lifecycle.start()
@@ -345,6 +356,10 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
                             lifecycle.contextGeneration != null || lifecycle.sourceEpoch != null)) {
                         pauseSnapshots.invalidate(lifecycle.vmId)
                     }
+                    lifecycle?.let { event ->
+                        publishCliEvent("vm.lifecycle", event.vmId, null,
+                            mapOf("state" to event.current, "generation" to event.generation, "eventSeq" to event.eventSeq))
+                    }
                 }
                 log("Emmy v2 ${envelope.type} received: ${result.status}", DebugLogLevel.DEBUG)
                 true
@@ -515,6 +530,7 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
     }
 
     private fun handleBreak(data: BreakNotify) {
+        publishCliEvent("debug.paused", data.vmId, data.pauseId, mapOf("reason" to data.pauseReason))
         val frames = data.stacks.map { EmmyDebugStackFrame(it, this) }
         val top = frames.firstOrNull { it.sourcePosition != null }
             ?: frames.firstOrNull { it.data.line > 0 }
@@ -565,6 +581,7 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
         pauseSnapshots.clear()
         vmRegistry.list().forEach { vmRegistry.invalidatePause(it.vmId) }
         cancelEvaluationsThen(CancellationException("Emmy execution resumed")) {
+            publishCliEvent("debug.resumed")
             send(DebugActionMessage(DebugAction.Continue))
         }
     }
@@ -595,12 +612,15 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
     }
 
     private fun finishStop() {
+        unregisterCliTarget()
         lifecycle.post(sessionGeneration, DebugSessionEvent.TERMINATED) {
             try {
                 evaluationRequests.close()
             } finally {
                 breakpoints.clear()
                 breakpointIds.clear()
+                cliBreakpoints.clear()
+                cliProbes.clear()
                 lifecycle.close()
             }
         }
@@ -609,6 +629,9 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
     private fun terminateFailedSession() {
         if (!failureTerminationStarted.compareAndSet(false, true)) return
         reconnectStopped.set(true)
+        unregisterCliTarget()
+        cliBreakpoints.clear()
+        cliProbes.clear()
         clearInlineSnapshot()
         temporaryBreakpoint = null
         cancelEvaluationsThen(IOException("Emmy debug target stopped")) {
@@ -634,6 +657,7 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
         clearInlineSnapshot()
         pauseSnapshots.clear()
         cancelEvaluationsThen(CancellationException("Emmy execution resumed")) {
+            publishCliEvent("debug.resumed")
             send(DebugActionMessage(DebugAction.StepOver))
         }
     }
@@ -642,6 +666,7 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
         clearInlineSnapshot()
         pauseSnapshots.clear()
         cancelEvaluationsThen(CancellationException("Emmy execution resumed")) {
+            publishCliEvent("debug.resumed")
             send(DebugActionMessage(DebugAction.StepIn))
         }
     }
@@ -650,8 +675,152 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
         clearInlineSnapshot()
         pauseSnapshots.clear()
         cancelEvaluationsThen(CancellationException("Emmy execution resumed")) {
+            publishCliEvent("debug.resumed")
             send(DebugActionMessage(DebugAction.StepOut))
         }
+    }
+
+    private fun registerCliTarget() {
+        runCatching {
+            CliGatewayApplicationService.getInstance().register(this)
+            cliRegistered = true
+        }.onFailure { log("CLI Gateway 注册 Emmy target 失败: ${it.message}", DebugLogLevel.WARNING) }
+    }
+
+    private fun unregisterCliTarget() {
+        if (!cliRegistered) return
+        runCatching { CliGatewayApplicationService.getInstance().unregister(debugTargetId) }
+        cliRegistered = false
+    }
+
+    override fun debugTargetSummary(): CliTargetSummary = CliTargetSummary(
+        targetId = debugTargetId,
+        projectName = session.project.name,
+        state = lifecycle.state.name,
+        agentReady = lifecycle.state == DebugSessionState.RUNNING
+    ).copy(vms = debugVmList())
+
+    override fun debugVmList(): List<CliVmSummary> = vmRegistry.list().map {
+        CliVmSummary(it.vmId, it.generation, it.displayName, it.state, it.luaVersion, it.discovery, it.activePauseId)
+    }
+
+    override fun debugPause(vmId: String, pauseId: Long?): PauseSnapshot? {
+        val selected = pauseId ?: vmRegistry.resolve(vmId)?.activePauseId ?: return null
+        return pauseSnapshots.get(vmId, selected)
+    }
+
+    override fun debugControl(request: CliControlRequest): Result<CliControlResult> {
+        if (vmRegistry.resolve(request.vmId) == null) return Result.failure(IllegalStateException(CliErrorCodes.VM_NOT_FOUND))
+        if (request.action != "Break" && debugPause(request.vmId, request.pauseId) == null) {
+            return Result.failure(IllegalStateException(CliErrorCodes.STALE_PAUSE_REFERENCE))
+        }
+        val action = when (request.action) {
+            "Break" -> DebugAction.Break
+            "Continue" -> DebugAction.Continue
+            "StepIn" -> DebugAction.StepIn
+            "StepOver" -> DebugAction.StepOver
+            "StepOut" -> DebugAction.StepOut
+            else -> return Result.failure(IllegalArgumentException("UNSUPPORTED_CAPABILITY"))
+        }
+        return runOnLifecycle {
+            sendRequired(DebugActionMessage(action))
+            if (action != DebugAction.Break) {
+                pauseSnapshots.invalidate(request.vmId, request.pauseId)
+                vmRegistry.invalidatePause(request.vmId, request.pauseId)
+                publishCliEvent("debug.resumed", request.vmId, request.pauseId, mapOf("action" to request.action))
+            } else {
+                publishCliEvent("debug.pauseRequested", request.vmId, request.pauseId)
+            }
+            CliControlResult(request.action, true, request.pauseId)
+        }
+    }
+
+    override fun debugEvaluate(request: CliEvaluationRequest): Result<CliCapturedValue> {
+        if (request.expression.length > 4096) return Result.failure(IllegalArgumentException(CliErrorCodes.EVALUATION_LIMIT_EXCEEDED))
+        val snapshot = debugPause(request.vmId, request.pauseId)
+            ?: return Result.failure(IllegalStateException(CliErrorCodes.STALE_PAUSE_REFERENCE))
+        val frame = snapshot.stacks.firstOrNull { frameIdFor(snapshot.pauseId, it) == request.frameId }
+            ?: return Result.failure(IllegalStateException(CliErrorCodes.STALE_PAUSE_REFERENCE))
+        val future = CompletableFuture<Result<CliCapturedValue>>()
+        val eval = EvalReq(request.expression, frame.level, 0, request.maxDepth,
+            sourceIdentity = SourceIdentity.fromPath(frame.file).toWire())
+        requestEvaluation(eval) { result ->
+            future.complete(result.map { rsp ->
+                val value = rsp.value
+                CliCapturedValue(request.expression, rsp.success, value?.valueTypeName, value?.value,
+                    truncated = false, errorMessage = rsp.error)
+            })
+        }
+        return try {
+            future.get(10, TimeUnit.SECONDS)
+        } catch (error: Throwable) {
+            Result.failure(error.cause ?: error)
+        }
+    }
+
+    override fun debugBreakpoints(): List<CliBreakpointSpec> = cliBreakpoints.values.sortedBy { it.breakpointId }
+
+    override fun debugMutateBreakpoints(request: CliBreakpointMutation): Result<CliBreakpointResult> {
+        val expected = request.expectedRevision
+        if (expected != null && expected != cliBreakpointRevision.get()) {
+            return Result.failure(IllegalStateException("BREAKPOINT_REVISION_CONFLICT"))
+        }
+        return runOnLifecycle {
+            request.remove.forEach { id -> cliBreakpoints.remove(id)?.let { sendRequired(RemoveBreakPointReq(listOf(it.toProtocol()))) } }
+            request.add.forEach { spec ->
+                if (vmRegistry.resolve(spec.vmId) == null) throw IllegalStateException(CliErrorCodes.VM_NOT_FOUND)
+                cliBreakpoints[spec.breakpointId] = spec
+                sendRequired(AddBreakPointReq(listOf(spec.toProtocol())))
+            }
+            CliBreakpointResult(cliBreakpointRevision.incrementAndGet(), debugBreakpoints())
+        }
+    }
+
+    override fun debugInstallProbe(spec: CliProbeSpec): Result<CliProbeSpec> {
+        if (spec.targetId != debugTargetId) return Result.failure(IllegalStateException(CliErrorCodes.TARGET_NOT_FOUND))
+        if (vmRegistry.resolve(spec.vmId) == null) return Result.failure(IllegalStateException(CliErrorCodes.VM_NOT_FOUND))
+        cliProbes[spec.probeId] = spec
+        return Result.success(spec)
+    }
+
+    override fun debugRemoveProbe(probeId: String, owner: String): Result<Boolean> {
+        val probe = cliProbes[probeId] ?: return Result.success(false)
+        if (probe.owner != owner) return Result.failure(IllegalAccessException(CliErrorCodes.NOT_AUTHORIZED))
+        cliProbes.remove(probeId, probe)
+        return Result.success(true)
+    }
+
+    private fun BreakPoint.toCliSpec(id: String, vmId: String): CliBreakpointSpec = CliBreakpointSpec(
+        id, "IDEA", vmId, sourceIdentity?.let { CliSourceIdentity(it.uri, it.canonicalPath, it.sourceHash, it.sourceEpoch ?: it.loaderEpoch, it.verified) }
+            ?: CliSourceIdentity("", file), line, condition, logMessage, hitCondition
+    )
+
+    private fun CliBreakpointSpec.toProtocol(): BreakPoint = BreakPoint(
+        sourceIdentity.canonicalPath, line, condition, logMessage, hitCondition,
+        sourceIdentity = SourceIdentityWire(sourceIdentity.canonicalPath, sourceIdentity.uri, sourceIdentity.sourceHash,
+            sourceEpoch = sourceIdentity.sourceEpoch, verified = sourceIdentity.verified)
+    )
+
+    private fun frameIdFor(pauseId: Long, stack: Stack): String = "frame-$pauseId-${stack.level}"
+
+    private fun <T> runOnLifecycle(action: () -> T): Result<T> {
+        val future = CompletableFuture<Result<T>>()
+        val token = sessionGeneration
+        if (token == 0L || lifecycle.state.isTerminal) return Result.failure(IllegalStateException(CliErrorCodes.TARGET_NOT_READY))
+        lifecycle.execute(token) {
+            try { future.complete(Result.success(action())) }
+            catch (error: Throwable) { future.complete(Result.failure(error)) }
+        }
+        return try { future.get(5, TimeUnit.SECONDS) } catch (error: Throwable) { Result.failure(error.cause ?: error) }
+    }
+
+    private fun sendRequired(message: IMessage) {
+        val active = transporter ?: throw IOException("${CliErrorCodes.TARGET_NOT_READY}: Emmy transport is not connected")
+        active.send(message)
+    }
+
+    private fun publishCliEvent(type: String, vmId: String? = null, pauseId: Long? = null, payload: Map<String, Any?> = emptyMap()) {
+        runCatching { CliGatewayApplicationService.getInstance().registry().publish(debugTargetId, type, vmId, pauseId, payload) }
     }
 
     private fun clearInlineSnapshot() {

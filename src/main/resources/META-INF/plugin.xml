@@ -40,4 +40,7 @@
     <idea-version since-build="252" until-build="252.*"/>
     <xi:include href="emmylua-core.xml" xpointer="xpointer(/idea-plugin/*)"/>
     <depends optional="true" config-file="emmylua-project.xml">com.intellij.java</depends>
+    <extensions defaultExtensionNs="com.intellij">
+        <applicationService serviceImplementation="com.tang.intellij.lua.debugger.cli.CliGatewayApplicationService"/>
+    </extensions>
 </idea-plugin>
