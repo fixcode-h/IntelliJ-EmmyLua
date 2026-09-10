@@ -41,6 +41,9 @@ class EmmyNativeIdeFixtureIntegrationTest : LuaTestBase() {
         val template = File("EmmyLuaDebugger/tests/fixtures/cli_runtime.lua").absoluteFile
         assertTrue("fixture source missing: $template", template.isFile)
         val source = File(project.basePath!!, "cli_runtime.lua")
+        // Light platform projects may be reused after another test removes
+        // their physical base directory; create this fixture's source parent.
+        Files.createDirectories(source.parentFile.toPath())
         Files.writeString(source.toPath(), template.readText())
         VfsUtil.markDirtyAndRefresh(false, true, true, project.baseDir)
         assertTrue("fixture source missing: $source", source.isFile)
@@ -128,6 +131,19 @@ class EmmyNativeIdeFixtureIntegrationTest : LuaTestBase() {
                 }, leaseId)
                 assertTrue(specialKeyEval.toString(), specialKeyEval.get("ok").asBoolean)
                 assertEquals("ok", specialKeyEval.get("data").asJsonObject.get("display").asString)
+                val tableEval = client.request(CliOperations.EVALUATE, adapter.targetId, JsonObject().apply {
+                    addProperty("vmId", vmInfo.vmId)
+                    addProperty("pauseId", pause.reference.pauseId)
+                    addProperty("frameId", frame.frameId)
+                    addProperty("expression", "value")
+                    addProperty("maxDepth", 3)
+                }, leaseId)
+                assertTrue(tableEval.toString(), tableEval.get("ok").asBoolean)
+                val tableChildren = tableEval.getAsJsonObject("data").getAsJsonArray("children")
+                assertEquals("42", tableChildren.first { it.asJsonObject.get("name").asString == "answer" }
+                    .asJsonObject.get("display").asString)
+                assertEquals("ok", tableChildren.first { it.asJsonObject.get("name").asString == "a.b" }
+                    .asJsonObject.getAsJsonArray("children").single().asJsonObject.get("display").asString)
 
                 val scopes = client.request(CliOperations.SCOPES, adapter.targetId, JsonObject().apply {
                     addProperty("vmId", vmInfo.vmId)
