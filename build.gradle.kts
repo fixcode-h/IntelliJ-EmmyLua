@@ -148,6 +148,12 @@ project(":") {
     }
 
     tasks {
+        withType<Test>().configureEach {
+            // IntelliJ bundles a different JNA native version; ipcsocket
+            // must load its matching bundled provider for named pipes.
+            jvmArgs("-Djna.nosys=true")
+        }
+
         buildPlugin {
         }
 

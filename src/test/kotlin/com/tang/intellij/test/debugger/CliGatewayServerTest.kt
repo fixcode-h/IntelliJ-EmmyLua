@@ -19,6 +19,7 @@ class CliGatewayServerTest {
     @Test
     fun `windows named pipe serves authenticated JSONL requests`() {
         assumeTrue("named pipe test requires Windows", System.getProperty("os.name").startsWith("Windows", true))
+        System.setProperty("jna.nosys", "true")
         val gateway = CliGatewayService(CliTargetProvider {
             listOf(CliTargetSummary("target-pipe", "Demo", "RUNNING", true))
         })
@@ -27,8 +28,7 @@ class CliGatewayServerTest {
             server.startNamedPipe("emmylua-test-${System.nanoTime()}")
         } catch (error: Throwable) {
             server.close()
-            assumeNoException("Windows named pipe unavailable", error)
-            return
+            throw AssertionError("Windows named pipe provider unavailable", error)
         }
         try {
             Win32NamedPipeSocket("\\\\.\\pipe\\${endpoint.host}").use { socket ->
