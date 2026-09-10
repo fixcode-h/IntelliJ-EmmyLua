@@ -3,6 +3,7 @@ package com.tang.intellij.test.debugger
 import com.tang.intellij.lua.debugger.cli.*
 import com.tang.intellij.lua.debugger.emmy.*
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -33,17 +34,37 @@ class EmmyDebugTargetAdapterTest {
         assertEquals(0, backend.evaluateCalls)
     }
 
+    @Test
+    fun `production adapter expands scoped references and rejects stale frame`() {
+        val child = VariableValue("name", LuaValueType.TSTRING.wireId, "player", 4, "string", 0, null)
+        val table = VariableValue("player", LuaValueType.TSTRING.wireId, "table", 5, "table", 0, listOf(child))
+        val backend = FakeBackend(CliCapturedValue("x", true, display = "ok"),
+            PauseSnapshot("vm-1", 7, "thread-1", stacks = listOf(
+                Stack("C:/Game.lua", 10, "main", 0, listOf(table), emptyList(), "frame-7"))))
+        val adapter = EmmyDebugTargetAdapter(backend)
+
+        val scope = adapter.scopes("vm-1", 7, "frame-7").getOrThrow().single()
+        val expanded = adapter.variablesReference("vm-1", 7, "frame-7", scope.variablesReference)
+        assertTrue(expanded.isSuccess)
+        val player = expanded.getOrThrow().variables.single()
+        assertEquals("player", player.name)
+        assertNotNull(player.variablesReference)
+        val childExpanded = adapter.variablesReference("vm-1", 7, "frame-7", player.variablesReference!!)
+        assertEquals("name", childExpanded.getOrThrow().variables.single().name)
+        assertTrue(adapter.variablesReference("vm-1", 8, "frame-7", scope.variablesReference).isFailure)
+    }
+
     private fun request() = CliEvaluationRequest("vm-1", 1, "frame-1", "locals.player")
 
-    private class FakeBackend(private val evaluation: CliCapturedValue) : EmmyDebugBackend {
+    private class FakeBackend(private val evaluation: CliCapturedValue,
+                              private val pauseSnapshot: PauseSnapshot = PauseSnapshot("vm-1", 1, "thread-1", stacks = listOf(
+                                  Stack("C:/Game.lua", 10, "main", 0, emptyList(), emptyList(), "frame-1")))) : EmmyDebugBackend {
         override val debugTargetId = "target-1"
         var evaluateCalls = 0
-        private val snapshot = PauseSnapshot("vm-1", 1, "thread-1", stacks = listOf(
-            Stack("C:/Game.lua", 10, "main", 0, emptyList(), emptyList(), "frame-1")))
 
         override fun debugTargetSummary() = CliTargetSummary("target-1", "Demo", "RUNNING", true)
         override fun debugVmList() = emptyList<CliVmSummary>()
-        override fun debugPause(vmId: String, pauseId: Long?) = snapshot.takeIf { it.vmId == vmId && it.pauseId == pauseId }
+        override fun debugPause(vmId: String, pauseId: Long?) = pauseSnapshot.takeIf { it.vmId == vmId && it.pauseId == pauseId }
         override fun debugControl(request: CliControlRequest) = Result.success(CliControlResult(request.action, true))
         override fun debugEvaluate(request: CliEvaluationRequest): Result<CliCapturedValue> {
             evaluateCalls++

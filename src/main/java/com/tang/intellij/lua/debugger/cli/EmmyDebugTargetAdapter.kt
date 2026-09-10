@@ -65,13 +65,54 @@ class EmmyDebugTargetAdapter(private val backend: EmmyDebugBackend) : DebugTarge
             return Result.failure(IllegalArgumentException(CliErrorCodes.EVALUATION_LIMIT_EXCEEDED))
         }
         val roots = frame.localVariables.orEmpty() + frame.upvalueVariables.orEmpty() + frame.globalVariables.orEmpty()
-        val list = if (path.isNullOrBlank()) roots else listOf(resolvePath(roots, path).getOrElse {
-            return Result.failure(it)
-        })
+        val list = when {
+            path.isNullOrBlank() -> roots
+            path == "locals" -> frame.localVariables
+            path == "upvalues" -> frame.upvalueVariables
+            path == "globals" -> frame.globalVariables.orEmpty()
+            else -> listOf(resolvePath(roots, path).getOrElse { return Result.failure(it) })
+        }
         val budget = Budget(maxNodes, maxBytes)
         val seen = IdentityHashMap<VariableValue, Boolean>()
         val values = list.mapIndexedNotNull { index, value ->
-            toSnapshot(value, maxDepth, budget, seen, path ?: value.nameValue ?: index.toString())
+            val valuePath = when {
+                path.isNullOrBlank() -> value.nameValue.ifBlank { index.toString() }
+                path == "locals" || path == "upvalues" || path == "globals" -> value.nameValue
+                else -> path
+            }
+            toSnapshot(value, maxDepth, budget, seen, valuePath,
+                vmId, pauseId, frameId)
+        }
+        return Result.success(CliVariablesPage(values, budget.truncated, returnedCount = values.size))
+    }
+
+    override fun variablesReference(vmId: String, pauseId: Long, frameId: String, reference: String,
+                                    maxDepth: Int, maxNodes: Int, maxBytes: Int): Result<CliVariablesPage> {
+        val parts = reference.split(":", limit = 5)
+        if (parts.size < 5 || parts[1] != vmId || parts[2] != pauseId.toString() || parts[3] != frameId) {
+            return Result.failure(IllegalStateException(CliErrorCodes.STALE_PAUSE_REFERENCE))
+        }
+        val path = when (parts[0]) {
+            "scope" -> if (parts[4] in setOf("locals", "upvalues", "globals")) parts[4] else null
+            "value" -> parts[4].takeIf { it.isNotBlank() }
+            else -> null
+        } ?: return Result.failure(IllegalStateException(CliErrorCodes.STALE_PAUSE_REFERENCE))
+        if (parts[0] == "scope") return variables(vmId, pauseId, frameId, path, maxDepth, maxNodes, maxBytes)
+
+        val snapshot = backend.debugPause(vmId, pauseId)
+            ?: return Result.failure(IllegalStateException(CliErrorCodes.STALE_PAUSE_REFERENCE))
+        val frame = findFrame(snapshot, frameId)
+            ?: return Result.failure(IllegalStateException(CliErrorCodes.STALE_PAUSE_REFERENCE))
+        if (maxDepth !in 0..32 || maxNodes !in 1..100_000 || maxBytes !in 1..16 * 1024 * 1024) {
+            return Result.failure(IllegalArgumentException(CliErrorCodes.EVALUATION_LIMIT_EXCEEDED))
+        }
+        val roots = frame.localVariables.orEmpty() + frame.upvalueVariables.orEmpty() + frame.globalVariables.orEmpty()
+        val value = resolvePath(roots, path).getOrElse { return Result.failure(it) }
+        val budget = Budget(maxNodes, maxBytes)
+        val seen = IdentityHashMap<VariableValue, Boolean>()
+        val values = value.children.orEmpty().mapIndexedNotNull { index, child ->
+            val childPath = "$path.${child.nameValue.ifBlank { index.toString() }}"
+            toSnapshot(child, maxDepth, budget, seen, childPath, vmId, pauseId, frameId)
         }
         return Result.success(CliVariablesPage(values, budget.truncated, returnedCount = values.size))
     }
@@ -155,13 +196,16 @@ class EmmyDebugTargetAdapter(private val backend: EmmyDebugBackend) : DebugTarge
         depth: Int,
         budget: Budget,
         seen: IdentityHashMap<VariableValue, Boolean>,
-        path: String
+        path: String,
+        vmId: String,
+        pauseId: Long,
+        frameId: String
     ): CliVariableSnapshot? {
         val display = value.value
         val type = value.valueTypeName.ifBlank { value.valueTypeValue.name }
         if (!budget.take(value.nameValue, type, display)) return null
         val children = value.children.orEmpty()
-        val reference = if (children.isNotEmpty()) referenceFor(value, path) else null
+        val reference = if (children.isNotEmpty()) referenceFor(vmId, pauseId, frameId, path) else null
         var truncated = false
         val eagerChildren = mutableListOf<CliVariableSnapshot>()
         val alreadySeen = seen.put(value, true) != null
@@ -171,7 +215,8 @@ class EmmyDebugTargetAdapter(private val backend: EmmyDebugBackend) : DebugTarge
             } else {
                 for (child in children) {
                     val childPath = if (path.isBlank()) child.nameValue else "$path.${child.nameValue}"
-                    val childSnapshot = toSnapshot(child, depth - 1, budget, seen, childPath)
+                    val childSnapshot = toSnapshot(child, depth - 1, budget, seen, childPath,
+                        vmId, pauseId, frameId)
                     if (childSnapshot == null) {
                         truncated = true
                         break
@@ -189,9 +234,8 @@ class EmmyDebugTargetAdapter(private val backend: EmmyDebugBackend) : DebugTarge
         )
     }
 
-    private fun referenceFor(value: VariableValue, path: String): String =
-        if (value.cacheId > 0) "value:${value.cacheId}" else
-            "value:${Integer.toUnsignedString(System.identityHashCode(value), 16)}:${path.hashCode().toUInt().toString(16)}"
+    private fun referenceFor(vmId: String, pauseId: Long, frameId: String, path: String): String =
+        "value:$vmId:$pauseId:$frameId:$path"
 
     private fun resolvePath(roots: List<VariableValue>, path: String): Result<VariableValue> {
         val evaluator = RestrictedValuePathEvaluator()

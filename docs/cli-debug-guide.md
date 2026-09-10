@@ -38,6 +38,8 @@ emmy-debug variables --target <target-id> --vm <vm-id> --pause <pause-id> --fram
 
 变量展开必须提供有界的 `--max-depth`、`--max-nodes` 和 `--max-bytes`。`--json` 适合脚本和 AI 工具消费。
 
+`--path` 是 `VALUE_PATH`：它只能引用当前暂停帧快照中实际存在的 raw `locals`、`upvalues`、`globals` 名称，以及其 children 路径；不会执行 Lua 表达式、函数或元方法。`scopes` 返回的 `variablesReference` 可直接用于后续变量展开，暂停、恢复、reset 或切换 frame 后必须重新查询。
+
 VM 和 source 相关响应中的 `sourceIdentity` 表示宿主运行时注册的元数据：`chunkName`、规范化后的 `canonicalPath`、`sourceEpoch` 以及可用时的运行时字节 SHA-256。CLI/IDEA 不会用本地磁盘文件重新计算 hash 来替代宿主注册值。
 
 宿主未提供 hash 时，只能按当前 VM 的 raw chunk path 与 `sourceEpoch` 精确匹配；此类 source identity 不应视为内容已验证。PIE/HotReload 发生 reset 后，旧 epoch 的 source identity、暂停帧和断点引用均应重新查询。
@@ -52,6 +54,8 @@ emmy-debug eval --target <target-id> --vm <vm-id> --pause <pause-id> \
   --lease <lease-id> --client emmy-debug
 ```
 
+`--expression` 同样是 `VALUE_PATH`，只接受当前暂停帧中存在的 raw locals/upvalues/globals 名称和 children 路径。`--source-identity` 可选但推荐填写：直接复制 `stack`/`frame` 响应中的 `sourceIdentity`，不要自行根据本地文件计算或杜撰 hash。求值请求中的 identity 使用 `canonicalPath`、可选的 `sourceHash`、`sourceEpoch` 和 `verified` 字段；不匹配当前宿主快照时会返回 `SOURCE_IDENTITY_MISMATCH`。
+
 求值、控制、断点和 Probe 需要当前客户端持有目标 lease。客户端退出或 lease TTL 到期后，服务端会拒绝后续控制请求。
 
 ## Probe
@@ -64,6 +68,8 @@ emmy-debug wait --target <target-id> --client emmy-debug
 emmy-debug probe remove --target <target-id> --probe-id <probe-id> \
   --lease <lease-id> --client emmy-debug
 ```
+
+`--capture` 是 `VALUE_PATH`，只能捕获目标暂停帧中实际存在的 raw locals/upvalues/globals 名称及 children 路径。Probe 必须提供 `sourceIdentity`（使用 `canonicalPath`、可选 `sourceHash`、`sourceEpoch`、`verified`）；应从目标运行时或 `stack`/`frame` 响应复制这些字段，不能杜撰 hash。
 
 Probe 只在暂停原因完全属于该 Probe 时自动继续；用户控制、撤销授权、超时和调试目标关闭都会使 Probe 失效并清理后端断点。
 
