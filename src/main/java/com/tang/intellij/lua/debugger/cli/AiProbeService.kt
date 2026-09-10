@@ -1,5 +1,6 @@
 package com.tang.intellij.lua.debugger.cli
 
+import com.google.gson.Gson
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -47,6 +48,7 @@ class AiProbeService(
     private val evaluationExecutor: ExecutorService = createBoundedExecutor("EmmyLua-AiProbeEval", 32)
 ) : AutoCloseable {
     private val valuePathEvaluator = RestrictedValuePathEvaluator()
+    private val gson = Gson()
     private data class Active(
         val spec: CliProbeSpec,
         val adapter: DebugTargetAdapter,
@@ -61,6 +63,7 @@ class AiProbeService(
     )
 
     private val active = ConcurrentHashMap<String, Active>()
+    private val installLocks = ConcurrentHashMap<String, Any>()
     private val terminal = ConcurrentHashMap<String, AiProbeStatus>()
     private val closed = AtomicBoolean()
     private var registryListener: AutoCloseable? = null
@@ -115,13 +118,25 @@ class AiProbeService(
                 return Result.failure(IllegalArgumentException(it.message ?: CliErrorCodes.EVALUATION_DENIED, it))
             }
         }
-        if (active.containsKey(spec.probeId)) return Result.failure(IllegalArgumentException(CliErrorCodes.PROBE_EXISTS))
-        val installed = adapter.installProbe(spec)
-        if (installed.isFailure) return installed
-        val state = Active(spec, adapter, leases)
-        if (active.putIfAbsent(spec.probeId, state) != null) {
-            runCatching { adapter.removeProbe(spec.probeId, spec.owner) }
-            return Result.failure(IllegalArgumentException(CliErrorCodes.PROBE_EXISTS))
+        val lock = installLocks.computeIfAbsent(spec.probeId) { Any() }
+        try {
+            synchronized(lock) {
+            if (closed.get()) return Result.failure(IllegalStateException(CliErrorCodes.SERVER_CLOSED))
+            if (active.containsKey(spec.probeId)) return Result.failure(IllegalArgumentException(CliErrorCodes.PROBE_EXISTS))
+            val installed = adapter.installProbe(spec)
+            if (installed.isFailure) return installed
+            val state = Active(spec, adapter, leases)
+            active[spec.probeId] = state
+            // Installation can race with revoke/close while the backend call
+            // is in flight. Detach immediately instead of leaving a zombie.
+            if (closed.get() || !trustedTarget(spec.targetId) || !leaseIsValid(state)) {
+                stop(state, removeBackend = true, terminalState =
+                    if (closed.get()) AiProbeState.SERVICE_CLOSED else AiProbeState.REVOKED)
+                return Result.failure(IllegalStateException(CliErrorCodes.LEASE_REQUIRED))
+            }
+            }
+        } finally {
+            installLocks.remove(spec.probeId, lock)
         }
         terminal.remove(spec.probeId)
         scheduler.schedule({ expire(spec.probeId) }, spec.timeoutMillis, TimeUnit.MILLISECONDS)
@@ -446,22 +461,27 @@ class AiProbeService(
 
     private fun fitCapture(value: CliCapturedValue, budget: Int): Pair<CliCapturedValue, Int> {
         if (!value.success) return value to 0
-        val type = value.type.orEmpty()
-        val display = value.display.orEmpty()
-        val typeBytes = type.toByteArray(Charsets.UTF_8).size
-        val displayBytes = display.toByteArray(Charsets.UTF_8).size
-        if (typeBytes + displayBytes <= budget) return value to (typeBytes + displayBytes)
-        val displayBudget = (budget - typeBytes).coerceAtLeast(0)
-        val clipped = truncateUtf8(display, displayBudget)
-        val used = (typeBytes.coerceAtMost(budget) + clipped.toByteArray(Charsets.UTF_8).size)
-            .coerceAtMost(budget)
-        return value.copy(
-            display = clipped,
-            truncated = true,
-            errorCode = CliErrorCodes.EVALUATION_LIMIT_EXCEEDED,
-            errorMessage = "capture byte budget exceeded"
-        ) to used
+        if (jsonBytes(value) <= budget) return value to jsonBytes(value)
+        var candidate = value.copy(truncated = true, errorCode = CliErrorCodes.EVALUATION_LIMIT_EXCEEDED,
+            errorMessage = "capture byte budget exceeded")
+        while (candidate.children.isNotEmpty() && jsonBytes(candidate) > budget) {
+            candidate = candidate.copy(children = candidate.children.dropLast(1))
+        }
+        if (jsonBytes(candidate) > budget) {
+            var display = candidate.display.orEmpty()
+            while (display.isNotEmpty() && jsonBytes(candidate.copy(display = display)) > budget) {
+                display = truncateUtf8(display, (display.toByteArray(Charsets.UTF_8).size * 3 / 4).coerceAtLeast(display.length - 1))
+            }
+            candidate = candidate.copy(display = display)
+        }
+        while (jsonBytes(candidate) > budget && candidate.display?.isNotEmpty() == true) {
+            candidate = candidate.copy(display = truncateUtf8(candidate.display.orEmpty(), candidate.display.orEmpty().toByteArray(Charsets.UTF_8).size - 1))
+        }
+        return candidate to jsonBytes(candidate).coerceAtMost(budget)
     }
+
+    private fun jsonBytes(value: CliCapturedValue): Int =
+        gson.toJson(value).toByteArray(Charsets.UTF_8).size
 
     private fun remainingMillis(state: Active): Long =
         TimeUnit.NANOSECONDS.toMillis((state.deadlineNanos - System.nanoTime()).coerceAtLeast(0L))
@@ -526,7 +546,13 @@ class AiProbeService(
             while (terminal.size > 256) terminal.keys.firstOrNull()?.let(terminal::remove) ?: break
         }
         if (removeBackend) {
-            val cleanup = Runnable { runCatching { state.adapter.removeProbe(state.spec.probeId, state.spec.owner) } }
+            val cleanup = Runnable {
+                // A new generation may reuse the same id while this cleanup
+                // is queued; never remove that generation's backend entry.
+                if (active[state.spec.probeId] !== state) {
+                    runCatching { state.adapter.removeProbe(state.spec.probeId, state.spec.owner) }
+                }
+            }
             runCatching { cleanupExecutor.execute(cleanup) }.onFailure {
                 // During shutdown no worker is available; best effort cleanup
                 // is preferable to holding the lifecycle/evaluation thread.

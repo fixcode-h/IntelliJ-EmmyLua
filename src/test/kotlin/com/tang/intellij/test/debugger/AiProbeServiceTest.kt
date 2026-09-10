@@ -164,6 +164,27 @@ class AiProbeServiceTest {
     }
 
     @Test
+    fun `capture budget includes nested children in serialized size`() {
+        val registry = DebugTargetRegistry()
+        val child = CliVariableSnapshot("nested", "string", "x".repeat(100))
+        val adapter = FakeAdapter(children = listOf(child, child, child))
+        registry.register(adapter)
+        val leases = ControlLeaseManager()
+        leases.acquire("target-1", "client-a", 30_000).getOrThrow()
+        val service = AiProbeService(registry, ScheduledThreadPoolExecutor(1), maxCaptureBytes = 180)
+        try {
+            service.install(spec(captures = listOf("value")), adapter, leases).getOrThrow()
+            pauseEvent(registry, service)
+            val capture = adapter.captures.single()
+            assertTrue(capture.truncated)
+            assertTrue(com.google.gson.Gson().toJson(capture).toByteArray(Charsets.UTF_8).size <= 180)
+            assertTrue(capture.children.size < 3)
+        } finally {
+            service.close()
+        }
+    }
+
+    @Test
     fun `probe evaluation timeout is terminal and removes backend`() {
         val registry = DebugTargetRegistry()
         val adapter = FakeAdapter(evaluationDelayMillis = 40)
@@ -261,7 +282,8 @@ class AiProbeServiceTest {
         private val evaluationDelayMillis: Long = 0,
         private val controlFailure: Throwable? = null,
         private val evaluationEntered: CountDownLatch? = null,
-        private val evaluationRelease: CountDownLatch? = null
+        private val evaluationRelease: CountDownLatch? = null,
+        private val children: List<CliVariableSnapshot> = emptyList()
     ) : DebugTargetAdapter {
         override val targetId: String = "target-1"
         override fun describe() = CliTargetSummary(targetId, "Demo", "RUNNING", true,
@@ -300,7 +322,7 @@ class AiProbeServiceTest {
                 lastCapture = result
                 return Result.failure(failure)
             }
-            val result = CliCapturedValue(request.expression, true, "string", value)
+            val result = CliCapturedValue(request.expression, true, "string", value, children = children)
             captures += result
             lastCapture = result
             return Result.success(result)
