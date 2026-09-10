@@ -430,9 +430,11 @@ class CliGatewayService(
         val maxBytes = boundedInt(args.int("maxBytes") ?: 64 * 1024, 1, 64 * 1024, "maxBytes")
         val reference = args.string("variablesReference")
         val page = if (reference != null) {
-            adapter.variablesReference(vmId, pauseId, frameId, reference, maxDepth, maxNodes, maxBytes)
+            adapter.variablesReference(vmId, pauseId, frameId, reference, maxDepth, maxNodes, maxBytes,
+                request.deadlineMillis ?: 500L)
         } else {
-            adapter.variables(vmId, pauseId, frameId, args.string("path"), maxDepth, maxNodes, maxBytes)
+            adapter.variables(vmId, pauseId, frameId, args.string("path"), maxDepth, maxNodes, maxBytes,
+                request.deadlineMillis ?: 500L)
         }.getOrThrowCode()
         return JsonObject().apply {
             add("variables", gson.toJsonTree(page.variables).asJsonArray)

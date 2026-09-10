@@ -64,7 +64,7 @@ class EmmyDebugTargetAdapter(private val backend: EmmyDebugBackend) : DebugTarge
     }
 
     override fun variables(vmId: String, pauseId: Long, frameId: String, path: String?,
-                           maxDepth: Int, maxNodes: Int, maxBytes: Int): Result<CliVariablesPage> {
+                           maxDepth: Int, maxNodes: Int, maxBytes: Int, timeoutMillis: Long): Result<CliVariablesPage> {
         val snapshot = backend.debugPause(vmId, pauseId) ?: return Result.failure(IllegalStateException(CliErrorCodes.STALE_PAUSE_REFERENCE))
         val frame = findFrame(snapshot, frameId) ?: return Result.failure(IllegalStateException(CliErrorCodes.STALE_PAUSE_REFERENCE))
         if (maxDepth !in 0..32 || maxNodes !in 1..100_000 || maxBytes !in 1..16 * 1024 * 1024) {
@@ -78,16 +78,15 @@ class EmmyDebugTargetAdapter(private val backend: EmmyDebugBackend) : DebugTarge
             path == "globals" -> frame.globalVariables.orEmpty()
             else -> listOf(resolvePath(roots, path).getOrElse { return Result.failure(it) })
         }
-        val budget = Budget(maxNodes, maxBytes)
+        val budget = Budget(maxNodes, maxBytes, timeoutMillis)
         val seen = IdentityHashMap<VariableValue, Boolean>()
-        val values = list.mapNotNull { value ->
-            toSnapshot(value, maxDepth, budget, seen, vmId, pauseId, frameId)
-        }
+        val values = mutableListOf<CliVariableSnapshot>()
+        for (value in list) { if (budget.exhausted()) break; toSnapshot(value, maxDepth, budget, seen, vmId, pauseId, frameId)?.let(values::add) }
         return Result.success(CliVariablesPage(values, budget.truncated || values.any { it.truncated }, returnedCount = values.size))
     }
 
     override fun variablesReference(vmId: String, pauseId: Long, frameId: String, reference: String,
-                                    maxDepth: Int, maxNodes: Int, maxBytes: Int): Result<CliVariablesPage> {
+                                    maxDepth: Int, maxNodes: Int, maxBytes: Int, timeoutMillis: Long): Result<CliVariablesPage> {
         if (maxDepth !in 0..32 || maxNodes !in 1..100_000 || maxBytes !in 1..16 * 1024 * 1024) {
             return Result.failure(IllegalArgumentException(CliErrorCodes.EVALUATION_LIMIT_EXCEEDED))
         }
@@ -101,11 +100,10 @@ class EmmyDebugTargetAdapter(private val backend: EmmyDebugBackend) : DebugTarge
         if (findFrame(snapshot, frameId) == null) {
             return Result.failure(IllegalStateException(CliErrorCodes.STALE_PAUSE_REFERENCE))
         }
-        val budget = Budget(maxNodes, maxBytes)
+        val budget = Budget(maxNodes, maxBytes, timeoutMillis)
         val seen = IdentityHashMap<VariableValue, Boolean>()
-        val values = entry.values.mapNotNull { value ->
-            toSnapshot(value, maxDepth, budget, seen, vmId, pauseId, frameId)
-        }
+        val values = mutableListOf<CliVariableSnapshot>()
+        for (value in entry.values) { if (budget.exhausted()) break; toSnapshot(value, maxDepth, budget, seen, vmId, pauseId, frameId)?.let(values::add) }
         return Result.success(CliVariablesPage(values, budget.truncated || values.any { it.truncated }, returnedCount = values.size))
     }
 
@@ -167,12 +165,15 @@ class EmmyDebugTargetAdapter(private val backend: EmmyDebugBackend) : DebugTarge
         reasons
     )
 
-    private class Budget(nodes: Int, bytes: Int) {
+    private class Budget(nodes: Int, bytes: Int, timeoutMillis: Long) {
         private var remainingNodes = nodes.coerceAtLeast(0)
         private var remainingBytes = bytes.coerceAtLeast(0)
+        private val deadlineNanos = System.nanoTime() + timeoutMillis.coerceAtLeast(1).coerceAtMost(600_000L) * 1_000_000L
         var truncated = false
+        fun exhausted(): Boolean = if (System.nanoTime() >= deadlineNanos) { truncated = true; true } else false
         fun take(vararg values: String): Boolean {
-            val size = values.sumOf { it.toByteArray(Charsets.UTF_8).size.toLong() }.toInt()
+            if (exhausted()) return false
+            val size = values.sumOf { it.toByteArray(Charsets.UTF_8).size.toLong() }.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
             if (remainingNodes <= 0 || remainingBytes < size) {
                 truncated = true
                 return false
@@ -333,7 +334,7 @@ class InMemoryDebugTargetAdapter(
 
     @Synchronized
     override fun variables(vmId: String, pauseId: Long, frameId: String, path: String?, maxDepth: Int,
-                           maxNodes: Int, maxBytes: Int): Result<CliVariablesPage> {
+                           maxNodes: Int, maxBytes: Int, timeoutMillis: Long): Result<CliVariablesPage> {
         val snapshot = pause(vmId, pauseId)
             ?: return Result.failure(IllegalStateException(CliErrorCodes.STALE_PAUSE_REFERENCE))
         val frame = findFrame(snapshot, pauseId, frameId)
@@ -347,7 +348,7 @@ class InMemoryDebugTargetAdapter(
 
     @Synchronized
     override fun variablesReference(vmId: String, pauseId: Long, frameId: String, reference: String,
-                                    maxDepth: Int, maxNodes: Int, maxBytes: Int): Result<CliVariablesPage> {
+                                    maxDepth: Int, maxNodes: Int, maxBytes: Int, timeoutMillis: Long): Result<CliVariablesPage> {
         val validation = validateVariableLimits(maxDepth, maxNodes, maxBytes)
         if (validation != null) return Result.failure(IllegalArgumentException(validation))
         val entry = references[reference]

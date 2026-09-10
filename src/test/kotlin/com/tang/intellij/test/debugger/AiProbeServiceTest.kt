@@ -304,7 +304,7 @@ class AiProbeServiceTest {
         override fun scopes(vmId: String, pauseId: Long, frameId: String) = Result.failure<List<CliScope>>(
             IllegalStateException(CliErrorCodes.STALE_PAUSE_REFERENCE))
         override fun variables(vmId: String, pauseId: Long, frameId: String, path: String?, maxDepth: Int,
-                               maxNodes: Int, maxBytes: Int) = Result.failure<CliVariablesPage>(
+                               maxNodes: Int, maxBytes: Int, timeoutMillis: Long) = Result.failure<CliVariablesPage>(
             IllegalStateException(CliErrorCodes.STALE_PAUSE_REFERENCE))
 
         val evaluated = mutableListOf<String>()

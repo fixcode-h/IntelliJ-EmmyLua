@@ -234,12 +234,14 @@ interface DebugTargetAdapter {
     fun stack(vmId: String, pauseId: Long): Result<List<CliFrame>>
     fun scopes(vmId: String, pauseId: Long, frameId: String): Result<List<CliScope>>
     fun variables(vmId: String, pauseId: Long, frameId: String, path: String? = null,
-                 maxDepth: Int = 3, maxNodes: Int = 100, maxBytes: Int = 64 * 1024): Result<CliVariablesPage>
+                 maxDepth: Int = 3, maxNodes: Int = 100, maxBytes: Int = 64 * 1024,
+                 timeoutMillis: Long = 500): Result<CliVariablesPage>
     /** Expands a previously returned scope/value reference without changing
      * the wire shape used by older adapters. */
     fun variablesReference(vmId: String, pauseId: Long, frameId: String, reference: String,
-                           maxDepth: Int = 3, maxNodes: Int = 100, maxBytes: Int = 64 * 1024): Result<CliVariablesPage> =
-        variables(vmId, pauseId, frameId, reference, maxDepth, maxNodes, maxBytes)
+                           maxDepth: Int = 3, maxNodes: Int = 100, maxBytes: Int = 64 * 1024,
+                           timeoutMillis: Long = 500): Result<CliVariablesPage> =
+        variables(vmId, pauseId, frameId, reference, maxDepth, maxNodes, maxBytes, timeoutMillis)
     fun evaluate(request: CliEvaluationRequest): Result<CliCapturedValue>
     fun control(request: CliControlRequest): Result<CliControlResult>
     fun mutateBreakpoints(request: CliBreakpointMutation): Result<CliBreakpointResult>
