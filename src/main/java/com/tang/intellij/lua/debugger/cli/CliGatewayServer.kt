@@ -191,22 +191,17 @@ class CliGatewayServer(
 
     private fun write(writer: BufferedWriter, response: CliResponse) {
         synchronized(writer) {
-            runCatching {
+            try {
                 writer.write(CliJsonLines.encode(response))
                 writer.newLine()
                 writer.flush()
-            }.onFailure { error ->
-                if (error is CliProtocolException && error.code == CliErrorCodes.RESPONSE_TOO_LARGE) {
-                    runCatching {
-                        writer.write(CliJsonLines.encode(CliJsonLines.error(
-                            response.requestId,
-                            CliErrorCodes.RESPONSE_TOO_LARGE,
-                            "response exceeds the protocol size limit"
-                        )))
-                        writer.newLine()
-                        writer.flush()
-                    }
-                }
+            } catch (error: CliProtocolException) {
+                if (error.code == CliErrorCodes.RESPONSE_TOO_LARGE) {
+                    writer.write(CliJsonLines.encode(CliJsonLines.error(response.requestId,
+                        CliErrorCodes.RESPONSE_TOO_LARGE, "response exceeds the protocol size limit")))
+                    writer.newLine()
+                    writer.flush()
+                } else throw error
             }
         }
     }

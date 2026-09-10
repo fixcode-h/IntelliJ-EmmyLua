@@ -33,6 +33,7 @@ class CliGatewayService(
         val targetId: String,
         val clientId: String,
         val journal: CliEventJournal,
+        val probe: AiProbeService.WaitHandle? = null,
         val cancelled: AtomicBoolean = AtomicBoolean(),
         val serverClosed: AtomicBoolean = AtomicBoolean()
     )
@@ -65,6 +66,9 @@ class CliGatewayService(
     private val rateWindows = ConcurrentHashMap<String, RateWindow>()
 
     internal fun journalFor(targetId: String): CliEventJournal? = targetRegistry?.journal(targetId)
+
+    internal fun isWaiting(requestId: String, clientId: String): Boolean =
+        waiters.containsKey(requestKey(clientId, requestId))
 
     /** Cancels one outstanding wait, used when a client connection closes. */
     internal fun cancelWait(requestId: String, clientId: String = "local"): Boolean {
@@ -244,6 +248,9 @@ class CliGatewayService(
     ): Boolean {
         if (request.operation != CliOperations.WAIT) return false
         var registration: WaitRegistration? = null
+        var completed = false
+        var preserveProbe = false
+        var probeTerminationState = AiProbeState.CANCELLED
         try {
             validateRequestShape(request)
             validateDeadline(request)
@@ -256,20 +263,40 @@ class CliGatewayService(
             requireTrusted(targetId)
             val journal = targetRegistry?.journal(targetId)
                 ?: throw CliGatewayException(CliErrorCodes.TARGET_NOT_READY, "event journal is unavailable", true)
-        val created = WaitRegistration(targetId, currentClient(request), journal)
+            val cursor = request.cursor ?: request.arguments.long("cursor") ?: 0L
+            if (cursor < 0L) throw CliGatewayException(CliErrorCodes.INVALID_ARGUMENT, "cursor must be non-negative")
+            val timeout = boundedWaitTimeout(request.deadlineMillis ?: request.arguments.long("timeoutMillis") ?: 30_000L)
+            val limit = boundedInt(request.arguments.int("limit") ?: 100, 1, 1_000, "limit")
+            val clientId = currentClient(request)
+            val probeId = request.arguments.string("probeId")?.takeIf { it.isNotBlank() }
+            val probe = if (probeId != null) {
+                val probeStatus = probes?.status(probeId)
+                    ?: throw CliGatewayException(CliErrorCodes.PROBE_NOT_FOUND, "probe does not exist")
+                if (probeStatus.targetId != targetId || probeStatus.owner != "CLI:$clientId") {
+                    throw CliGatewayException(CliErrorCodes.NOT_AUTHORIZED, "probe is not owned by this client and target")
+                }
+                requireLease(request, targetId)
+                // A completed probe can still have unread hit events. Only
+                // active installations need cancellation ownership.
+                probes?.bindForWait(probeId, "CLI:$clientId", targetId)
+            } else null
+            val created = WaitRegistration(targetId, clientId, journal, probe)
             if (waiters.putIfAbsent(requestKey(request), created) != null) {
                 emit(CliJsonLines.error(request.requestId, "DUPLICATE_REQUEST_ID", "wait request is already active").copy(done = true))
                 return true
             }
             registration = created
-            val cursor = request.cursor ?: request.arguments.long("cursor") ?: 0L
-            val timeout = boundedWaitTimeout(request.deadlineMillis ?: request.arguments.long("timeoutMillis") ?: 30_000L)
-            val limit = boundedInt(request.arguments.int("limit") ?: 100, 1, 1_000, "limit")
             val page = journal.awaitAfter(cursor, timeout, limit) {
                 created.cancelled.get() || externalCancellation?.invoke() == true
             }
             if (page.isFailure) {
                 val error = page.exceptionOrNull()
+                preserveProbe = error?.message == CliErrorCodes.EVENT_CURSOR_EXPIRED
+                probeTerminationState = if (error?.message == CliErrorCodes.TIMEOUT) {
+                    AiProbeState.EXPIRED
+                } else {
+                    AiProbeState.CANCELLED
+                }
                 val response = when {
                     created.serverClosed.get() || closed.get() -> CliJsonLines.error(
                         request.requestId, "SERVER_CLOSED", "CLI gateway is closed", true
@@ -288,16 +315,21 @@ class CliGatewayService(
             }
             val value = page.getOrThrow()
             value.events.forEach { event ->
+                if (created.cancelled.get() || externalCancellation?.invoke() == true)
+                    throw CliGatewayException(CliErrorCodes.CANCELLED, "wait cancelled")
                 requireRead(request, targetId)
                 requireTrusted(targetId)
                 emit(limitResponse(CliResponse(request.requestId, true, data = gson.toJsonTree(event).asJsonObject,
                     event = event.type, done = false, cursor = event.cursor)))
             }
+            if (created.cancelled.get() || externalCancellation?.invoke() == true)
+                throw CliGatewayException(CliErrorCodes.CANCELLED, "wait cancelled")
             emit(limitResponse(CliResponse(request.requestId, true, data = JsonObject().apply {
                 addProperty("reason", "EVENTS_AVAILABLE")
                 addProperty("nextCursor", value.nextCursor)
                 addProperty("hasMore", value.hasMore)
             }, done = true, cursor = value.nextCursor)))
+            completed = true
             return true
         } catch (error: CliGatewayException) {
             emit(limitResponse(CliJsonLines.error(request.requestId, error.code, error.message, error.retryable).copy(done = true)))
@@ -318,6 +350,12 @@ class CliGatewayService(
             runCatching { emit(limitResponse(CliJsonLines.error(request.requestId, code, error.message ?: "wait failed").copy(done = true))) }
             return true
         } finally {
+            if (!completed && !preserveProbe) {
+                registration?.probe?.let { handle ->
+                    probes?.terminateFromWait(handle,
+                        if (closed.get()) AiProbeState.SERVICE_CLOSED else probeTerminationState)
+                }
+            }
             waiters.remove(requestKey(request), registration)
         }
     }

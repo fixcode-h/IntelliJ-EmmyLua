@@ -158,6 +158,66 @@ class CliGatewayServiceTest {
     }
 
     @Test
+    fun `probe-bound wait timeout terminates only the owned probe`() {
+        val registry = DebugTargetRegistry()
+        val adapter = InMemoryDebugTargetAdapter("target-1", provider().first())
+        registry.register(adapter)
+        val leases = ControlLeaseManager()
+        val lease = leases.acquire("target-1", "client-a", 30_000).getOrThrow()
+        val probes = AiProbeService(registry)
+        val source = CliSourceIdentity("file:///Project/Loading.lua", "C:/Project/Loading.lua")
+        probes.install(CliProbeSpec("probe-1", "CLI:client-a", "target-1", "vm-1", source, 12), adapter, leases)
+            .getOrThrow()
+        CliGatewayService(registry, leases = leases, probes = probes).use { gateway ->
+            val responses = mutableListOf<CliResponse>()
+            gateway.handleStreaming(CliRequest("wait-1", CliOperations.WAIT, clientId = "client-a",
+                targetId = "target-1", leaseId = lease.leaseId,
+                arguments = JsonObject().apply {
+                    addProperty("probeId", "probe-1")
+                    addProperty("timeoutMillis", 1)
+                })) { responses += it }
+            assertEquals("TIMEOUT", responses.last().error?.code)
+            assertEquals("EXPIRED", probes.status("probe-1")?.state?.name)
+        }
+        probes.close()
+    }
+
+    @Test
+    fun `probe-bound wait keeps active probe after successful page and rejects other owner`() {
+        val registry = DebugTargetRegistry()
+        val adapter = InMemoryDebugTargetAdapter("target-1", provider().first())
+        registry.register(adapter)
+        val leases = ControlLeaseManager()
+        val lease = leases.acquire("target-1", "client-a", 30_000).getOrThrow()
+        val probes = AiProbeService(registry)
+        val source = CliSourceIdentity("file:///Project/Loading.lua", "C:/Project/Loading.lua")
+        probes.install(CliProbeSpec("probe-2", "CLI:client-a", "target-1", "vm-1", source, 12), adapter, leases)
+            .getOrThrow()
+        registry.publish("target-1", "probe.skipped", "vm-1", 1, mapOf("probeId" to "probe-2"))
+        CliGatewayService(registry, leases = leases, probes = probes).use { gateway ->
+            val denied = mutableListOf<CliResponse>()
+            gateway.handleStreaming(CliRequest("denied", CliOperations.WAIT, clientId = "client-b",
+                targetId = "target-1", arguments = JsonObject().apply {
+                    addProperty("probeId", "probe-2")
+                    addProperty("cursor", 0)
+                })) { denied += it }
+            assertEquals("NOT_AUTHORIZED", denied.single().error?.code)
+
+            val responses = mutableListOf<CliResponse>()
+            gateway.handleStreaming(CliRequest("page", CliOperations.WAIT, clientId = "client-a",
+                targetId = "target-1", leaseId = lease.leaseId,
+                arguments = JsonObject().apply {
+                    addProperty("probeId", "probe-2")
+                    addProperty("cursor", 0)
+                })) { responses += it }
+            assertTrue(responses.any { it.event == "probe.skipped" })
+            assertTrue(responses.last().done == true)
+            assertEquals("ACTIVE", probes.status("probe-2")?.state?.name)
+        }
+        probes.close()
+    }
+
+    @Test
     fun `released lease response can be replayed without repeating the mutation`() {
         val leases = ControlLeaseManager()
         val lease = leases.acquire("target-1", "client-a").getOrThrow()

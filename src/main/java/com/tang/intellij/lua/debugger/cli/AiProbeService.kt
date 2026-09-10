@@ -13,7 +13,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 enum class AiProbeState {
-    ACTIVE, ORPHANED, COMPLETED, EXPIRED, LEASE_EXPIRED, VM_CLOSED,
+    ACTIVE, ORPHANED, COMPLETED, EXPIRED, CANCELLED, LEASE_EXPIRED, VM_CLOSED,
     VM_CLOSING, CONTEXT_RESET, TARGET_DISCONNECTED, TARGET_CLOSED, REVOKED, REMOVED, SERVICE_CLOSED
 }
 
@@ -23,7 +23,8 @@ data class AiProbeStatus(
     val hitCount: Int,
     val updatedAtMillis: Long,
     val targetId: String? = null,
-    val owner: String? = null
+    val owner: String? = null,
+    val cleanupErrorCode: String? = null
 )
 
 private fun createBoundedExecutor(name: String, queueCapacity: Int): ThreadPoolExecutor = ThreadPoolExecutor(
@@ -53,6 +54,7 @@ class AiProbeService(
         val spec: CliProbeSpec,
         val adapter: DebugTargetAdapter,
         val leases: ControlLeaseManager,
+        val identity: Any = Any(),
         val stopped: AtomicBoolean = AtomicBoolean(),
         var hits: Int = 0,
         val orphaned: AtomicBoolean = AtomicBoolean(),
@@ -63,12 +65,15 @@ class AiProbeService(
     )
 
     private val active = ConcurrentHashMap<String, Active>()
-    private val installLocks = ConcurrentHashMap<String, Any>()
-    private val terminal = ConcurrentHashMap<String, AiProbeStatus>()
+    private val installLocks = Array(64) { Any() }
+    private data class Terminal(val status: AiProbeStatus, val generation: Any)
+    private val terminal = ConcurrentHashMap<String, Terminal>()
     private val closed = AtomicBoolean()
     private var registryListener: AutoCloseable? = null
     private val eventExecutor: ThreadPoolExecutor = createBoundedExecutor("EmmyLua-AiProbeEvent", 256)
     private val cleanupExecutor: ThreadPoolExecutor = createBoundedExecutor("EmmyLua-AiProbeCleanup", 64)
+
+    internal data class WaitHandle(val probeId: String, val owner: String, val targetId: String, val generation: Any)
 
     init {
         eventRegistry?.addListener(::dispatchEvent)?.let { handle ->
@@ -118,14 +123,13 @@ class AiProbeService(
                 return Result.failure(IllegalArgumentException(it.message ?: CliErrorCodes.EVALUATION_DENIED, it))
             }
         }
-        val lock = installLocks.computeIfAbsent(spec.probeId) { Any() }
-        try {
-            synchronized(lock) {
+        val lock = lockFor(spec.probeId)
+        val state = Active(spec, adapter, leases)
+        synchronized(lock) {
             if (closed.get()) return Result.failure(IllegalStateException(CliErrorCodes.SERVER_CLOSED))
             if (active.containsKey(spec.probeId)) return Result.failure(IllegalArgumentException(CliErrorCodes.PROBE_EXISTS))
             val installed = adapter.installProbe(spec)
             if (installed.isFailure) return installed
-            val state = Active(spec, adapter, leases)
             active[spec.probeId] = state
             // Installation can race with revoke/close while the backend call
             // is in flight. Detach immediately instead of leaving a zombie.
@@ -134,12 +138,19 @@ class AiProbeService(
                     if (closed.get()) AiProbeState.SERVICE_CLOSED else AiProbeState.REVOKED)
                 return Result.failure(IllegalStateException(CliErrorCodes.LEASE_REQUIRED))
             }
+            synchronized(state) {
+                if (active[spec.probeId] !== state || state.stopped.get()) {
+                    return Result.failure(IllegalStateException(CliErrorCodes.LEASE_EXPIRED))
+                }
+                terminal.remove(spec.probeId)
+                try {
+                    scheduler.schedule({ expire(state) }, spec.timeoutMillis, TimeUnit.MILLISECONDS)
+                } catch (_: RejectedExecutionException) {
+                    stop(state, removeBackend = true, terminalState = AiProbeState.SERVICE_CLOSED)
+                    return Result.failure(IllegalStateException(CliErrorCodes.SERVER_CLOSED))
+                }
             }
-        } finally {
-            installLocks.remove(spec.probeId, lock)
         }
-        terminal.remove(spec.probeId)
-        scheduler.schedule({ expire(spec.probeId) }, spec.timeoutMillis, TimeUnit.MILLISECONDS)
         return Result.success(spec)
     }
 
@@ -150,9 +161,23 @@ class AiProbeService(
         return Result.success(true)
     }
 
+    /** Binds cleanup to this installation, not to a future reuse of its id. */
+    internal fun bindForWait(probeId: String, owner: String, targetId: String): WaitHandle? {
+        val state = active[probeId] ?: return null
+        if (state.spec.owner != owner || state.spec.targetId != targetId) return null
+        return WaitHandle(probeId, owner, targetId, state)
+    }
+
+    internal fun terminateFromWait(handle: WaitHandle, terminalState: AiProbeState): Boolean {
+        val state = active[handle.probeId] ?: return false
+        if (state !== handle.generation || state.spec.owner != handle.owner || state.spec.targetId != handle.targetId) return false
+        stop(state, removeBackend = true, terminalState = terminalState)
+        return true
+    }
+
     fun status(probeId: String): AiProbeStatus? = active[probeId]?.let {
         AiProbeStatus(probeId, AiProbeState.ACTIVE, it.hits, System.currentTimeMillis(), it.spec.targetId, it.spec.owner)
-    } ?: terminal[probeId]
+    } ?: terminal[probeId]?.status
 
     fun activeProbeIds(): Set<String> = active.keys.toSet()
 
@@ -173,6 +198,7 @@ class AiProbeService(
             .filter { owner == null || it.spec.owner == owner }
             .map { AiProbeStatus(it.spec.probeId, AiProbeState.ACTIVE, it.hits, System.currentTimeMillis(), it.spec.targetId, it.spec.owner) }
         val terminalStatuses = terminal.values.asSequence()
+            .map { it.status }
             .filter { targetId == null || it.targetId == targetId }
             .filter { owner == null || it.owner == owner }
         return (activeStatuses + terminalStatuses)
@@ -515,8 +541,8 @@ class AiProbeService(
         return match ?: CliErrorCodes.EVALUATION_DENIED
     }
 
-    private fun expire(probeId: String) {
-        active[probeId]?.let { stop(it, removeBackend = true, terminalState = AiProbeState.EXPIRED) }
+    private fun expire(state: Active) {
+        if (active[state.spec.probeId] === state) stop(state, removeBackend = true, terminalState = AiProbeState.EXPIRED)
     }
 
     private fun expireInvalidLeases() {
@@ -538,27 +564,78 @@ class AiProbeService(
         if (!state.stopped.compareAndSet(false, true)) return
         synchronized(state) {
             state.terminalState = terminalState
-            active.remove(state.spec.probeId, state)
             state.listenerHandle?.close()
-            terminal[state.spec.probeId] = AiProbeStatus(
+            terminal[state.spec.probeId] = Terminal(AiProbeStatus(
                 state.spec.probeId, terminalState, state.hits, System.currentTimeMillis(),
-                state.spec.targetId, state.spec.owner)
+                state.spec.targetId, state.spec.owner), state.identity)
             while (terminal.size > 256) terminal.keys.firstOrNull()?.let(terminal::remove) ?: break
+            // Publish the old terminal state before allowing this id to be
+            // reinstalled; an old stop must not overwrite a new terminal.
+            active.remove(state.spec.probeId, state)
         }
         if (removeBackend) {
-            val cleanup = Runnable {
-                // A new generation may reuse the same id while this cleanup
-                // is queued; never remove that generation's backend entry.
-                if (active[state.spec.probeId] !== state) {
-                    runCatching { state.adapter.removeProbe(state.spec.probeId, state.spec.owner) }
-                }
+            enqueueCleanup(state, 1)
+        }
+    }
+
+    private fun enqueueCleanup(state: Active, attempt: Int) {
+        val cleanup = Runnable { cleanupBackend(state, attempt) }
+        try {
+            cleanupExecutor.execute(cleanup)
+        } catch (error: RejectedExecutionException) {
+            recordCleanupFailure(state, attempt, error, willRetry = false)
+        }
+    }
+
+    private fun cleanupBackend(state: Active, attempt: Int) {
+        val lock = lockFor(state.spec.probeId)
+        val result = try {
+            synchronized(lock) {
+                // A new generation may reuse the id while this cleanup is
+                // queued; never remove that generation's backend entry.
+                if (active[state.spec.probeId] != null) return
+                val latest = terminal[state.spec.probeId]
+                if (latest != null && latest.generation !== state.identity) return
+                state.adapter.removeProbe(state.spec.probeId, state.spec.owner)
             }
-            runCatching { cleanupExecutor.execute(cleanup) }.onFailure {
-                // During shutdown no worker is available; best effort cleanup
-                // is preferable to holding the lifecycle/evaluation thread.
+        } catch (error: Throwable) {
+            Result.failure<Boolean>(error)
+        }
+        if (result.isSuccess) {
+            terminal.computeIfPresent(state.spec.probeId) { _, entry ->
+                if (entry.generation === state.identity) entry.copy(status = entry.status.copy(cleanupErrorCode = null))
+                else entry
+            }
+            return
+        }
+        val error = result.exceptionOrNull() ?: IllegalStateException("probe backend cleanup failed")
+        val willRetry = attempt < 3 && !closed.get()
+        recordCleanupFailure(state, attempt, error, willRetry)
+        if (willRetry) {
+            try {
+                scheduler.schedule({ enqueueCleanup(state, attempt + 1) },
+                    if (attempt == 1) 100L else 250L, TimeUnit.MILLISECONDS)
+            } catch (scheduleError: RejectedExecutionException) {
+                recordCleanupFailure(state, attempt, scheduleError, willRetry = false)
             }
         }
     }
+
+    private fun recordCleanupFailure(state: Active, attempt: Int, error: Throwable, willRetry: Boolean) {
+        val code = cleanupErrorCode(error)
+        terminal.computeIfPresent(state.spec.probeId) { _, entry ->
+            if (entry.generation === state.identity) entry.copy(status = entry.status.copy(cleanupErrorCode = code))
+            else entry
+        }
+        runCatching { eventRegistry?.publish(state.spec.targetId, "probe.cleanupFailed", state.spec.vmId, null,
+            mapOf("probeId" to state.spec.probeId, "errorCode" to code,
+                "attempt" to attempt, "willRetry" to willRetry)) }
+    }
+
+    private fun cleanupErrorCode(error: Throwable): String =
+        errorCode(error).takeIf { it != CliErrorCodes.EVALUATION_DENIED } ?: "PROBE_CLEANUP_FAILED"
+
+    private fun lockFor(probeId: String): Any = installLocks[(probeId.hashCode() and Int.MAX_VALUE) % installLocks.size]
 
     private fun leaseIsValid(state: Active): Boolean {
         val owner = state.spec.owner.removePrefix("CLI:")
@@ -574,7 +651,7 @@ class AiProbeService(
         scheduler.shutdownNow()
         evaluationExecutor.shutdownNow()
         eventExecutor.shutdownNow()
-        cleanupExecutor.shutdownNow()
+        cleanupExecutor.shutdown()
     }
 
     private fun isLuaTruthy(value: CliCapturedValue): Boolean {
