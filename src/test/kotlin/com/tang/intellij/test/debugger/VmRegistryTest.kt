@@ -71,4 +71,50 @@ class VmRegistryTest {
         assertNull(registry.resolve())
         assertTrue(registry.list().size == 2)
     }
+
+    @Test
+    fun `closed generation cannot be resurrected and newer generation is accepted`() {
+        val registry = VmRegistry()
+        val vm = VmDto("vm-reused", 1, "PIE", "READY", null, "HOST_API")
+        assertEquals(VmApplyStatus.APPLIED, registry.applySnapshot(VmSnapshotDto(1, listOf(vm)), "agent", 1).status)
+        assertEquals(VmApplyStatus.APPLIED, registry.applyLifecycle(
+            VmLifecycleDto("vm-reused", 1, "READY", "CLOSING", eventSeq = 2), "agent", 1
+        ).status)
+        assertEquals(VmApplyStatus.APPLIED, registry.applyLifecycle(
+            VmLifecycleDto("vm-reused", 1, "CLOSING", "CLOSED", eventSeq = 3), "agent", 1
+        ).status)
+        assertEquals(VmApplyStatus.STALE_GENERATION, registry.applyLifecycle(
+            VmLifecycleDto("vm-reused", 1, null, "READY", eventSeq = 4), "agent", 1
+        ).status)
+        assertEquals(VmApplyStatus.APPLIED, registry.applyLifecycle(
+            VmLifecycleDto("vm-reused", 2, null, "CREATED", eventSeq = 4), "agent", 1
+        ).status)
+        assertEquals(2L, registry.resolve("vm-reused")?.generation)
+    }
+
+    @Test
+    fun `v2 identity is all or nothing and control readiness is explicit`() {
+        val registry = VmRegistry()
+        val vm = VmDto("vm-1", 1, "PIE", "CREATED", null, "HOST_API")
+        assertEquals(VmApplyStatus.STALE_EPOCH, registry.applySnapshot(VmSnapshotDto(0, listOf(vm)), "agent", null).status)
+        assertEquals(VmApplyStatus.APPLIED, registry.applySnapshot(VmSnapshotDto(0, listOf(vm)), "agent", 1).status)
+        assertTrue(!registry.isControlReady("vm-1"))
+        assertEquals(VmApplyStatus.APPLIED, registry.applyLifecycle(
+            VmLifecycleDto("vm-1", 1, "CREATED", "READY", eventSeq = 1), "agent", 1
+        ).status)
+        assertTrue(registry.isControlReady("vm-1"))
+        assertEquals(VmApplyStatus.INVALID, registry.applyEnvelope(
+            EmmyV2Envelope(kind = "event", type = "vm.lifecycle", payload = com.google.gson.JsonObject())
+        ).status)
+    }
+
+    @Test
+    fun `malformed v2 payload is returned as invalid instead of throwing`() {
+        val payload = com.google.gson.JsonObject().apply { addProperty("generation", "not-a-number") }
+        val result = VmRegistry().applyEnvelope(
+            EmmyV2Envelope(kind = "event", type = "vm.snapshot", agentSessionId = "agent", connectionEpoch = 1,
+                payload = payload)
+        )
+        assertEquals(VmApplyStatus.INVALID, result.status)
+    }
 }

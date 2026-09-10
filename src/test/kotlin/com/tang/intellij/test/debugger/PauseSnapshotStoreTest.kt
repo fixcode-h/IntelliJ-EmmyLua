@@ -14,6 +14,19 @@ import java.nio.file.Files
 
 class PauseSnapshotStoreTest {
     @Test
+    fun `resumed or superseded pauses cannot be resurrected by late events`() {
+        val store = PauseSnapshotStore()
+        assertEquals(PauseOfferStatus.CURRENT, store.offer(PauseSnapshot("vm-a", 2)).status)
+        store.invalidate("vm-a", 2)
+        assertEquals(PauseOfferStatus.STALE, store.offer(PauseSnapshot("vm-a", 2)).status)
+        assertEquals(PauseOfferStatus.STALE, store.offer(PauseSnapshot("vm-a", 1)).status)
+        assertEquals(PauseOfferStatus.CURRENT, store.offer(PauseSnapshot("vm-a", 3)).status)
+        store.offer(PauseSnapshot("vm-b", 1))
+        assertEquals(PauseOfferStatus.DUPLICATE, store.offer(PauseSnapshot("vm-b", 1)).status)
+        store.clear()
+        assertEquals(PauseOfferStatus.CURRENT, store.offer(PauseSnapshot("vm-a", 1)).status)
+    }
+    @Test
     fun `pause snapshots are bounded and invalidatable`() {
         val store = PauseSnapshotStore(maxEntries = 2)
         store.put(PauseSnapshot("vm-1", 1))
@@ -45,7 +58,12 @@ class PauseSnapshotStoreTest {
         assertEquals(PauseOfferStatus.QUEUED, store.offer(PauseSnapshot("vm-b", 1)).status)
         assertEquals(PauseOfferStatus.DUPLICATE, store.offer(PauseSnapshot("vm-a", 1)).status)
         assertEquals("vm-a", store.currentUiPause()?.vmId)
-        assertEquals("vm-b", store.releaseCurrent()?.vmId)
+        assertNull(store.releaseCurrent())
+        assertNull(store.currentUiPause())
+        assertEquals("vm-b", store.queuedPauses().single().vmId)
+        assertEquals("vm-b", store.select("vm-b", 1)?.vmId)
+        store.invalidate("vm-b")
+        assertNull(store.select("vm-b", 1))
     }
 
     @Test

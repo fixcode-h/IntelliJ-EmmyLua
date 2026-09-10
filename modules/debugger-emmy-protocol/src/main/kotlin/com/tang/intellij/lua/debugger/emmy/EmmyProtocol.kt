@@ -161,7 +161,9 @@ class Stack(
         /** Optional opaque frame identity emitted by v2 agents. */
         val frameId: String = "",
         /** Globals are optional for legacy agents and default to an empty list. */
-        val globalVariables: List<VariableValue> = emptyList()
+        val globalVariables: List<VariableValue> = emptyList(),
+        /** Identity of loaded source bytes, supplied by the native host. */
+        val sourceIdentity: SourceIdentityWire? = null
 )
 
 class BreakNotify(

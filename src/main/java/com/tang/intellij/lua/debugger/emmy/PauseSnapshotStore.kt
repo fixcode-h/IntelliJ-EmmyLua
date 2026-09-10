@@ -9,7 +9,8 @@ data class PauseSnapshot(
     val stacks: List<Stack> = emptyList(),
     val connectionEpoch: Long? = null,
     val contextGeneration: Long? = null,
-    val sourceEpoch: Long? = null
+    val sourceEpoch: Long? = null,
+    val reasons: Set<String> = emptySet()
 )
 
 enum class PauseOfferStatus { CURRENT, QUEUED, DUPLICATE, STALE }
@@ -23,6 +24,11 @@ class PauseSnapshotStore(private val maxEntries: Int = 128) {
     private val queued = ArrayDeque<String>()
     private var currentUiKey: String? = null
     private val presented = mutableSetOf<String>()
+    private val lastPauseByVm = LinkedHashMap<String, Long>()
+
+    init {
+        require(maxEntries > 0) { "maxEntries must be positive" }
+    }
 
     @Synchronized
     fun put(snapshot: PauseSnapshot) {
@@ -40,9 +46,15 @@ class PauseSnapshotStore(private val maxEntries: Int = 128) {
     @Synchronized
     fun offer(snapshot: PauseSnapshot): PauseOfferResult {
         val key = key(snapshot.vmId, snapshot.pauseId)
-        if (snapshots.containsKey(key) && presented.contains(key)) {
+        if (snapshot.pauseId <= 0 ||
+            (snapshot.pauseId <= (lastPauseByVm[snapshot.vmId] ?: 0L) && !snapshots.containsKey(key))) {
+            return PauseOfferResult(PauseOfferStatus.STALE, snapshot)
+        }
+        if (snapshots.containsKey(key)) {
             return PauseOfferResult(PauseOfferStatus.DUPLICATE, snapshot)
         }
+        invalidate(snapshot.vmId)
+        rememberPause(snapshot.vmId, snapshot.pauseId)
         put(snapshot)
         if (currentUiKey == null) {
             currentUiKey = key
@@ -63,11 +75,29 @@ class PauseSnapshotStore(private val maxEntries: Int = 128) {
     @Synchronized
     fun queuedPauses(): List<PauseSnapshot> = queued.mapNotNull { snapshots[it] }
 
-    /** Releases the UI pause and promotes the oldest queued pause, if any. */
+    /** Only an explicit user selection changes the active VM while another is paused. */
+    @Synchronized
+    fun select(vmId: String, pauseId: Long): PauseSnapshot? {
+        val selectedKey = key(vmId, pauseId)
+        val snapshot = snapshots[selectedKey] ?: return null
+        currentUiKey?.takeIf { it != selectedKey && snapshots.containsKey(it) }?.let {
+            if (!queued.contains(it)) queued.addLast(it)
+        }
+        queued.remove(selectedKey)
+        currentUiKey = selectedKey
+        presented += selectedKey
+        return snapshot
+    }
+
+    /** Releases the UI pause; queued VMs remain available for explicit selection. */
     @Synchronized
     fun releaseCurrent(): PauseSnapshot? {
-        currentUiKey?.let { snapshots.remove(it) }
-        currentUiKey = queued.removeFirstOrNull()
+        currentUiKey?.let {
+            snapshots[it]?.let { snapshot -> rememberPause(snapshot.vmId, snapshot.pauseId) }
+            snapshots.remove(it)
+            presented.remove(it)
+        }
+        currentUiKey = null
         return currentUiKey?.let { snapshots[it] }
     }
 
@@ -76,15 +106,45 @@ class PauseSnapshotStore(private val maxEntries: Int = 128) {
 
     @Synchronized
     fun invalidate(vmId: String, pauseId: Long? = null) {
+        val newest = pauseId ?: snapshots.values.filter { it.vmId == vmId }.maxOfOrNull { it.pauseId }
+        if (newest != null) rememberPause(vmId, newest)
         if (pauseId == null) {
-            snapshots.keys.removeIf { it.startsWith("$vmId#") }
-            queued.removeIf { it.startsWith("$vmId#") }
-            if (currentUiKey?.startsWith("$vmId#") == true) currentUiKey = null
+            val obsolete = snapshots.filterValues { it.vmId == vmId }.keys.toSet()
+            obsolete.forEach {
+                snapshots.remove(it)
+                presented.remove(it)
+            }
+            queued.removeIf { it in obsolete }
+            if (currentUiKey?.let { it in obsolete } == true) {
+                currentUiKey = null
+            }
         } else {
             val pauseKey = key(vmId, pauseId)
             snapshots.remove(pauseKey)
             queued.remove(pauseKey)
-            if (currentUiKey == pauseKey) currentUiKey = null
+            presented.remove(pauseKey)
+            if (currentUiKey == pauseKey) {
+                currentUiKey = null
+            }
+        }
+    }
+
+    /** Drops all references from an obsolete context/source epoch. */
+    @Synchronized
+    fun invalidateContext(vmId: String, contextGeneration: Long? = null, sourceEpoch: Long? = null) {
+        val obsolete = snapshots.filterValues { snapshot ->
+            snapshot.vmId == vmId &&
+                ((contextGeneration != null && snapshot.contextGeneration != contextGeneration) ||
+                    (sourceEpoch != null && snapshot.sourceEpoch != sourceEpoch))
+        }.keys.toSet()
+        obsolete.forEach {
+            snapshots[it]?.let { snapshot -> rememberPause(snapshot.vmId, snapshot.pauseId) }
+            snapshots.remove(it)
+            presented.remove(it)
+        }
+        queued.removeIf { it in obsolete }
+        if (currentUiKey?.let { it in obsolete } == true) {
+            currentUiKey = null
         }
     }
 
@@ -93,11 +153,20 @@ class PauseSnapshotStore(private val maxEntries: Int = 128) {
         snapshots.clear()
         queued.clear()
         presented.clear()
+        lastPauseByVm.clear()
         currentUiKey = null
     }
 
     @Synchronized
     fun size(): Int = snapshots.size
 
-    private fun key(vmId: String, pauseId: Long): String = "$vmId#$pauseId"
+    private fun key(vmId: String, pauseId: Long): String = "${vmId.length}:$vmId#$pauseId"
+
+    private fun rememberPause(vmId: String, pauseId: Long) {
+        lastPauseByVm[vmId] = maxOf(lastPauseByVm[vmId] ?: 0, pauseId)
+        while (lastPauseByVm.size > maxOf(1024, maxEntries * 8)) {
+            lastPauseByVm.remove(lastPauseByVm.keys.first())
+        }
+    }
+
 }

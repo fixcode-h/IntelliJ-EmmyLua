@@ -28,7 +28,13 @@ class EmmyEvaluator(val frame: EmmyDebugStackFrame, val process: EmmyDebugProces
             frame.data.level,
             cacheId,
             depth,
-            sourceIdentity = SourceIdentity.fromPath(frame.data.file).toWire()
+            sourceIdentity = SourceIdentity.fromPath(frame.data.file).toWire(),
+            vmId = frame.pause?.vmId,
+            pauseId = frame.pause?.pauseId,
+            threadId = frame.pause?.threadId,
+            frameId = frame.data.frameId.takeIf { it.isNotBlank() },
+            contextGeneration = frame.pause?.contextGeneration,
+            sourceEpoch = frame.pause?.sourceEpoch
         )
         process.requestEvaluation(req) { result ->
             result.onSuccess { response ->

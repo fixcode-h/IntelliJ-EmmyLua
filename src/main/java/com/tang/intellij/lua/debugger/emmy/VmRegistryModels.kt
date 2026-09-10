@@ -4,7 +4,9 @@ enum class VmApplyStatus {
     APPLIED,
     DUPLICATE,
     GAP,
+    SNAPSHOT_REQUIRED,
     STALE_EPOCH,
+    STALE_GENERATION,
     INVALID
 }
 
@@ -16,7 +18,7 @@ data class VmApplyResult(
     val message: String? = null
 ) {
     val accepted: Boolean get() = status == VmApplyStatus.APPLIED || status == VmApplyStatus.DUPLICATE
-    val requiresSnapshot: Boolean get() = status == VmApplyStatus.GAP
+    val requiresSnapshot: Boolean get() = status == VmApplyStatus.GAP || status == VmApplyStatus.SNAPSHOT_REQUIRED
 }
 
 data class VmRecordModel(

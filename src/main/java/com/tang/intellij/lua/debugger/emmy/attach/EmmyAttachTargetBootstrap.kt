@@ -8,6 +8,7 @@ import com.tang.intellij.lua.debugger.emmy.SocketClientTransporter
 import com.tang.intellij.lua.debugger.emmy.Transporter
 import java.io.File
 import java.security.SecureRandom
+import java.util.concurrent.TimeUnit
 
 class EmmyAttachTargetBootstrap(
     private val configuration: EmmyAttachDebugConfiguration,
@@ -49,7 +50,7 @@ class EmmyAttachTargetBootstrap(
         }
         reportLuaRuntime(selectedArch)
 
-        val port = ProcessUtils.getPortFromPid(attachedPid)
+        val port = waitForDebugPort(attachedPid)
         debugPort = port
         return listOf("127.0.0.1", "::1", "localhost").map { host ->
             SocketClientTransporter(host, port)
@@ -81,39 +82,65 @@ class EmmyAttachTargetBootstrap(
             "-dir",
             toolDir.absolutePath,
             "-dll",
-            File(hookPath).name,
-            "-auth-token",
-            authToken
+            File(hookPath).name
         )
         if (configuration.captureLog) commands += "-capture-log"
 
         val displayCommands = commands.mapIndexed { index, value ->
             if (index > 0 && commands[index - 1] == "-auth-token") "<redacted>" else value
         }
-        log("执行附加命令: ${displayCommands.joinToString(" ")}", DebugLogLevel.DEBUG)
-        val process = ProcessBuilder(commands)
+        log("执行附加命令: ${displayCommands.joinToString(" ")} (认证令牌通过进程环境传递)", DebugLogLevel.DEBUG)
+        val processBuilder = ProcessBuilder(commands)
             .directory(toolDir)
             .redirectErrorStream(true)
-            .start()
+        // Avoid exposing the attach token in command-line inspection tools.
+        processBuilder.environment()["EMMY_ATTACH_AUTH_TOKEN"] = authToken
+        val process = processBuilder.start()
 
-        var bootstrapStatus: com.google.gson.JsonObject? = null
+        var bootstrapStatus: AttachBootstrapStatus? = null
         process.inputStream.bufferedReader().useLines { lines ->
             lines.forEach { line ->
-                log("attach: $line", DebugLogLevel.DEBUG)
                 val parsed = runCatching { JsonParser.parseString(line).asJsonObject }.getOrNull()
-                if (parsed?.get("schemaVersion")?.asInt == 1) bootstrapStatus = parsed
+                if (parsed?.get("schemaVersion")?.asInt == 1) {
+                    bootstrapStatus = AttachBootstrapStatus.fromJson(parsed)
+                    log("attach 状态: ${bootstrapStatus?.summary()}", DebugLogLevel.DEBUG)
+                } else {
+                    log("attach: $line", DebugLogLevel.DEBUG)
+                }
             }
         }
         val exitCode = process.waitFor()
-        check(exitCode == 0) { "附加失败，emmy_tool 退出码: $exitCode" }
-        val status = checkNotNull(bootstrapStatus) { "附加工具未返回结构化启动状态" }
-        check(status.get("status")?.asString == "auth-ready") {
-            if (status.get("alreadyAttached")?.asBoolean == true) {
+        if (exitCode != 0) {
+            val status = bootstrapStatus
+            error("附加失败，emmy_tool 退出码: $exitCode，状态=${status?.status ?: "unknown"}，错误=${status?.message ?: "未提供"}")
+        }
+        val status = checkNotNull(bootstrapStatus) { "附加工具未返回结构化启动状态（无法证明已注入/监听）" }
+        check(status.status == "auth-ready") {
+            if (status.alreadyAttached) {
                 "目标进程已有 Emmy Agent，当前无法安全重协商认证 token"
             } else {
-                "Emmy Agent 未进入 auth-ready 状态: ${status.get("status")?.asString}"
+                "Emmy Agent 未进入 auth-ready 状态: ${status.status}；injected=${status.injected}, listening=${status.listening}"
             }
         }
+    }
+
+    private fun waitForDebugPort(pid: Int): Int {
+        var delayMillis = 50L
+        var interrupted = false
+        repeat(7) {
+            if (interrupted) return@repeat
+            val port = ProcessUtils.getPortFromPid(pid)
+            if (port > 0) return port
+            try {
+                TimeUnit.MILLISECONDS.sleep(delayMillis)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                interrupted = true
+                return@repeat
+            }
+            delayMillis = (delayMillis * 2).coerceAtMost(800L)
+        }
+        error("Emmy Agent 已报告 auth-ready，但未能在超时内发现调试端口；请检查目标进程日志（不会自动重复注入）")
     }
 
     private fun generateAuthToken(): String {
@@ -145,5 +172,29 @@ class EmmyAttachTargetBootstrap(
             else ->
                 log("未检测到标准 Lua 运行时，调试连接可能失败", DebugLogLevel.WARNING)
         }
+    }
+}
+
+private data class AttachBootstrapStatus(
+    val status: String,
+    val pid: Int,
+    val injected: Boolean,
+    val listening: Boolean,
+    val authReady: Boolean,
+    val alreadyAttached: Boolean,
+    val message: String?
+) {
+    fun summary(): String = "status=$status pid=$pid injected=$injected listening=$listening authReady=$authReady alreadyAttached=$alreadyAttached"
+
+    companion object {
+        fun fromJson(json: com.google.gson.JsonObject): AttachBootstrapStatus = AttachBootstrapStatus(
+            status = json.get("status")?.asString ?: "unknown",
+            pid = json.get("pid")?.asInt ?: 0,
+            injected = json.get("injected")?.asBoolean ?: false,
+            listening = json.get("listening")?.asBoolean ?: false,
+            authReady = json.get("authReady")?.asBoolean ?: false,
+            alreadyAttached = json.get("alreadyAttached")?.asBoolean ?: false,
+            message = json.get("message")?.asString
+        )
     }
 }
