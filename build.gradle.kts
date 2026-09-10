@@ -114,6 +114,21 @@ project(":") {
         testImplementation("junit:junit:4.13.2")
     }
 
+    tasks.withType<Test>().configureEach {
+        // Native IDE fixture tests require an explicitly supplied executable.
+        val fixtureExecutable = System.getenv("EMMY_IDE_FIXTURE_EXE")
+            ?.takeIf { it.isNotBlank() }
+            ?: System.getProperty("emmy.fixture.exe")?.takeIf { it.isNotBlank() }
+        inputs.property("emmyFixtureExecutable", fixtureExecutable ?: "")
+        if (fixtureExecutable != null) {
+            systemProperty("emmy.fixture.exe", fixtureExecutable)
+            inputs.file(fixtureExecutable)
+        } else {
+            exclude("**/EmmyNativeIdeFixtureIntegrationTest.class")
+            logger.lifecycle("未设置 EMMY_IDE_FIXTURE_EXE：普通测试任务排除 Native/IDE 集成套件；专用 Windows CI 必须提供测试宿主。")
+        }
+    }
+
     sourceSets {
         main {
             java.srcDirs("gen", "src/main/compat")

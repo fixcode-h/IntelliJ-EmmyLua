@@ -10,6 +10,37 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  native-ide-integration:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Build real Lua fixture
+        run: |
+          cmake -S EmmyLuaDebugger -B build/native-ide -G Ninja -DCMAKE_BUILD_TYPE=Debug -DEMMY_USE_LUA_SOURCE=ON -DEMMY_VM_REGISTRY_TEST=ON -DEMMY_LUA_VERSION=54
+          cmake --build build/native-ide --target emmy_native_ide_fixture --parallel 4
+      - name: Verify Native to IDEA to CLI
+        shell: pwsh
+        run: |
+          $env:EMMY_IDE_FIXTURE_EXE = (Resolve-Path build/native-ide/emmy_debugger/emmy_native_ide_fixture.exe).Path
+          ./gradlew.bat --no-daemon :test --tests '*EmmyNativeIdeFixtureIntegrationTest'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-ide-integration
+          if-no-files-found: error
+          path: |
+            build/test-results/test/*.xml
+            build/252/idea-sandbox/**/idea.log
   verify:
     runs-on: ubuntu-latest
     strategy:
