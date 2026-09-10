@@ -14,7 +14,7 @@ class CliControlProtocolTest {
         assertFalse(auth.canRead("target-1", "client-b"))
 
         var now = 100L
-        val leases = ControlLeaseManager { now }
+        val leases = ControlLeaseManager(nowMillis = { now })
         val first = leases.acquire("target-1", "client-a", 10).getOrThrow()
         assertEquals("client-a", leases.current("target-1")?.owner)
         assertTrue(leases.acquire("target-1", "client-b", 10).isFailure)
@@ -44,5 +44,17 @@ class CliControlProtocolTest {
         assertEquals(2, composite.contributions.size)
         assertTrue(composer.remove(key, "CLI:client-a"))
         assertEquals(1, composer.snapshot().single().contributions.size)
+    }
+
+    @Test
+    fun `breakpoint composer preserves multiple ids from the same owner`() {
+        val composer = BreakpointComposer()
+        val key = BreakpointKey("c:/game/a.lua", "vm-1", 9)
+        composer.upsert(key, BreakpointContribution("CLI:client-a", "bp-1", condition = "x == 1"))
+        composer.upsert(key, BreakpointContribution("CLI:client-a", "probe:p-1", condition = "x == 2"))
+
+        assertEquals(2, composer.snapshot().single().contributions.size)
+        assertTrue(composer.remove(key, "CLI:client-a", "bp-1"))
+        assertEquals("probe:p-1", composer.snapshot().single().contributions.single().breakpointId)
     }
 }

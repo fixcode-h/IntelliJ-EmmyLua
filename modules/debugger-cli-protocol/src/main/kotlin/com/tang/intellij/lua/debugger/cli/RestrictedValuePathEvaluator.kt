@@ -16,14 +16,18 @@ class RestrictedValuePathEvaluator(
 ) {
     fun evaluate(expression: String, resolver: ValuePathResolver): Result<CliValue> {
         if (expression.length > maxLength) return Result.failure(IllegalArgumentException("EVALUATION_LIMIT_EXCEEDED"))
-        val segments = parse(expression).getOrElse { return Result.failure(it) }
+        val segments = parseSegments(expression).getOrElse { return Result.failure(it) }
         return resolver.resolve(segments)?.let { Result.success(it) }
             ?: Result.failure(NoSuchElementException("VALUE_NOT_FOUND"))
     }
 
-    private fun parse(expression: String): Result<List<String>> {
+    /** Parses without resolving, so adapters can use the exact same grammar. */
+    fun parseSegments(expression: String): Result<List<String>> {
         val text = expression.trim()
-        if (text.isEmpty() || text.any { it in "();={}\\n\\r" }) {
+        if (text.isEmpty() || text.any {
+                it == '(' || it == ')' || it == ';' || it == '=' || it == '{' || it == '}' ||
+                    it == '\n' || it == '\r'
+            }) {
             return Result.failure(IllegalArgumentException("EVALUATION_DENIED"))
         }
         val segments = mutableListOf<String>()
@@ -46,7 +50,7 @@ class RestrictedValuePathEvaluator(
                     val end = text.indexOf(']', index + 1)
                     if (end < 0) return Result.failure(IllegalArgumentException("EVALUATION_DENIED"))
                     val literal = text.substring(index + 1, end).trim()
-                    if (!literal.matches(Regex("[A-Za-z_][A-Za-z0-9_]*|[0-9]+|\\\"[^\\\"]*\\\""))) {
+                    if (!literal.matches(Regex("[A-Za-z_][A-Za-z0-9_]*|[0-9]+|\"[^\"]*\""))) {
                         return Result.failure(IllegalArgumentException("EVALUATION_DENIED"))
                     }
                     segments += literal.trim('"')
