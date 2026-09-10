@@ -31,6 +31,7 @@ class AiProbeServiceTest {
 
     private fun pauseEvent(
         registry: DebugTargetRegistry,
+        service: AiProbeService? = null,
         reasons: Set<String> = setOf("PROBE:p-1"),
         pauseId: Long = 7,
         path: String = "C:/Project/Loading.lua",
@@ -49,7 +50,10 @@ class AiProbeServiceTest {
             "sourceHash" to sourceHash,
             "sourceEpoch" to sourceEpoch
         )
-    )!!
+    )!!.also {
+        service?.awaitEventWorker()
+        service?.awaitCleanup()
+    }
 
     @Test
     fun `probe captures matching pause and auto continues only for probe-only reason`() {
@@ -62,7 +66,7 @@ class AiProbeServiceTest {
         val service = AiProbeService(registry, scheduler)
         try {
             service.install(spec(autoContinue = true), adapter, leases).getOrThrow()
-            pauseEvent(registry)
+            pauseEvent(registry, service)
             assertEquals(listOf("self.State"), adapter.evaluated)
             assertEquals(listOf("Continue"), adapter.controls.map { it.action })
 
@@ -70,7 +74,7 @@ class AiProbeServiceTest {
             // automatically continued by the Probe.
             val second = spec("p-2", captures = emptyList(), autoContinue = true)
             service.install(second, adapter, leases).getOrThrow()
-            pauseEvent(registry, reasons = setOf("USER", "PROBE:p-2"), pauseId = 8)
+            pauseEvent(registry, service, reasons = setOf("USER", "PROBE:p-2"), pauseId = 8)
             assertEquals(1, adapter.controls.size)
             assertTrue(lease.leaseId.isNotBlank())
         } finally {
@@ -89,13 +93,13 @@ class AiProbeServiceTest {
         val service = AiProbeService(registry, scheduler)
         try {
             service.install(spec(source = source(hash = "expected")), adapter, leases).getOrThrow()
-            pauseEvent(registry, sourceHash = "different")
+            pauseEvent(registry, service, sourceHash = "different")
             assertTrue(adapter.evaluated.isEmpty())
 
             // A matching source but a stale frame is rejected by the adapter;
             // the Probe must not turn that into a successful capture.
             adapter.evaluationFailure = IllegalStateException(CliErrorCodes.STALE_PAUSE_REFERENCE)
-            pauseEvent(registry, pauseId = 9, sourceHash = "expected")
+            pauseEvent(registry, service, pauseId = 9, sourceHash = "expected")
             assertEquals(1, adapter.evaluated.size)
             assertTrue(adapter.lastCapture?.success == false)
         } finally {
@@ -116,7 +120,7 @@ class AiProbeServiceTest {
         try {
             service.install(spec(), adapter, leases).getOrThrow()
             now = 111L
-            pauseEvent(registry)
+            pauseEvent(registry, service)
             assertTrue(adapter.removed.contains("p-1"))
 
             // Re-install with a fresh lease and verify VM/target teardown is
@@ -125,6 +129,7 @@ class AiProbeServiceTest {
             service.install(spec("p-2"), adapter, leases).getOrThrow()
             service.onVmClosed("target-1", "vm-1")
             service.onVmClosed("target-1", "vm-1")
+            service.awaitCleanup()
             assertTrue(adapter.removed.contains("p-2"))
         } finally {
             service.close()
@@ -144,7 +149,7 @@ class AiProbeServiceTest {
         val service = AiProbeService(registry, scheduler, maxCaptures = 2, maxCaptureBytes = 8)
         try {
             service.install(spec(captures = listOf("a", "b")), adapter, leases).getOrThrow()
-            pauseEvent(registry)
+            pauseEvent(registry, service)
             assertEquals("the first value is evaluated once", 1, adapter.captures.size)
             val hit = events.last { it.type == "probe.hit" }
             @Suppress("UNCHECKED_CAST")
@@ -168,7 +173,7 @@ class AiProbeServiceTest {
         val service = AiProbeService(registry, ScheduledThreadPoolExecutor(1))
         try {
             service.install(spec().copy(timeoutMillis = 10), adapter, leases).getOrThrow()
-            pauseEvent(registry)
+            pauseEvent(registry, service)
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1)
             while (service.status("p-1")?.state == AiProbeState.ACTIVE && System.nanoTime() < deadline) {
                 Thread.yield()
@@ -194,12 +199,13 @@ class AiProbeServiceTest {
         val service = AiProbeService(registry, ScheduledThreadPoolExecutor(1))
         try {
             service.install(spec(autoContinue = true), adapter, leases).getOrThrow()
-            val pause = Thread { pauseEvent(registry) }
+            val pause = Thread { pauseEvent(registry, service = service) }
             pause.start()
             assertTrue(entered.await(1, TimeUnit.SECONDS))
 
             service.notifyUserControl("target-1")
             assertEquals(AiProbeState.ORPHANED, service.status("p-1")?.state)
+            service.awaitCleanup()
             assertTrue(adapter.removed.contains("p-1"))
 
             release.countDown()
@@ -223,13 +229,14 @@ class AiProbeServiceTest {
         val service = AiProbeService(registry, ScheduledThreadPoolExecutor(1))
         try {
             service.install(spec(autoContinue = true).copy(hitLimit = 2), adapter, leases).getOrThrow()
-            pauseEvent(registry)
+            pauseEvent(registry, service)
             assertEquals(AiProbeState.ACTIVE, service.status("p-1")?.state)
             assertTrue(registry.journal("target-1")!!.readAfter(0).getOrThrow().events.any {
                 it.type == "probe.autoContinueError"
             })
             service.notifyUserControl("target-1")
             assertEquals(AiProbeState.ORPHANED, service.status("p-1")?.state)
+            service.awaitCleanup()
             assertTrue(adapter.removed.contains("p-1"))
             assertTrue(service.remove("p-1", "client-b").getOrThrow() == false)
         } finally {

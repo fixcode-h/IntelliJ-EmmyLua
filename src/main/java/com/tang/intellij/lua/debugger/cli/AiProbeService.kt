@@ -3,6 +3,9 @@ package com.tang.intellij.lua.debugger.cli
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeoutException
 import java.util.concurrent.TimeUnit
@@ -22,6 +25,12 @@ data class AiProbeStatus(
     val owner: String? = null
 )
 
+private fun createBoundedExecutor(name: String, queueCapacity: Int): ThreadPoolExecutor = ThreadPoolExecutor(
+    1, 1, 0L, TimeUnit.MILLISECONDS, ArrayBlockingQueue(queueCapacity),
+    { task -> Thread(task, name).apply { isDaemon = true } },
+    ThreadPoolExecutor.AbortPolicy()
+)
+
 /**
  * Owns the lifecycle of CLI probes. It deliberately consumes immutable event
  * DTOs and delegates all Lua access to the target adapter.
@@ -35,9 +44,7 @@ class AiProbeService(
     private val maxCaptureBytes: Int = 64 * 1024,
     private val conditionEvaluator: RestrictedConditionEvaluator = RestrictedConditionEvaluator(),
     private val trustedTarget: (String) -> Boolean = { true },
-    private val evaluationExecutor: ExecutorService = Executors.newCachedThreadPool { task ->
-        Thread(task, "EmmyLua-AiProbeEval").apply { isDaemon = true }
-    }
+    private val evaluationExecutor: ExecutorService = createBoundedExecutor("EmmyLua-AiProbeEval", 32)
 ) : AutoCloseable {
     private val valuePathEvaluator = RestrictedValuePathEvaluator()
     private data class Active(
@@ -57,9 +64,11 @@ class AiProbeService(
     private val terminal = ConcurrentHashMap<String, AiProbeStatus>()
     private val closed = AtomicBoolean()
     private var registryListener: AutoCloseable? = null
+    private val eventExecutor: ThreadPoolExecutor = createBoundedExecutor("EmmyLua-AiProbeEvent", 256)
+    private val cleanupExecutor: ThreadPoolExecutor = createBoundedExecutor("EmmyLua-AiProbeCleanup", 64)
 
     init {
-        eventRegistry?.addListener(::onEvent)?.let { handle ->
+        eventRegistry?.addListener(::dispatchEvent)?.let { handle ->
             // Keep a single registry listener for the service lifetime.
             registryListener = handle
         }
@@ -131,6 +140,17 @@ class AiProbeService(
     } ?: terminal[probeId]
 
     fun activeProbeIds(): Set<String> = active.keys.toSet()
+
+    /** Test/support hook to await events already accepted by the worker. */
+    internal fun awaitEventWorker(timeoutMillis: Long = 2_000L): Boolean = runCatching {
+        eventExecutor.submit {}.get(timeoutMillis, TimeUnit.MILLISECONDS)
+        true
+    }.getOrDefault(false)
+
+    internal fun awaitCleanup(timeoutMillis: Long = 2_000L): Boolean = runCatching {
+        cleanupExecutor.submit {}.get(timeoutMillis, TimeUnit.MILLISECONDS)
+        true
+    }.getOrDefault(false)
 
     fun statuses(targetId: String? = null, owner: String? = null): List<AiProbeStatus> {
         val activeStatuses = active.values.asSequence()
@@ -208,6 +228,18 @@ class AiProbeService(
             it.spec.targetId == event.targetId && it.spec.vmId == event.vmId && !it.stopped.get()
         }
         candidates.forEach { state -> handlePause(state, event) }
+    }
+
+    private fun dispatchEvent(event: CliEventRecord) {
+        // Lifecycle transitions only detach probes and publish terminal state;
+        // backend removal is queued below, so the producer thread never waits
+        // for adapter/lifecycle work.
+        if (event.type == "vm.lifecycle" || event.type == "vm.contextReset" || event.type == "context.reset") {
+            onEvent(event)
+            return
+        }
+        if (closed.get()) return
+        runCatching { eventExecutor.execute { onEvent(event) } }
     }
 
     private fun handlePause(state: Active, event: CliEventRecord) {
@@ -488,11 +520,17 @@ class AiProbeService(
             state.terminalState = terminalState
             active.remove(state.spec.probeId, state)
             state.listenerHandle?.close()
-            if (removeBackend) runCatching { state.adapter.removeProbe(state.spec.probeId, state.spec.owner) }
             terminal[state.spec.probeId] = AiProbeStatus(
                 state.spec.probeId, terminalState, state.hits, System.currentTimeMillis(),
                 state.spec.targetId, state.spec.owner)
             while (terminal.size > 256) terminal.keys.firstOrNull()?.let(terminal::remove) ?: break
+        }
+        if (removeBackend) {
+            val cleanup = Runnable { runCatching { state.adapter.removeProbe(state.spec.probeId, state.spec.owner) } }
+            runCatching { cleanupExecutor.execute(cleanup) }.onFailure {
+                // During shutdown no worker is available; best effort cleanup
+                // is preferable to holding the lifecycle/evaluation thread.
+            }
         }
     }
 
@@ -509,6 +547,8 @@ class AiProbeService(
         registryListener = null
         scheduler.shutdownNow()
         evaluationExecutor.shutdownNow()
+        eventExecutor.shutdownNow()
+        cleanupExecutor.shutdownNow()
     }
 
     private fun isLuaTruthy(value: CliCapturedValue): Boolean {
