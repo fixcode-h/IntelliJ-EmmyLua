@@ -29,7 +29,8 @@ import kotlin.system.exitProcess
 /** Parsed command line. Kept dependency-free so the CLI starts in a plain JVM. */
 data class ParsedCliArgs(
     val positionals: List<String>,
-    val options: Map<String, String?>
+    val options: Map<String, String?>,
+    val captures: List<String> = emptyList()
 ) {
     fun option(name: String): String? = options[name]
     fun has(name: String): Boolean = options.containsKey(name)
@@ -48,6 +49,7 @@ object CliArgs {
     fun parse(args: Array<String>): ParsedCliArgs {
         val positionals = mutableListOf<String>()
         val options = linkedMapOf<String, String?>()
+        val captures = mutableListOf<String>()
         var index = 0
         var endOptions = false
         while (index < args.size) {
@@ -80,16 +82,44 @@ object CliArgs {
                 }
                 next
             }
-            if (name == "capture" && options.containsKey(name)) {
-                val previous = options[name].orEmpty()
-                options[name] = "$previous,$optionValue"
+            if (name == "capture") {
+                captures += splitCaptures(optionValue)
+                options[name] = optionValue
             } else {
                 require(!options.containsKey(name)) { "duplicate option --$name" }
                 options[name] = optionValue
             }
             index += if (equals >= 0) 1 else 2
         }
-        return ParsedCliArgs(positionals, options)
+        return ParsedCliArgs(positionals, options, captures)
+    }
+
+    // 兼容逗号分隔列表，同时保留 table["a,b"] 中的原始 key。
+    private fun splitCaptures(value: String): List<String> {
+        val result = mutableListOf<String>()
+        var quote: Char? = null
+        var escaped = false
+        var depth = 0
+        var start = 0
+        value.forEachIndexed { index, ch ->
+            if (quote != null) {
+                if (escaped) escaped = false
+                else if (ch == '\\') escaped = true
+                else if (ch == quote) quote = null
+            } else when (ch) {
+                '\'', '"' -> quote = ch
+                '[' -> depth++
+                ']' -> { depth--; require(depth >= 0) { "invalid --capture brackets" } }
+                ',' -> if (depth == 0) {
+                    result += value.substring(start, index).trim()
+                    start = index + 1
+                }
+            }
+        }
+        require(quote == null && depth == 0) { "unterminated --capture path" }
+        result += value.substring(start).trim()
+        require(result.none(String::isBlank)) { "--capture contains an empty path" }
+        return result
     }
 }
 
@@ -402,8 +432,8 @@ private fun buildRequest(operation: String, context: CommandContext): CliRequest
     args.option("max-nodes")?.let { payload.addProperty("maxNodes", parseIntOption(it, "max-nodes", 1)) }
     args.option("max-bytes")?.let { payload.addProperty("maxBytes", parseIntOption(it, "max-bytes", 1)) }
     if (args.has("auto-continue")) payload.addProperty("autoContinue", true)
-    args.option("capture")?.let { value ->
-        payload.add("captures", Gson().toJsonTree(value.split(',').filter(String::isNotBlank)))
+    if (args.has("capture")) {
+        payload.add("captures", Gson().toJsonTree(args.captures))
     }
     args.option("source-identity")?.let {
         val source = JsonParser.parseString(it)
@@ -415,7 +445,8 @@ private fun buildRequest(operation: String, context: CommandContext): CliRequest
         payload.add("sourceIdentity", JsonObject().apply {
             addProperty("uri", Path.of(path).toAbsolutePath().normalize().toUri().toString())
             addProperty("canonicalPath", Path.of(path).toAbsolutePath().normalize().toString())
-            addProperty("verified", Files.isRegularFile(Path.of(path)))
+            // 本地文件存在不能证明宿主加载了同一份字节。
+            addProperty("verified", false)
         })
     }
     if (operation == CliOperations.BREAKPOINT_REMOVE) {

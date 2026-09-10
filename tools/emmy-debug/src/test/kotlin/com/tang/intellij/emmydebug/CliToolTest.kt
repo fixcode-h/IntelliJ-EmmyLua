@@ -2,11 +2,13 @@ package com.tang.intellij.emmydebug
 
 import com.tang.intellij.lua.debugger.cli.CliInstanceDescriptor
 import com.tang.intellij.lua.debugger.cli.CliRequest
+import com.google.gson.JsonParser
 import java.net.ServerSocket
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class CliToolTest {
@@ -25,18 +27,69 @@ class CliToolTest {
     }
 
     @Test
-    fun `token file rejects symlink and oversized content`() {
+    fun `actual CLI rejects missing empty and oversized token before connecting`() {
         val dir = Files.createTempDirectory("emmy-debug-token")
         val token = dir.resolve("token")
-        Files.writeString(token, "secret\n", StandardCharsets.UTF_8)
-        // The helper is exercised through a valid explicit descriptor. A
-        // regular token file must be accepted by the same path used by runCli.
-        val descriptor = CliInstanceDescriptor(
-            ideaInstanceId = "idea", pid = 1, product = "IDEA",
-            endpoint = "tcp://127.0.0.1:1", startedAt = "", tokenFile = token.toString()
-        )
-        assertEquals("secret", invokeReadToken(token))
-        assertEquals("idea", descriptor.ideaInstanceId)
+        fun reject(message: String) {
+            val error = assertThrows(IllegalArgumentException::class.java) {
+                runCli(arrayOf("target", "list", "--endpoint", "tcp://127.0.0.1:1",
+                    "--token-file", token.toString()))
+            }
+            assertEquals(message, error.message)
+        }
+        try {
+            reject("token file does not exist")
+            Files.writeString(token, " ")
+            reject("token file is empty")
+            Files.writeString(token, "x".repeat(4097))
+            reject("token file has an invalid size")
+        } finally {
+            Files.deleteIfExists(token)
+            Files.deleteIfExists(dir)
+        }
+    }
+
+    @Test
+    fun `actual probe CLI preserves comma keys repeated captures and unverified local source`() {
+        val dir = Files.createTempDirectory("emmy-debug-command")
+        val token = Files.writeString(dir.resolve("token"), "secret\n")
+        val source = Files.writeString(dir.resolve("runtime.lua"), "local value = 42")
+        val received = java.util.concurrent.CompletableFuture<com.google.gson.JsonObject>()
+        ServerSocket(0).use { server ->
+            server.soTimeout = 5000
+            val worker = Thread {
+                try {
+                    server.accept().use { socket ->
+                        socket.soTimeout = 5000
+                        val reader = socket.getInputStream().bufferedReader()
+                        val writer = socket.getOutputStream().bufferedWriter()
+                        check(reader.readLine().contains("secret"))
+                        writer.write("{\"ok\":true,\"authenticated\":true}\n")
+                        writer.flush()
+                        received.complete(JsonParser.parseString(reader.readLine()).asJsonObject)
+                        writer.write("{\"requestId\":\"capture-test\",\"ok\":true,\"data\":{}}\n")
+                        writer.flush()
+                    }
+                } catch (error: Throwable) { received.completeExceptionally(error) }
+            }.apply { isDaemon = true; start() }
+            try {
+                assertEquals(0, runCli(arrayOf("probe", "run", "--endpoint", "tcp://127.0.0.1:${server.localPort}",
+                    "--token-file", token.toString(), "--request-id", "capture-test", "--target", "target",
+                    "--vm", "vm", "--lease", "lease", "--file", source.toString(), "--line", "3",
+                    "--capture", "value[\"a,b\"],value.answer", "--capture", "value[\"a.b\"].nested")))
+                val request = received.get(5, java.util.concurrent.TimeUnit.SECONDS)
+                assertEquals("probe.run", request["operation"].asString)
+                val arguments = request["arguments"].asJsonObject
+                assertEquals(listOf("value[\"a,b\"]", "value.answer", "value[\"a.b\"].nested"),
+                    arguments["captures"].asJsonArray.map { it.asString })
+                assertEquals(false, arguments["sourceIdentity"].asJsonObject["verified"].asBoolean)
+            } finally {
+                worker.join(6000)
+                Files.deleteIfExists(source)
+                Files.deleteIfExists(token)
+                Files.deleteIfExists(dir)
+            }
+        }
     }
 
     @Test
@@ -71,11 +124,4 @@ class CliToolTest {
         thread.join(2_000)
     }
 
-    private fun invokeReadToken(path: java.nio.file.Path): String {
-        // Keep this test black-box: selectDescriptor/runCli uses the same
-        // validation, while a tiny temporary gateway is unnecessary here.
-        val text = Files.readString(path).trim()
-        require(text.isNotEmpty())
-        return text
-    }
 }

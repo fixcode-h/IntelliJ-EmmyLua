@@ -4,7 +4,7 @@
 
 ## 启动与选择实例
 
-IDEA 插件加载后会启动本机 CLI Gateway，并在系统目录写入实例描述和 token 文件。
+首次初始化 Emmy 调试会话或访问 CLI 授权菜单时，插件会启动本机 CLI Gateway，并在实例目录写入描述和 token 文件。因此 `instance list` 为空不代表 IDEA 没有运行。
 
 ```text
 emmy-debug instance list
@@ -36,9 +36,9 @@ emmy-debug scopes --target <target-id> --vm <vm-id> --pause <pause-id> --frame <
 emmy-debug variables --target <target-id> --vm <vm-id> --pause <pause-id> --frame <frame-id> --path locals --client emmy-debug
 ```
 
-变量展开必须提供有界的 `--max-depth`、`--max-nodes` 和 `--max-bytes`。`--json` 适合脚本和 AI 工具消费。
+变量展开受 `--max-depth`、`--max-nodes` 和 `--max-bytes` 限制，省略时使用服务端默认预算。`--json` 适合脚本和 AI 工具消费。
 
-`--path` 是 `VALUE_PATH`：它只能引用当前暂停帧快照中实际存在的 raw `locals`、`upvalues`、`globals` 名称，以及其 children 路径；不会执行 Lua 表达式、函数或元方法。`scopes` 返回的 `variablesReference` 是绑定当前 VM/pause/frame 的 opaque token，只能通过 `variablesReference` 请求展开，不能当作 `--path` 重新解析；暂停、恢复、reset 或切换 frame 后必须重新查询。
+`--path` 是 `VALUE_PATH`：它使用实际变量名，例如 `player.name`、`value["a.b"]`，从当前暂停快照的 local、upvalue、global 中查找；`locals.` 不是表达式前缀。`scopes` 返回的 `variablesReference` 是绑定当前 VM/pause/frame 的 opaque token，通过 `--variables-reference <token>` 展开，不能当作 `--path` 重新解析；恢复、reset 或使用另一 frame 时必须重新查询。
 
 `--path locals`、`--path upvalues` 和 `--path globals` 是 scope 选择器；scope 返回的 opaque token 不受同名变量或特殊 key 影响。
 
@@ -48,30 +48,33 @@ VM 和 source 相关响应中的 `sourceIdentity` 表示宿主运行时注册的
 
 ## 受限求值
 
-CLI 只允许暂停帧快照上的 `VALUE_PATH`，不执行任意 Lua 表达式、函数或元方法。legacy Agent 不开放 AI 求值和 Probe。
+CLI 求值仅允许 `VALUE_PATH`，由 Native 在 Lua 所属线程读取当前暂停帧的 raw 值；不执行任意 Lua 表达式、函数或元方法。legacy Agent 不开放 AI 求值和 Probe。
 
 ```text
 emmy-debug eval --target <target-id> --vm <vm-id> --pause <pause-id> \
-  --frame <frame-id> --expression locals.player.name --policy VALUE_PATH \
+  --frame <frame-id> --expression player.name --policy VALUE_PATH \
   --lease <lease-id> --client emmy-debug
 ```
 
-`--expression` 同样是 `VALUE_PATH`，只接受当前暂停帧中存在的 raw locals/upvalues/globals 名称和 children 路径。`--source-identity` 可选但推荐填写：直接复制 `stack`/`frame` 响应中的 `sourceIdentity`，不要自行根据本地文件计算或杜撰 hash。求值请求中的 identity 使用 `canonicalPath`、可选的 `sourceHash`、`sourceEpoch` 和 `verified` 字段；不匹配当前宿主快照时会返回 `SOURCE_IDENTITY_MISMATCH`。
+`--expression` 使用实际变量名和 raw 字段路径。`--source-identity` 可选但推荐填写：直接复制 `stack` 响应中对应 frame 的 `sourceIdentity`，不要自行根据本地文件计算或杜撰 hash。identity 使用 `canonicalPath`、可选的 `sourceHash`、`sourceEpoch` 和 `verified` 字段；不匹配当前宿主快照时会返回 `SOURCE_IDENTITY_MISMATCH`。
 
 求值、控制、断点和 Probe 需要当前客户端持有目标 lease。客户端退出或 lease TTL 到期后，服务端会拒绝后续控制请求。
 
 ## Probe
 
 ```text
-emmy-debug probe run --target <target-id> --vm <vm-id> --file path/to/Game.lua \
-  --line 120 --capture locals.player --timeout 30s \
+emmy-debug probe run --target <target-id> --vm <vm-id> --source-identity '<运行时 sourceIdentity JSON>' \
+  --line 120 --condition 'player.health < 20' --capture player.health --capture player.name \
+  --timeout 30s --hit-limit 1 --auto-continue \
   --lease <lease-id> --client emmy-debug
 emmy-debug wait --target <target-id> --client emmy-debug
 emmy-debug probe remove --target <target-id> --probe-id <probe-id> \
   --lease <lease-id> --client emmy-debug
 ```
 
-`--capture` 是 `VALUE_PATH`，只能捕获目标暂停帧中实际存在的 raw locals/upvalues/globals 名称及 children 路径。Probe 必须提供 `sourceIdentity`（使用 `canonicalPath`、可选 `sourceHash`、`sourceEpoch`、`verified`）；应从目标运行时或 `stack`/`frame` 响应复制这些字段，不能杜撰 hash。
+`--capture` 是 `VALUE_PATH`，可以重复传入，也支持用逗号分隔路径；引号 key 中的逗号会保留，例如 `value["a,b"]`。`--condition` 只支持受限条件语法，不能调用 Lua 函数。Probe 必须提供 `sourceIdentity`，应从目标运行时或 `stack` 响应复制；也可用 `--file` 仅按路径定位，此时 identity 的 `verified=false`，不代表已验证运行时字节内容。`--file` 与 `--source-identity` 不能同时使用。
+
+`probe run` 返回安装结果和 `probeId`；采集在之后命中该行时发生。通过 `wait --cursor <游标>` 接收包含采集值的 `probe.hit` 事件，或用 `probe status --probe-id <id>` 查询状态。普通命令输出单行 JSON，`wait` 输出 NDJSON 事件流并以 `done` 结束。长时间采集应在租约到期前调用 `lease heartbeat`。
 
 Probe 只在暂停原因完全属于该 Probe 时自动继续；用户控制、撤销授权、超时和调试目标关闭都会使 Probe 失效并清理后端断点。
 
