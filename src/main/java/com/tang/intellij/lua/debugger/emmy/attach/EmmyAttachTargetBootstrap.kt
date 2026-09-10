@@ -7,9 +7,11 @@ import com.tang.intellij.lua.debugger.emmy.EmmyTargetBootstrap
 import com.tang.intellij.lua.debugger.emmy.SocketClientTransporter
 import com.tang.intellij.lua.debugger.emmy.Transporter
 import java.io.File
+import java.io.ByteArrayOutputStream
+import java.nio.charset.StandardCharsets
 import java.security.SecureRandom
-import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 class EmmyAttachTargetBootstrap(
     private val configuration: EmmyAttachDebugConfiguration,
@@ -91,45 +93,24 @@ class EmmyAttachTargetBootstrap(
             if (index > 0 && commands[index - 1] == "-auth-token") "<redacted>" else value
         }
         log("执行附加命令: ${displayCommands.joinToString(" ")} (认证令牌通过进程环境传递)", DebugLogLevel.DEBUG)
-        val processBuilder = ProcessBuilder(commands)
-            .directory(toolDir)
-            .redirectErrorStream(true)
-        // Avoid exposing the attach token in command-line inspection tools.
-        processBuilder.environment()["EMMY_ATTACH_AUTH_TOKEN"] = authToken
-        val process = processBuilder.start()
-
-        val bootstrapStatus = AtomicReference<AttachBootstrapStatus?>(null)
-        val outputReader = Thread {
-            process.inputStream.bufferedReader().useLines { lines ->
-                lines.forEach { line ->
-                    val parsed = runCatching { JsonParser.parseString(line).asJsonObject }.getOrNull()
-                    if (parsed?.get("schemaVersion")?.asInt == 1) {
-                        val status = AttachBootstrapStatus.fromJson(parsed)
-                        bootstrapStatus.set(status)
-                        log("attach 状态: ${status.summary()}", DebugLogLevel.DEBUG)
-                    } else {
-                        log("attach: $line", DebugLogLevel.DEBUG)
-                    }
-                }
+        val result = AttachToolRunner().run(commands, toolDir, authToken) { line ->
+            val parsed = runCatching { JsonParser.parseString(line).asJsonObject }.getOrNull()
+            if (parsed?.get("schemaVersion")?.asInt == 1) {
+                val status = AttachBootstrapStatus.fromJson(parsed)
+                log("attach 状态: ${status.summary()}", DebugLogLevel.DEBUG)
+                status
+            } else {
+                log("attach: $line", DebugLogLevel.DEBUG)
+                null
             }
-        }.apply { isDaemon = true; start() }
-        val finished = process.waitFor(15, TimeUnit.SECONDS)
-        if (!finished) {
-            process.destroy()
-            if (!process.waitFor(500, TimeUnit.MILLISECONDS)) process.destroyForcibly()
-            process.inputStream.close()
-            outputReader.join(1000)
-            error("附加工具在 15 秒内未退出，已终止（可能卡在注入或继承输出管道）")
         }
-        outputReader.join(1000)
-        val exitCode = process.exitValue()
+        val exitCode = result.exitCode
         if (exitCode != 0) {
-            val status = bootstrapStatus.get()
+            val status = result.status
             error("附加失败，emmy_tool 退出码: $exitCode，状态=${status?.status ?: "unknown"}，错误=${status?.message ?: "未提供"}")
         }
-        val status = checkNotNull(bootstrapStatus.get()) { "附加工具未返回结构化启动状态（无法证明已注入/监听）" }
-        check(status.pid == configuration.pid && status.injected && status.listening &&
-            status.authReady && status.status == "auth-ready") {
+        val status = checkNotNull(result.status) { "附加工具未返回结构化启动状态（无法证明已注入/监听）" }
+        check(isAttachBootstrapReady(status, configuration.pid)) {
             if (status.alreadyAttached) {
                 "目标进程已有 Emmy Agent，当前无法安全重协商认证 token"
             } else {
@@ -191,7 +172,92 @@ class EmmyAttachTargetBootstrap(
     }
 }
 
-private data class AttachBootstrapStatus(
+internal data class AttachToolResult(val exitCode: Int, val status: AttachBootstrapStatus?)
+
+internal class AttachToolRunner(
+    private val timeoutMillis: Long = 90_000L
+) {
+    fun run(command: List<String>, directory: File, authToken: String, onLine: (String) -> AttachBootstrapStatus?): AttachToolResult {
+        val process = ProcessBuilder(command).directory(directory).redirectErrorStream(true).apply {
+            // Avoid exposing the attach token in command-line inspection tools.
+            environment()["EMMY_ATTACH_AUTH_TOKEN"] = authToken
+        }.start()
+        val status = AtomicReference<AttachBootstrapStatus?>(null)
+        val reader = Thread {
+            try {
+                readLines(process) { line ->
+                    onLine(line)?.let(status::set)
+                }
+            } catch (_: Exception) {
+                // Process shutdown may close the stream while the reader is blocked.
+            }
+        }.apply { isDaemon = true; start() }
+        try {
+            if (!process.waitFor(timeoutMillis, TimeUnit.MILLISECONDS)) {
+                terminate(process)
+                throw IllegalStateException("附加工具在 ${timeoutMillis / 1000} 秒内未退出，已终止（可能卡在注入或继承输出管道）")
+            }
+            reader.join(1_000L)
+            return AttachToolResult(process.exitValue(), status.get())
+        } catch (error: InterruptedException) {
+            terminate(process)
+            Thread.currentThread().interrupt()
+            throw IllegalStateException("附加工具等待被中断，已终止", error)
+        } finally {
+            runCatching { process.inputStream.close() }
+            runCatching { reader.join(1_000L) }
+            if (process.isAlive) terminate(process)
+        }
+    }
+
+    private fun terminate(process: Process) {
+        process.destroy()
+        if (process.isAlive && !runCatching { process.waitFor(500, TimeUnit.MILLISECONDS) }.getOrDefault(false)) {
+            process.destroyForcibly()
+            runCatching { process.waitFor(500, TimeUnit.MILLISECONDS) }
+        }
+    }
+
+    private fun readLines(process: Process, onLine: (String) -> Unit) {
+        val input = process.inputStream
+        val buffer = ByteArray(8 * 1024)
+        val line = ByteArrayOutputStream(4 * 1024)
+        var truncated = false
+        var totalBytes = 0L
+        while (true) {
+            if (input.available() == 0) {
+                if (!process.isAlive) return
+                Thread.sleep(10L)
+                continue
+            }
+            val count = input.read(buffer)
+            if (count < 0) return
+            totalBytes += count
+            if (totalBytes > 1024 * 1024) {
+                process.destroy()
+                return
+            }
+            for (index in 0 until count) {
+                when (buffer[index].toInt()) {
+                    '\n'.code -> {
+                        if (!truncated) onLine(line.toByteArray().toString(StandardCharsets.UTF_8).trimEnd('\r'))
+                        line.reset()
+                        truncated = false
+                    }
+                    else -> if (!truncated) {
+                        if (line.size() < 64 * 1024) line.write(buffer[index].toInt()) else truncated = true
+                    }
+                }
+            }
+        }
+    }
+}
+
+internal fun isAttachBootstrapReady(status: AttachBootstrapStatus, expectedPid: Int): Boolean =
+    status.pid == expectedPid && status.injected && status.listening &&
+        status.authReady && status.status == "auth-ready"
+
+internal data class AttachBootstrapStatus(
     val status: String,
     val pid: Int,
     val injected: Boolean,
