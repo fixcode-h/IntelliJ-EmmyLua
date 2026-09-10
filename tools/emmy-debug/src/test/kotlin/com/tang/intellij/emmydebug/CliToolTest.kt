@@ -124,4 +124,41 @@ class CliToolTest {
         thread.join(2_000)
     }
 
+    @Test
+    fun `wait returns nonzero for terminal error`() {
+        assertEquals(5, runWaitWithTerminal("{\"requestId\":\"wait-test\",\"ok\":false,\"error\":{\"code\":\"TIMEOUT\",\"message\":\"timed out\"},\"done\":true}"))
+    }
+
+    @Test
+    fun `wait returns zero for successful terminal done`() {
+        assertEquals(0, runWaitWithTerminal("{\"requestId\":\"wait-test\",\"ok\":true,\"data\":{\"reason\":\"EVENTS_AVAILABLE\"},\"done\":true}"))
+    }
+
+    private fun runWaitWithTerminal(terminal: String): Int {
+        val dir = Files.createTempDirectory("emmy-debug-wait")
+        val token = Files.writeString(dir.resolve("token"), "secret")
+        ServerSocket(0).use { server ->
+            val thread = Thread {
+                server.use { listener -> listener.accept().use { socket ->
+                    val reader = socket.getInputStream().bufferedReader(StandardCharsets.UTF_8)
+                    val writer = socket.getOutputStream().bufferedWriter(StandardCharsets.UTF_8)
+                    check(reader.readLine().contains("secret"))
+                    writer.write("{\"ok\":true,\"authenticated\":true}\n")
+                    writer.flush()
+                    check(reader.readLine().contains("\"operation\":\"wait\""))
+                    writer.write(terminal + "\n")
+                    writer.flush()
+                } }
+            }.apply { isDaemon = true; start() }
+            try {
+                return runCli(arrayOf("wait", "--endpoint", "tcp://127.0.0.1:${server.localPort}",
+                    "--token-file", token.toString(), "--target", "target", "--request-id", "wait-test"))
+            } finally {
+                thread.join(2_000)
+                Files.deleteIfExists(token)
+                Files.deleteIfExists(dir)
+            }
+        }
+    }
+
 }

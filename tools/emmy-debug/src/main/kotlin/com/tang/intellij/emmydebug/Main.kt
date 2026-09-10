@@ -372,8 +372,10 @@ private fun dispatch(client: GatewayClient, command: String, context: CommandCon
         }
         Runtime.getRuntime().addShutdownHook(hook)
         return try {
-            client.stream(request) { printResponse(it) }
-            0
+            val responses = client.stream(request) { printResponse(it) }
+            val terminal = responses.lastOrNull { it.done == true }
+                ?: throw IllegalStateException("wait stream ended without terminal response")
+            if (terminal.ok) 0 else exitCodeFor(terminal.error?.code)
         } finally {
             clientForShutdown = null
             runCatching { Runtime.getRuntime().removeShutdownHook(hook) }
