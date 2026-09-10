@@ -83,7 +83,7 @@ class EmmyDebugTargetAdapter(private val backend: EmmyDebugBackend) : DebugTarge
         val values = list.mapNotNull { value ->
             toSnapshot(value, maxDepth, budget, seen, vmId, pauseId, frameId)
         }
-        return Result.success(CliVariablesPage(values, budget.truncated, returnedCount = values.size))
+        return Result.success(CliVariablesPage(values, budget.truncated || values.any { it.truncated }, returnedCount = values.size))
     }
 
     override fun variablesReference(vmId: String, pauseId: Long, frameId: String, reference: String,
@@ -106,7 +106,7 @@ class EmmyDebugTargetAdapter(private val backend: EmmyDebugBackend) : DebugTarge
         val values = entry.values.mapNotNull { value ->
             toSnapshot(value, maxDepth, budget, seen, vmId, pauseId, frameId)
         }
-        return Result.success(CliVariablesPage(values, budget.truncated, returnedCount = values.size))
+        return Result.success(CliVariablesPage(values, budget.truncated || values.any { it.truncated }, returnedCount = values.size))
     }
 
     override fun evaluate(request: CliEvaluationRequest): Result<CliCapturedValue> {
@@ -197,7 +197,7 @@ class EmmyDebugTargetAdapter(private val backend: EmmyDebugBackend) : DebugTarge
         if (!budget.take(value.nameValue, type, display)) return null
         val children = value.children.orEmpty()
         val reference = if (children.isNotEmpty()) rememberReference(vmId, pauseId, frameId, children) else null
-        var truncated = false
+        var truncated = value.truncated
         val eagerChildren = mutableListOf<CliVariableSnapshot>()
         val alreadySeen = seen.put(value, true) != null
         if (children.isNotEmpty()) {
@@ -217,7 +217,7 @@ class EmmyDebugTargetAdapter(private val backend: EmmyDebugBackend) : DebugTarge
         return CliVariableSnapshot(
             name = value.nameValue, type = type, display = display,
             variablesReference = reference,
-            childCount = children.size,
+            childCount = if (value.truncated && children.isEmpty()) null else children.size,
             truncated = truncated,
             children = eagerChildren
         )

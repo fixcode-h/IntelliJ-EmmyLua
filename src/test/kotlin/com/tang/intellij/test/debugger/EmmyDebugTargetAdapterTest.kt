@@ -81,6 +81,21 @@ class EmmyDebugTargetAdapterTest {
         assertTrue(adapter.variablesReference("vm-1", 7, "frame-7", newest).isSuccess)
     }
 
+    @Test
+    fun `native truncated table has no fabricated empty reference`() {
+        val truncated = VariableValue("state", LuaValueType.TSTRING.wireId, "table",
+            LuaValueType.TTABLE.wireId, "table", 42, emptyList(), truncated = true)
+        val backend = FakeBackend(CliCapturedValue("x", true, display = "ok"),
+            PauseSnapshot("vm-1", 7, "thread-1", stacks = listOf(
+                Stack("C:/Game.lua", 10, "main", 0, listOf(truncated), emptyList(), "frame-7"))))
+        val page = EmmyDebugTargetAdapter(backend).variables("vm-1", 7, "frame-7", null, 3, 10, 4096).getOrThrow()
+        val value = page.variables.single()
+        assertTrue(page.truncated)
+        assertTrue(value.truncated)
+        assertEquals(null, value.variablesReference)
+        assertEquals(null, value.childCount)
+    }
+
     private fun request() = CliEvaluationRequest("vm-1", 1, "frame-1", "player")
 
     private class FakeBackend(private val evaluation: CliCapturedValue,
