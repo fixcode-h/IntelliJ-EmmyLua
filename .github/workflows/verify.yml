@@ -27,7 +27,18 @@ jobs:
           java-version: "21"
       - uses: gradle/actions/setup-gradle@v4
       - name: Test, build and verify
-        run: ./gradlew --no-daemon -DIDEA_VER=${{ matrix.idea-version }} test buildPlugin verifyPlugin
+        run: ./gradlew --no-daemon -DIDEA_VER=${{ matrix.idea-version }} test buildPlugin verifyPlugin :tools:emmy-debug:installDist
+      - name: Preserve JVM and plugin verification reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: verification-idea-${{ matrix.idea-version }}
+          if-no-files-found: error
+          path: |
+            build/test-results/test/*.xml
+            modules/*/build/test-results/test/*.xml
+            tools/emmy-debug/build/test-results/test/*.xml
+            build/reports/pluginVerifier/**
       - name: Verify clean checkout and submodules
         shell: bash
         run: |
