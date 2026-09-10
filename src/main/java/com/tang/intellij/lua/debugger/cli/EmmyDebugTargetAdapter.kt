@@ -25,7 +25,10 @@ interface EmmyDebugBackend {
 }
 
 /** Adapter translating Emmy's existing pause snapshots into CLI DTOs. */
-class EmmyDebugTargetAdapter(private val backend: EmmyDebugBackend) : DebugTargetAdapter {
+class EmmyDebugTargetAdapter(
+    private val backend: EmmyDebugBackend,
+    private val clock: () -> Long = System::nanoTime
+) : DebugTargetAdapter {
     private data class ReferenceEntry(
         val vmId: String,
         val pauseId: Long,
@@ -65,31 +68,32 @@ class EmmyDebugTargetAdapter(private val backend: EmmyDebugBackend) : DebugTarge
 
     override fun variables(vmId: String, pauseId: Long, frameId: String, path: String?,
                            maxDepth: Int, maxNodes: Int, maxBytes: Int, timeoutMillis: Long): Result<CliVariablesPage> {
-        val snapshot = backend.debugPause(vmId, pauseId) ?: return Result.failure(IllegalStateException(CliErrorCodes.STALE_PAUSE_REFERENCE))
-        val frame = findFrame(snapshot, frameId) ?: return Result.failure(IllegalStateException(CliErrorCodes.STALE_PAUSE_REFERENCE))
-        if (maxDepth !in 0..32 || maxNodes !in 1..100_000 || maxBytes !in 1..16 * 1024 * 1024) {
+        if (maxDepth !in 0..32 || maxNodes !in 1..100_000 || maxBytes !in 1..16 * 1024 * 1024 ||
+            timeoutMillis !in 1..600_000) {
             return Result.failure(IllegalArgumentException(CliErrorCodes.EVALUATION_LIMIT_EXCEEDED))
         }
-        val roots = frame.localVariables.orEmpty() + frame.upvalueVariables.orEmpty() + frame.globalVariables.orEmpty()
+        val budget = Budget(maxNodes, maxBytes, timeoutMillis, clock)
+        val snapshot = backend.debugPause(vmId, pauseId) ?: return Result.failure(IllegalStateException(CliErrorCodes.STALE_PAUSE_REFERENCE))
+        val frame = findFrame(snapshot, frameId) ?: return Result.failure(IllegalStateException(CliErrorCodes.STALE_PAUSE_REFERENCE))
+        val roots = sequenceOf(frame.localVariables.orEmpty(), frame.upvalueVariables.orEmpty(),
+            frame.globalVariables.orEmpty()).flatten().asIterable()
         val list = when {
             path.isNullOrBlank() -> roots
             path == "locals" -> frame.localVariables
             path == "upvalues" -> frame.upvalueVariables
             path == "globals" -> frame.globalVariables.orEmpty()
-            else -> listOf(resolvePath(roots, path).getOrElse { return Result.failure(it) })
+            else -> listOf(resolvePath(roots, path, budget).getOrElse { return Result.failure(it) })
         }
-        val budget = Budget(maxNodes, maxBytes, timeoutMillis)
-        val seen = IdentityHashMap<VariableValue, Boolean>()
-        val values = mutableListOf<CliVariableSnapshot>()
-        for (value in list) { if (budget.exhausted()) break; toSnapshot(value, maxDepth, budget, seen, vmId, pauseId, frameId)?.let(values::add) }
-        return Result.success(CliVariablesPage(values, budget.truncated || values.any { it.truncated }, returnedCount = values.size))
+        return Result.success(renderVariables(list, maxDepth, budget, vmId, pauseId, frameId))
     }
 
     override fun variablesReference(vmId: String, pauseId: Long, frameId: String, reference: String,
                                     maxDepth: Int, maxNodes: Int, maxBytes: Int, timeoutMillis: Long): Result<CliVariablesPage> {
-        if (maxDepth !in 0..32 || maxNodes !in 1..100_000 || maxBytes !in 1..16 * 1024 * 1024) {
+        if (maxDepth !in 0..32 || maxNodes !in 1..100_000 || maxBytes !in 1..16 * 1024 * 1024 ||
+            timeoutMillis !in 1..600_000) {
             return Result.failure(IllegalArgumentException(CliErrorCodes.EVALUATION_LIMIT_EXCEEDED))
         }
+        val budget = Budget(maxNodes, maxBytes, timeoutMillis, clock)
         val entry = synchronized(references) { references[reference] }
             ?: return Result.failure(IllegalStateException(CliErrorCodes.STALE_PAUSE_REFERENCE))
         if (entry.vmId != vmId || entry.pauseId != pauseId || entry.frameId != frameId) {
@@ -100,11 +104,20 @@ class EmmyDebugTargetAdapter(private val backend: EmmyDebugBackend) : DebugTarge
         if (findFrame(snapshot, frameId) == null) {
             return Result.failure(IllegalStateException(CliErrorCodes.STALE_PAUSE_REFERENCE))
         }
-        val budget = Budget(maxNodes, maxBytes, timeoutMillis)
+        return Result.success(renderVariables(entry.values, maxDepth, budget, vmId, pauseId, frameId))
+    }
+
+    private fun renderVariables(list: Iterable<VariableValue>, maxDepth: Int, budget: Budget,
+                                vmId: String, pauseId: Long, frameId: String): CliVariablesPage {
         val seen = IdentityHashMap<VariableValue, Boolean>()
         val values = mutableListOf<CliVariableSnapshot>()
-        for (value in entry.values) { if (budget.exhausted()) break; toSnapshot(value, maxDepth, budget, seen, vmId, pauseId, frameId)?.let(values::add) }
-        return Result.success(CliVariablesPage(values, budget.truncated || values.any { it.truncated }, returnedCount = values.size))
+        val iterator = list.iterator()
+        while (iterator.hasNext()) {
+            if (budget.exhausted()) break
+            val rendered = toSnapshot(iterator.next(), maxDepth, budget, seen, vmId, pauseId, frameId) ?: break
+            values += rendered
+        }
+        return CliVariablesPage(values, budget.truncated || values.any { it.truncated }, returnedCount = values.size)
     }
 
     override fun evaluate(request: CliEvaluationRequest): Result<CliCapturedValue> {
@@ -165,21 +178,53 @@ class EmmyDebugTargetAdapter(private val backend: EmmyDebugBackend) : DebugTarge
         reasons
     )
 
-    private class Budget(nodes: Int, bytes: Int, timeoutMillis: Long) {
-        private var remainingNodes = nodes.coerceAtLeast(0)
-        private var remainingBytes = bytes.coerceAtLeast(0)
-        private val deadlineNanos = System.nanoTime() + timeoutMillis.coerceAtLeast(1).coerceAtMost(600_000L) * 1_000_000L
+    private class Budget(nodes: Int, bytes: Int, timeoutMillis: Long, private val clock: () -> Long) {
+        private var remainingNodes = nodes
+        private var remainingBytes = bytes
+        private val startedNanos = clock()
+        private val timeoutNanos = timeoutMillis * 1_000_000L
         var truncated = false
-        fun exhausted(): Boolean = if (System.nanoTime() >= deadlineNanos) { truncated = true; true } else false
+            private set
+
+        fun exhausted(): Boolean {
+            if (remainingNodes <= 0 || remainingBytes <= 0 || clock() - startedNanos >= timeoutNanos) {
+                truncated = true
+            }
+            return truncated
+        }
+
         fun take(vararg values: String): Boolean {
             if (exhausted()) return false
-            val size = values.sumOf { it.toByteArray(Charsets.UTF_8).size.toLong() }.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
-            if (remainingNodes <= 0 || remainingBytes < size) {
-                truncated = true
-                return false
+            var size = 0L
+            for (value in values) {
+                var index = 0
+                var nextClockCheck = 0L
+                while (index < value.length) {
+                    if (index >= nextClockCheck) {
+                        if (exhausted()) return false
+                        nextClockCheck = index.toLong() + 1024
+                    }
+                    val ch = value[index]
+                    val width = when {
+                        ch.isHighSurrogate() && index + 1 < value.length && value[index + 1].isLowSurrogate() -> {
+                            index++
+                            4
+                        }
+                        ch.isSurrogate() -> 1 // Matches the UTF-8 encoder's '?' replacement.
+                        ch.code <= 0x7f -> 1
+                        ch.code <= 0x7ff -> 2
+                        else -> 3
+                    }
+                    size += width
+                    if (size > remainingBytes || size > Int.MAX_VALUE) {
+                        truncated = true
+                        return false
+                    }
+                    index++
+                }
             }
             remainingNodes--
-            remainingBytes -= size
+            remainingBytes -= size.toInt()
             return true
         }
     }
@@ -241,15 +286,18 @@ class EmmyDebugTargetAdapter(private val backend: EmmyDebugBackend) : DebugTarge
         return id
     }
 
-    private fun resolvePath(roots: List<VariableValue>, path: String): Result<VariableValue> {
+    private fun resolvePath(roots: Iterable<VariableValue>, path: String, budget: Budget): Result<VariableValue> = runCatching {
         val evaluator = RestrictedValuePathEvaluator()
-        val segments = evaluator.parseSegments(path).getOrElse { return Result.failure(it) }
-        var current = roots.firstOrNull { it.name == segments.firstOrNull() || it.nameValue == segments.firstOrNull() }
-        for (segment in segments.drop(1)) {
-            current = current?.children?.firstOrNull { it.name == segment || it.nameValue == segment }
+        val segments = evaluator.parseSegments(path).getOrThrow()
+        fun lookup(values: Iterable<VariableValue>, name: String?): VariableValue? = values.firstOrNull {
+            if (budget.exhausted()) throw java.util.concurrent.TimeoutException("variable path lookup exceeded its budget")
+            it.name == name || it.nameValue == name
         }
-        return current?.let { Result.success(it) }
-            ?: Result.failure(NoSuchElementException(CliErrorCodes.VALUE_NOT_FOUND))
+        var current = lookup(roots, segments.firstOrNull())
+        for (segment in segments.drop(1)) {
+            current = lookup(current?.children.orEmpty(), segment)
+        }
+        current ?: throw NoSuchElementException(CliErrorCodes.VALUE_NOT_FOUND)
     }
 }
 
