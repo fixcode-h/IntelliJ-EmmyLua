@@ -6,7 +6,9 @@ data class SourceIdentity(
     val sourceHash: String? = null,
     val loaderEpoch: Long? = null,
     val verified: Boolean = false,
-    val sourceEpoch: Long? = null
+    val sourceEpoch: Long? = null,
+    /** True when sourceHash covers the complete file rather than only a prefix. */
+    val hashComplete: Boolean = true
 ) {
     val effectiveEpoch: Long? get() = sourceEpoch ?: loaderEpoch
 
@@ -34,33 +36,47 @@ data class SourceIdentity(
             val file = java.io.File(path)
             val exists = file.isFile
             val canonical = if (exists) normalizePath(runCatching { file.canonicalPath }.getOrNull() ?: path) else normalized
-            val hash = if (exists) boundedSha256(file, hashLimitBytes) else null
+            val hashResult = if (exists) boundedSha256(file, hashLimitBytes) else null
             return SourceIdentity(
                 uri = toFileUri(canonical),
                 canonicalPath = canonical,
-                sourceHash = hash,
-                verified = exists && hash != null
+                sourceHash = hashResult?.hash,
+                verified = exists && hashResult?.complete == true,
+                hashComplete = hashResult?.complete == true
             )
         }
 
         fun normalizePath(path: String): String {
             if (path.isBlank()) return ""
             val replaced = path.trim().replace('\\', '/')
-            val prefix = when {
+            val hasDrive = replaced.length >= 2 && replaced[1] == ':'
+            val drivePrefix = replaced.takeIf { hasDrive }
+                ?.let { it.substring(0, 2).lowercase() + if (it.length > 2 && it[2] == '/') "/" else "" }
+            val prefix = drivePrefix ?: when {
                 replaced.startsWith("//") -> "//"
-                replaced.length >= 2 && replaced[1] == ':' -> replaced.substring(0, 2).lowercase()
                 replaced.startsWith('/') -> "/"
                 else -> ""
             }
-            val body = replaced.removePrefix(prefix).split('/').filter { it.isNotEmpty() && it != "." }
+            val bodyText = when {
+                hasDrive -> replaced.substring(if (replaced.length > 2 && replaced[2] == '/') 3 else 2)
+                replaced.startsWith("//") -> replaced.substring(2)
+                replaced.startsWith('/') -> replaced.substring(1)
+                else -> replaced
+            }
+            val body = bodyText.split('/').filter { it.isNotEmpty() && it != "." }
             val parts = ArrayDeque<String>()
             body.forEach { part ->
                 if (part == ".." && parts.isNotEmpty() && parts.last() != "..") parts.removeLast()
                 else if (part != "..") parts.addLast(part)
             }
             val joined = parts.joinToString("/")
-            return (prefix + joined).trimEnd('/').lowercase()
+            val normalized = prefix + joined
+            val pathWithPlatformCase = if (isWindows()) normalized.lowercase() else normalized
+            return if (pathWithPlatformCase.length > prefix.length) pathWithPlatformCase.trimEnd('/') else pathWithPlatformCase
         }
+
+        private fun isWindows(): Boolean =
+            System.getProperty("os.name").startsWith("Windows", ignoreCase = true)
 
         private fun toFileUri(path: String): String = try {
             java.io.File(path).toURI().toString()
@@ -68,10 +84,12 @@ data class SourceIdentity(
             "file:///${path.replace('\\', '/')}"
         }
 
-        private fun boundedSha256(file: java.io.File, limit: Int): String? = runCatching {
+        private data class HashResult(val hash: String, val complete: Boolean)
+
+        private fun boundedSha256(file: java.io.File, limit: Int): HashResult? = runCatching {
             if (limit <= 0) return@runCatching null
             val digest = java.security.MessageDigest.getInstance("SHA-256")
-            file.inputStream().use { input ->
+            val complete = file.inputStream().use { input ->
                 val buffer = ByteArray(8192)
                 var remaining = limit
                 while (remaining > 0) {
@@ -80,8 +98,12 @@ data class SourceIdentity(
                     digest.update(buffer, 0, read)
                     remaining -= read
                 }
+                remaining > 0 || input.read() < 0
             }
-            digest.digest().joinToString("") { "%02x".format(it) }
+            HashResult(
+                digest.digest().joinToString("") { "%02x".format(it) },
+                complete = complete
+            )
         }.getOrNull()
     }
 }
