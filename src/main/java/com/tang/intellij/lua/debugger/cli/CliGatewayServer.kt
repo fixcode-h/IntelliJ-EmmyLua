@@ -11,8 +11,12 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.Semaphore
 import java.util.concurrent.atomic.AtomicBoolean
@@ -31,17 +35,24 @@ class CliGatewayServer(
     private val maxConcurrentRequests: Int = 16
 ) : AutoCloseable {
     private val running = AtomicBoolean()
+    private val closed = AtomicBoolean()
     private val clients: ExecutorService = Executors.newCachedThreadPool { task ->
         Thread(task, "EmmyLua-CliClient").apply { isDaemon = true }
     }
-    private val requests: ExecutorService = Executors.newFixedThreadPool(maxConcurrentRequests.coerceAtLeast(1)) { task ->
+    private val requests: ThreadPoolExecutor = ThreadPoolExecutor(
+        maxConcurrentRequests.coerceAtLeast(1), maxConcurrentRequests.coerceAtLeast(1),
+        0L, TimeUnit.MILLISECONDS, ArrayBlockingQueue(maxConcurrentRequests.coerceAtLeast(1)),
+        { task ->
         Thread(task, "EmmyLua-CliRequest").apply { isDaemon = true }
-    }
+        }, ThreadPoolExecutor.AbortPolicy()
+    )
     private val clientSlots = Semaphore(maxClients.coerceAtLeast(1))
     private var serverSocket: ServerSocket? = null
+    private val acceptedClients = CopyOnWriteArrayList<Socket>()
 
     @Synchronized
     fun start(): CliServerEndpoint {
+        check(!closed.get()) { "CLI server is closed" }
         check(running.compareAndSet(false, true)) { "CLI server is already running" }
         return try {
             val socket = ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"))
@@ -50,6 +61,8 @@ class CliGatewayServer(
             CliServerEndpoint("127.0.0.1", socket.localPort)
         } catch (error: Throwable) {
             running.set(false)
+            runCatching { serverSocket?.close() }
+            serverSocket = null
             throw error
         }
     }
@@ -58,6 +71,7 @@ class CliGatewayServer(
     @Synchronized
     fun startNamedPipe(name: String): CliServerEndpoint {
         val shortName = Companion.normalizePipeName(name)
+        check(!closed.get()) { "CLI server is closed" }
         check(running.compareAndSet(false, true)) { "CLI server is already running" }
         return try {
             val socket = Win32NamedPipeServerSocket("\\\\.\\pipe\\$shortName")
@@ -66,6 +80,8 @@ class CliGatewayServer(
             CliServerEndpoint(shortName, 0, "npipe://$shortName")
         } catch (error: Throwable) {
             running.set(false)
+            runCatching { serverSocket?.close() }
+            serverSocket = null
             throw error
         }
     }
@@ -84,9 +100,13 @@ class CliGatewayServer(
                     runCatching { client.close() }
                     continue
                 }
+                acceptedClients += client
                 try {
                     clients.submit {
-                        try { serve(client) } finally { clientSlots.release() }
+                        try { serve(client) } finally {
+                            acceptedClients -= client
+                            clientSlots.release()
+                        }
                     }
                 } catch (_: RejectedExecutionException) {
                     clientSlots.release()
@@ -229,9 +249,12 @@ class CliGatewayServer(
 
     @Synchronized
     override fun close() {
-        if (!running.compareAndSet(true, false)) return
+        if (!closed.compareAndSet(false, true)) return
+        running.set(false)
         runCatching { serverSocket?.close() }
         serverSocket = null
+        acceptedClients.toList().forEach { runCatching { it.close() } }
+        acceptedClients.clear()
         gateway.close()
         clients.shutdownNow()
         requests.shutdownNow()
