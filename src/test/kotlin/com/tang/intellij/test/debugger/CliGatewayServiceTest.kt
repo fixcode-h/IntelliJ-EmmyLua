@@ -8,6 +8,7 @@ import com.tang.intellij.lua.debugger.cli.CliTargetSummary
 import com.tang.intellij.lua.debugger.cli.CliVmSummary
 import com.tang.intellij.lua.debugger.cli.CliResponse
 import com.tang.intellij.lua.debugger.cli.AuthorizationService
+import com.tang.intellij.lua.debugger.cli.*
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -97,6 +98,74 @@ class CliGatewayServiceTest {
             release.countDown()
             pool.shutdownNow()
             gateway.close()
+        }
+    }
+
+    @Test
+    fun `client and request separators cannot collide in cache keys`() {
+        val gateway = CliGatewayService(provider)
+        gateway.use {
+            fun request(client: String, id: String) = CliRequest(id, "target.status",
+                targetId = "target-1", clientId = client)
+            assertTrue(gateway.handle(request("a|b", "c")).ok)
+            assertTrue(gateway.handle(request("a", "b|c")).ok)
+        }
+    }
+
+    @Test
+    fun `evaluation result is suppressed when grant is revoked during backend execution`() {
+        val authorization = AuthorizationService()
+        authorization.grant("target-1", "client-a")
+        val leases = ControlLeaseManager()
+        val lease = leases.acquire("target-1", "client-a").getOrThrow()
+        val registry = DebugTargetRegistry()
+        val fallback = InMemoryDebugTargetAdapter("target-1", provider().first())
+        registry.register(object : DebugTargetAdapter by fallback {
+            override fun evaluate(request: CliEvaluationRequest): Result<CliCapturedValue> {
+                authorization.revoke("target-1", "client-a")
+                return Result.success(CliCapturedValue(request.expression, true, "string", "secret"))
+            }
+        })
+        CliGatewayService(registry, authorization = authorization, leases = leases).use { gateway ->
+            val response = gateway.handle(CliRequest("eval", CliOperations.EVALUATE, clientId = "client-a",
+                targetId = "target-1", vmId = "vm-1", leaseId = lease.leaseId,
+                arguments = JsonObject().apply {
+                    addProperty("pauseId", 3); addProperty("frameId", "frame-3-0"); addProperty("expression", "secret")
+                }))
+            assertEquals("NOT_AUTHORIZED", response.error?.code)
+            assertEquals(null, response.data)
+        }
+    }
+
+    @Test
+    fun `stream rechecks grant before every event delivery`() {
+        val authorization = AuthorizationService()
+        authorization.grant("target-1", "client-a")
+        val registry = DebugTargetRegistry()
+        registry.register(InMemoryDebugTargetAdapter("target-1", provider().first()))
+        registry.publish("target-1", "first")
+        registry.publish("target-1", "secret")
+        val responses = mutableListOf<CliResponse>()
+        CliGatewayService(registry, authorization = authorization).use { gateway ->
+            gateway.handleStreaming(CliRequest("wait", "wait", clientId = "client-a", targetId = "target-1")) {
+                responses += it
+                if (it.event != null) authorization.revoke("target-1", "client-a")
+            }
+        }
+        assertEquals(2, responses.size)
+        assertEquals("first", responses.first().event)
+        assertEquals("NOT_AUTHORIZED", responses.last().error?.code)
+    }
+
+    @Test
+    fun `released lease response can be replayed without repeating the mutation`() {
+        val leases = ControlLeaseManager()
+        val lease = leases.acquire("target-1", "client-a").getOrThrow()
+        CliGatewayService(provider, leases = leases).use { gateway ->
+            val request = CliRequest("release", "lease.release", clientId = "client-a", targetId = "target-1", leaseId = lease.leaseId)
+            val first = gateway.handle(request)
+            assertTrue(first.ok)
+            assertEquals(first, gateway.handle(request))
         }
     }
 

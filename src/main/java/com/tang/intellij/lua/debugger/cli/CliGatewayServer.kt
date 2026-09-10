@@ -117,7 +117,8 @@ class CliGatewayServer(
     }
 
     private fun serve(socket: Socket) {
-        val waitIds = ConcurrentHashMap.newKeySet<String>()
+        val waitIds = ConcurrentHashMap.newKeySet<Pair<String, String>>()
+        val connectionClosed = AtomicBoolean()
         try {
             socket.use { client ->
                 client.soTimeout = 30_000
@@ -157,29 +158,34 @@ class CliGatewayServer(
                             "too many outstanding requests", true))
                         continue
                     }
-                    if (request.operation == CliOperations.WAIT) waitIds += request.requestId
+                    val waitKey = (request.clientId ?: "local") to request.requestId
+                    if (request.operation == CliOperations.WAIT) waitIds += waitKey
                     try {
                         requests.submit {
                             try {
+                                if (connectionClosed.get()) return@submit
                                 if (request.operation == CliOperations.WAIT) {
-                                    gateway.handleStreaming(request, null) { response -> write(writer, response) }
+                                    gateway.handleStreaming(request, connectionClosed::get) { response -> write(writer, response) }
                                 } else {
                                     write(writer, gateway.handle(request))
                                 }
                             } finally {
-                                if (request.operation == CliOperations.WAIT) waitIds -= request.requestId
+                                if (request.operation == CliOperations.WAIT) waitIds -= waitKey
                                 outstanding.release()
                             }
                         }
                     } catch (_: RejectedExecutionException) {
-                        if (request.operation == CliOperations.WAIT) waitIds -= request.requestId
+                        if (request.operation == CliOperations.WAIT) waitIds -= waitKey
                         outstanding.release()
-                        write(writer, CliJsonLines.error(request.requestId, "SERVER_CLOSED", "CLI server is closed", true))
+                        write(writer, CliJsonLines.error(request.requestId,
+                            if (closed.get()) CliErrorCodes.SERVER_CLOSED else CliErrorCodes.RATE_LIMITED,
+                            "CLI request queue is unavailable", true))
                     }
                 }
             }
         } finally {
-            waitIds.toList().forEach { id -> gateway.cancelWait(id) }
+            connectionClosed.set(true)
+            waitIds.toList().forEach { (clientId, id) -> gateway.cancelWait(id, clientId) }
         }
     }
 

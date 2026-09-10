@@ -67,8 +67,8 @@ class CliGatewayService(
     internal fun journalFor(targetId: String): CliEventJournal? = targetRegistry?.journal(targetId)
 
     /** Cancels one outstanding wait, used when a client connection closes. */
-    internal fun cancelWait(requestId: String): Boolean {
-        val registration = waiters.entries.firstOrNull { it.key.endsWith("|$requestId") }?.value ?: return false
+    internal fun cancelWait(requestId: String, clientId: String = "local"): Boolean {
+        val registration = waiters[requestKey(clientId, requestId)] ?: return false
         registration.cancelled.set(true)
         registration.journal.signalWaiters()
         return true
@@ -94,6 +94,7 @@ class CliGatewayService(
                 "request rate limit exceeded", retryable = true)
         }
         val fingerprint = requestFingerprint(request)
+        var execution: ExecutionRegistration? = null
         if (request.operation != CliOperations.WAIT && request.operation != CliOperations.CANCEL) {
             synchronized(responseCache) {
                 val key = requestKey(request)
@@ -108,16 +109,14 @@ class CliGatewayService(
                     else CliJsonLines.error(request.requestId, "DUPLICATE_REQUEST_ID", "requestId was reused with different content")
                 }
                 if (cached != null) responseCache.remove(key)
+                val registration = ExecutionRegistration(request.targetId, currentClient(request), request.operation)
+                if (executions.putIfAbsent(key, registration) != null) {
+                    return CliJsonLines.error(request.requestId, CliErrorCodes.REQUEST_IN_PROGRESS,
+                        "requestId is already being processed", retryable = true)
+                }
+                execution = registration
             }
         }
-        val execution = if (request.operation != CliOperations.WAIT && request.operation != CliOperations.CANCEL) {
-            val registration = ExecutionRegistration(request.targetId, currentClient(request), request.operation)
-            if (executions.putIfAbsent(requestKey(request), registration) != null) {
-                return CliJsonLines.error(request.requestId, CliErrorCodes.REQUEST_IN_PROGRESS,
-                    "requestId is already being processed", retryable = true)
-            }
-            registration
-        } else null
         val startedNanos = System.nanoTime()
         val response = try {
             if (execution?.cancelled?.get() == true) {
@@ -168,7 +167,20 @@ class CliGatewayService(
         } catch (error: Throwable) {
             val code = stableErrorCode(error.message) ?: CliErrorCodes.INTERNAL_ERROR
             CliJsonLines.error(request.requestId, code, error.message ?: "internal error")
-        } finally {
+        }
+        // Backend evaluation and waits may outlive the user's grant or project
+        // trust. Check again at delivery, including results produced before a
+        // concurrent revocation was observed by the backend.
+        val authorizedResponse = try {
+            if (response.ok) {
+                (request.targetId ?: request.arguments.string("targetId"))?.let {
+                    requireRead(request, it)
+                    requireTrusted(it)
+                }
+            }
+            response
+        } catch (error: CliGatewayException) {
+            CliJsonLines.error(request.requestId, error.code, error.message, error.retryable)
         }
         val elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedNanos)
         val finalResponse = when {
@@ -189,16 +201,21 @@ class CliGatewayService(
                 "request exceeded its deadline",
                 retryable = true
             )
-            else -> response
+            else -> authorizedResponse
         }
         val boundedResponse = limitResponse(finalResponse)
         runCatching { audit(currentClient(request), request.operation, request.targetId, boundedResponse.ok) }
         if (request.operation != CliOperations.WAIT && request.operation != CliOperations.CANCEL) {
             synchronized(responseCache) {
-                responseCache[requestKey(request)] = CachedResponse(fingerprint, System.currentTimeMillis(), boundedResponse)
+                // Discovery results may contain details from several grants;
+                // re-read them instead of replaying a pre-revocation listing.
+                if (!closed.get() && request.operation != CliOperations.TARGET_LIST &&
+                    request.operation != CliOperations.INSTANCE_LIST) {
+                    responseCache[requestKey(request)] = CachedResponse(fingerprint, System.currentTimeMillis(), boundedResponse)
+                }
+                execution?.let { executions.remove(requestKey(request), it) }
             }
         }
-        if (execution != null) executions.remove(requestKey(request), execution)
         return boundedResponse
     }
 
@@ -236,6 +253,7 @@ class CliGatewayService(
             }
             val targetId = requiredTarget(request)
             requireRead(request, targetId)
+            requireTrusted(targetId)
             val journal = targetRegistry?.journal(targetId)
                 ?: throw CliGatewayException(CliErrorCodes.TARGET_NOT_READY, "event journal is unavailable", true)
         val created = WaitRegistration(targetId, currentClient(request), journal)
@@ -270,6 +288,8 @@ class CliGatewayService(
             }
             val value = page.getOrThrow()
             value.events.forEach { event ->
+                requireRead(request, targetId)
+                requireTrusted(targetId)
                 emit(limitResponse(CliResponse(request.requestId, true, data = gson.toJsonTree(event).asJsonObject,
                     event = event.type, done = false, cursor = event.cursor)))
             }
@@ -516,6 +536,7 @@ class CliGatewayService(
             boundedInt(args.int("maxBytes") ?: 64 * 1024, 1, 64 * 1024, "maxBytes"),
             sourceIdentity,
             args.string("threadId"))).getOrThrowCode()
+        requireLease(request, adapter.targetId)
         return ok(request, gson.toJsonTree(result).asJsonObject)
     }
 
@@ -628,8 +649,10 @@ class CliGatewayService(
             }
             return ok(request, JsonObject().apply { addProperty("cancelled", waitRegistration != null) })
         }
-        // A target-wide cancel is retained for shutdown/admin callers.
-        journal.cancelWaiters()
+        waiters.values.filter { it.targetId == targetId && it.clientId == client }.forEach {
+            it.cancelled.set(true)
+        }
+        journal.signalWaiters()
         executions.values
             .filter { it.targetId == targetId && it.clientId == currentClient(request) }
             .forEach { it.cancelled.set(true) }
@@ -756,7 +779,7 @@ class CliGatewayService(
 
     private fun requestKey(request: CliRequest): String = requestKey(currentClient(request), request.requestId)
 
-    private fun requestKey(clientId: String, requestId: String): String = "$clientId|$requestId"
+    private fun requestKey(clientId: String, requestId: String): String = "${clientId.length}:$clientId$requestId"
 
     private fun validateCachedAccess(request: CliRequest) {
         val targetId = request.targetId ?: request.arguments.string("targetId")
@@ -764,12 +787,11 @@ class CliGatewayService(
             requireRead(request, targetId)
             requireTrusted(targetId)
             if (request.operation in setOf(
-                    CliOperations.STACK, CliOperations.SCOPES, CliOperations.VARIABLES,
                     CliOperations.CONTINUE, CliOperations.PAUSE, CliOperations.STEP_IN,
                     CliOperations.STEP_OVER, CliOperations.STEP_OUT, CliOperations.EVALUATE,
                     CliOperations.PROBE_RUN, CliOperations.PROBE_REMOVE,
                     CliOperations.BREAKPOINT_ADD, CliOperations.BREAKPOINT_REMOVE,
-                    CliOperations.LEASE_HEARTBEAT, CliOperations.LEASE_RELEASE)) {
+                    CliOperations.LEASE_HEARTBEAT)) {
                 requireLease(request, targetId)
             }
         } else if (!trustedProject()) {
