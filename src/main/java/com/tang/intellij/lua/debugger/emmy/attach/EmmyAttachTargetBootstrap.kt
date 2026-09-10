@@ -8,6 +8,7 @@ import com.tang.intellij.lua.debugger.emmy.SocketClientTransporter
 import com.tang.intellij.lua.debugger.emmy.Transporter
 import java.io.File
 import java.security.SecureRandom
+import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.TimeUnit
 
 class EmmyAttachTargetBootstrap(
@@ -97,29 +98,44 @@ class EmmyAttachTargetBootstrap(
         processBuilder.environment()["EMMY_ATTACH_AUTH_TOKEN"] = authToken
         val process = processBuilder.start()
 
-        var bootstrapStatus: AttachBootstrapStatus? = null
-        process.inputStream.bufferedReader().useLines { lines ->
-            lines.forEach { line ->
-                val parsed = runCatching { JsonParser.parseString(line).asJsonObject }.getOrNull()
-                if (parsed?.get("schemaVersion")?.asInt == 1) {
-                    bootstrapStatus = AttachBootstrapStatus.fromJson(parsed)
-                    log("attach 状态: ${bootstrapStatus?.summary()}", DebugLogLevel.DEBUG)
-                } else {
-                    log("attach: $line", DebugLogLevel.DEBUG)
+        val bootstrapStatus = AtomicReference<AttachBootstrapStatus?>(null)
+        val outputReader = Thread {
+            process.inputStream.bufferedReader().useLines { lines ->
+                lines.forEach { line ->
+                    val parsed = runCatching { JsonParser.parseString(line).asJsonObject }.getOrNull()
+                    if (parsed?.get("schemaVersion")?.asInt == 1) {
+                        val status = AttachBootstrapStatus.fromJson(parsed)
+                        bootstrapStatus.set(status)
+                        log("attach 状态: ${status.summary()}", DebugLogLevel.DEBUG)
+                    } else {
+                        log("attach: $line", DebugLogLevel.DEBUG)
+                    }
                 }
             }
+        }.apply { isDaemon = true; start() }
+        val finished = process.waitFor(15, TimeUnit.SECONDS)
+        if (!finished) {
+            process.destroy()
+            if (!process.waitFor(500, TimeUnit.MILLISECONDS)) process.destroyForcibly()
+            process.inputStream.close()
+            outputReader.join(1000)
+            error("附加工具在 15 秒内未退出，已终止（可能卡在注入或继承输出管道）")
         }
-        val exitCode = process.waitFor()
+        outputReader.join(1000)
+        val exitCode = process.exitValue()
         if (exitCode != 0) {
-            val status = bootstrapStatus
+            val status = bootstrapStatus.get()
             error("附加失败，emmy_tool 退出码: $exitCode，状态=${status?.status ?: "unknown"}，错误=${status?.message ?: "未提供"}")
         }
-        val status = checkNotNull(bootstrapStatus) { "附加工具未返回结构化启动状态（无法证明已注入/监听）" }
-        check(status.status == "auth-ready") {
+        val status = checkNotNull(bootstrapStatus.get()) { "附加工具未返回结构化启动状态（无法证明已注入/监听）" }
+        check(status.pid == configuration.pid && status.injected && status.listening &&
+            status.authReady && status.status == "auth-ready") {
             if (status.alreadyAttached) {
                 "目标进程已有 Emmy Agent，当前无法安全重协商认证 token"
             } else {
-                "Emmy Agent 未进入 auth-ready 状态: ${status.status}；injected=${status.injected}, listening=${status.listening}"
+                "Emmy Agent 启动证据不完整: status=${status.status} pid=${status.pid} " +
+                    "expectedPid=${configuration.pid} injected=${status.injected}, " +
+                    "listening=${status.listening}, authReady=${status.authReady}"
             }
         }
     }
