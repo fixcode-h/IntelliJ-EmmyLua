@@ -63,7 +63,25 @@ class EmmyDebugTargetAdapterTest {
         assertTrue(adapter.variablesReference("vm-1", 8, "frame-7", scopes[0].variablesReference).isFailure)
     }
 
-    private fun request() = CliEvaluationRequest("vm-1", 1, "frame-1", "locals.player")
+    @Test
+    fun `production adapter evicts oldest reference and keeps newest readable`() {
+        val value = VariableValue("player", LuaValueType.TSTRING.wireId, "ok",
+            LuaValueType.TSTRING.wireId, "string", 0, null)
+        val backend = FakeBackend(CliCapturedValue("x", true, display = "ok"),
+            PauseSnapshot("vm-1", 7, "thread-1", stacks = listOf(
+                Stack("C:/Game.lua", 10, "main", 0, listOf(value), emptyList(), "frame-7"))))
+        val adapter = EmmyDebugTargetAdapter(backend)
+        val first = adapter.scopes("vm-1", 7, "frame-7").getOrThrow().single().variablesReference
+        var newest = first
+        repeat(1024) {
+            newest = adapter.scopes("vm-1", 7, "frame-7").getOrThrow().single().variablesReference
+        }
+
+        assertTrue(adapter.variablesReference("vm-1", 7, "frame-7", first).isFailure)
+        assertTrue(adapter.variablesReference("vm-1", 7, "frame-7", newest).isSuccess)
+    }
+
+    private fun request() = CliEvaluationRequest("vm-1", 1, "frame-1", "player")
 
     private class FakeBackend(private val evaluation: CliCapturedValue,
                               private val pauseSnapshot: PauseSnapshot = PauseSnapshot("vm-1", 1, "thread-1", stacks = listOf(

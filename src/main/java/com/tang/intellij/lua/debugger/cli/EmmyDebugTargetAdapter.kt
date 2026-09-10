@@ -7,7 +7,6 @@ import com.tang.intellij.lua.debugger.emmy.Stack
 import com.tang.intellij.lua.debugger.emmy.VariableValue
 import java.util.IdentityHashMap
 import java.util.LinkedHashMap
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
 /** Backend-neutral view implemented by [EmmyDebugProcessBase]. */
@@ -34,7 +33,7 @@ class EmmyDebugTargetAdapter(private val backend: EmmyDebugBackend) : DebugTarge
         val values: List<VariableValue>
     )
 
-    private val references = ConcurrentHashMap<String, ReferenceEntry>()
+    private val references = LinkedHashMap<String, ReferenceEntry>()
     private val referenceSequence = AtomicLong()
 
     override val targetId: String get() = backend.debugTargetId
@@ -92,7 +91,7 @@ class EmmyDebugTargetAdapter(private val backend: EmmyDebugBackend) : DebugTarge
         if (maxDepth !in 0..32 || maxNodes !in 1..100_000 || maxBytes !in 1..16 * 1024 * 1024) {
             return Result.failure(IllegalArgumentException(CliErrorCodes.EVALUATION_LIMIT_EXCEEDED))
         }
-        val entry = references[reference]
+        val entry = synchronized(references) { references[reference] }
             ?: return Result.failure(IllegalStateException(CliErrorCodes.STALE_PAUSE_REFERENCE))
         if (entry.vmId != vmId || entry.pauseId != pauseId || entry.frameId != frameId) {
             return Result.failure(IllegalStateException(CliErrorCodes.STALE_PAUSE_REFERENCE))
@@ -227,9 +226,16 @@ class EmmyDebugTargetAdapter(private val backend: EmmyDebugBackend) : DebugTarge
     private fun rememberReference(vmId: String, pauseId: Long, frameId: String,
                                   values: List<VariableValue>): String {
         val id = "emmy-ref-${referenceSequence.incrementAndGet()}"
-        references[id] = ReferenceEntry(vmId, pauseId, frameId, values.toList())
-        while (references.size > 1024) {
-            references.keys.firstOrNull()?.let(references::remove) ?: break
+        synchronized(references) {
+            references[id] = ReferenceEntry(vmId, pauseId, frameId, values.toList())
+            while (references.size > 1024) {
+                references.entries.iterator().let { iterator ->
+                    if (iterator.hasNext()) {
+                        iterator.next()
+                        iterator.remove()
+                    }
+                }
+            }
         }
         return id
     }
