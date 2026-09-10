@@ -88,6 +88,8 @@ class EmmyProtocolV2Test {
             requestId = "req-1",
             agentSessionId = "agent-1",
             connectionEpoch = 4,
+            contextGeneration = 5,
+            sourceEpoch = 6,
             eventSeq = 12,
             target = EmmyV2Target(
                 vmId = "vm-1",
@@ -107,6 +109,8 @@ class EmmyProtocolV2Test {
         val decoded = EmmyV2Envelope.fromJson(original.toJson())
 
         assertEquals(original, decoded)
+        assertEquals(5L, decoded.contextGeneration)
+        assertEquals(6L, decoded.sourceEpoch)
         assertEquals(12L, decoded.payload?.get("snapshotEventSeq")?.asLong)
         assertEquals("VM_NOT_READY", decoded.error?.code)
         assertTrue(decoded.error?.retryable == true)

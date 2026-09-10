@@ -92,6 +92,7 @@ data class DebugPausedDto(
     val pauseScope: String = "THREAD",
     val consistency: String = "THREAD_ONLY",
     val reason: String? = null,
+    val reasons: List<String> = emptyList(),
     val stacks: List<Stack> = emptyList()
 ) : EmmyV2Dto
 
