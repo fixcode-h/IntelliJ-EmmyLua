@@ -1086,15 +1086,16 @@ emmy-debug probe run `
 - IDEA 中可见，但默认 scope 为 `SESSION`，会话结束自动删除。
 - CLI 只能删除自己 owner 下的 Probe/断点。
 - 同一位置同时命中用户断点和 Probe 时，事件包含全部 reason；即使 Probe 配置 `autoContinue=true`，也不得自动继续用户断点造成的暂停。
-- CLI 中断或超时后删除自己安装的 Probe；只有暂停原因完全由该 Probe 造成时才允许自动继续。
+- `probe run` 是安装命令，正常返回后其短连接关闭不删除 Probe。需要把采集生命周期绑定到等待进程时，使用 `wait --probe-id`：等待取消、超时或异常断开只终止绑定的当前代次并异步清理后端断点；首版保守保留暂停，由 IDEA 用户决定后续控制。普通 `wait` 不拥有 Probe。
+- 成功返回一页事件不终止仍活跃的 Probe；客户端按 cursor 继续读取。已完成 Probe 仍可查询未消费事件；游标过期不触发清理。清理最多尝试三次，最终失败通过事件及状态字段显式上报，不能把采集停止等同于后端断点已删除。
 
 ### 14.5 求值策略
 
 | 策略 | 能力 | AI 默认 |
 | --- | --- | --- |
 | `VALUE_PATH` | locals/upvalues/显式 globals、`.field`、`[literal]`，使用 raw 访问，不调用函数和元方法 | 是 |
-| `RESTRICTED_EXPRESSION` | 字面量、比较、算术和布尔操作；禁止赋值、函数调用、require 和元方法 | 显式选择 |
-| `UNSAFE_LUA_EXPRESSION` | 兼容现有 `return <expr>` 求值，可调用目标代码 | 默认禁止，需 IDEA 明确授权 |
+| `RESTRICTED_EXPRESSION` | 目标扩展：字面量、比较、算术和布尔操作；禁止赋值、函数调用、require 和元方法 | 首版未开放 eval/capture；Probe condition 使用独立的受限比较解析器 |
+| `UNSAFE_LUA_EXPRESSION` | 兼容现有 `return <expr>` 求值，可调用目标代码 | 首版 CLI 拒绝，尚无解锁接口 |
 
 现有 `EvalReq` 行为归类为 `UNSAFE_LUA_EXPRESSION`，不能直接作为 AI 默认接口。
 
@@ -1125,7 +1126,7 @@ emmy-debug probe run `
 
 - 一个 `targetId` 同时只允许一个外部控制 lease。
 - lease 有 `leaseId`、owner、TTL 和 heartbeat。
-- 客户端断开或 TTL 到期时自动释放。
+- lease 绑定逻辑 `clientId`，可以跨多个 CLI 命令连接复用；每条命令正常关闭连接不释放 lease。显式 release、TTL 到期或 IDEA 撤销时释放。`wait --probe-id` 的中断只终止指定 Probe，不释放其他命令正在使用的 lease。
 - IDEA 用户手动操作始终优先；用户可随时 revoke 外部 lease。
 - 只读查询已有 pause snapshot 不需要 lease，但仍需要 target grant。
 
@@ -1164,7 +1165,7 @@ IDEA 记录有界审计日志：
 | IDEA 主动停止 | `session.detach`；Agent disable hooks；确认后关闭 transport |
 | Agent 不支持 v2 | 进入单 VM legacy 模式，禁用 AI Probe |
 | 多 VM legacy Agent | 禁用外部控制，返回能力错误，不猜测目标 |
-| CLI 在 Probe 等待中退出 | 删除该 owner 的临时 Probe，按暂停原因决定是否继续 |
+| CLI 在绑定 Probe 的等待中异常退出 | 只终止该 wait 绑定的 Probe 代次并异步删除断点；不强制继续。普通命令正常退出不删除 Probe |
 | 求值超时 | 中止/标记请求失败，不复用该结果；VM 仍暂停 |
 | eventSeq 出现间隙 | IDEA 重新请求 `vm.snapshot`，再恢复增量消费 |
 | 同一 Target 被多个 CLI 控制 | 后来的客户端返回 `TARGET_BUSY` |

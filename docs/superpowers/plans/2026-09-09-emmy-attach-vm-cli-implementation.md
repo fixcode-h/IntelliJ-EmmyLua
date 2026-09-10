@@ -6,7 +6,7 @@
 
 **架构：** 保留现有 IDEA XDebugger 会话和 Emmy v1 wire id，在其上追加显式的 v2 Envelope、Agent 握手响应、VM snapshot/lifecycle 事件和 opaque VM 身份。原生 Agent 以 `NativeVmRegistry` 管理每个 VM，每个 VM 独占 Debugger 和 HookState；IDEA 以 `VmRegistry` 接收并缓存状态。CLI Gateway、授权租约和 AI Probe 已建立在这些 DTO 之上，通过生产 Adapter 接入已有调试会话。
 
-**进度口径（2026-09-10）：** P0、P1、P2 全部纳入下列十项任务。源码实施与本地自动化验证已覆盖主要链路；真实 IDEA/UE/PIE、受本机环境阻塞的 Native TCP，以及尚未运行的远端跨平台 CI 仍是开放验收项。任务 10 的“全矩阵”保持未完成。逐项证据以 [验证矩阵](../specs/2026-09-09-emmy-validation-matrix.md) 为准，不以文件存在或复选框代替运行记录。
+**进度口径（2026-09-10）：** P0、P1、P2 全部纳入下列十项任务。源码实施与本地自动化验证已覆盖主要链路，包括真实 IDEA 平台会话 → Native Lua 宿主 → CLI Gateway 的条件采集与 VM 生命周期闭环；已安装 IDEA GUI/EasyHook/UE/PIE、受本机环境阻塞的 Native TCP，以及尚未运行的远端跨平台 CI 仍是开放验收项。任务 10 的“全矩阵”保持未完成。逐项证据以 [验证矩阵](../specs/2026-09-09-emmy-validation-matrix.md) 为准，不以文件存在或复选框代替运行记录。
 
 **技术栈：** Kotlin 2.1/JVM 17/21、IntelliJ Platform XDebugger、Gson、C++11、libuv、nlohmann/json、Windows EasyHook、现有 Gradle/CMake 构建链。
 
@@ -16,7 +16,7 @@
 - Agent Ready 与 Lua VM Ready 是两个独立状态；Agent 在线但没有 VM 是合法状态。
 - 所有新 VM 级请求携带 `vmId`；暂停引用携带 `pauseId`，不能使用裸 `lua_State*` 作为公共身份。
 - 一个 Process Agent 首版只接受一个精确 Lua ABI/layout descriptor；混合 ABI 必须显式报错。
-- Host 生命周期 API 在 Lua owner thread 调用；`EndLuaVmClose` 不得访问已关闭的 `lua_State*`。
+- Host 生命周期操作通常由 Lua owner thread 完成。`BeginLuaVmClose` 可由关闭协调线程调用，仅失效请求并唤醒暂停；宿主随后须等待 owner 安全返回，再在 owner 上调用 `lua_close` 与 `EndLuaVmClose`。`EndLuaVmClose` 不得访问已关闭的 `lua_State*`。
 - Hook 停止必须先进入 disabled fast-path，再等待在途回调清空；不能在回调中访问已释放 Transporter。
 - 原生协议线程不直接读取 Lua 栈；Lua API 只在 Lua owner thread 执行。
 - Host API 在 Agent 尚未激活时必须进入进程内 Host Registry；Agent 激活后必须回放/对账已存在的 VM，不能用 `registrationId=0` 丢失 VM。
@@ -519,6 +519,7 @@ CLI 请求与响应的最小形态：
 - AI breakpoint/probe 带 owner 和 `SESSION` scope；只能删除自己的对象。
 - `VALUE_PATH` 只允许 raw locals/upvalues/globals/property path；默认深度 3、节点 100、结果 64 KiB。
 - `probe run` 支持条件、captures、hitLimit、timeout、autoContinue；用户断点暂停优先。
+- `wait --probe-id` 显式绑定一代 Probe；取消/超时/异常断开只清理绑定对象，正常事件分页与普通 CLI 短连接不清理。旧定时器和异步 cleanup 不得误删同 ID 重装；清理失败有界重试并上报。
 - `BreakpointComposer` 按 `(sourceIdentity, vmId, line)` 合并 USER/CLI/SYSTEM 条目，保留多个 owner 的独立 condition/log/hit state；发送给 Agent 的是原子 composite snapshot，不能用同位置替换丢失用户断点。
 - `RestrictedValuePathEvaluator` 只解析标识符、点字段和 literal index，使用 raw API；不调用 `__index`/`__tostring`/函数，不接受赋值、require、yield 或任意 Lua source。
 - 求值预算包含最大节点、字节、表达式长度和 instruction/checkpoint 数；native 不支持硬取消时，CLI 只能撤销响应并返回 `CANCEL_UNSUPPORTED`，不能承诺 500 ms 强制中断。
@@ -529,7 +530,7 @@ CLI 请求与响应的最小形态：
 
   覆盖 TARGET_BUSY、过期 lease、owner 隔离、VM close、stale pause、截断和 autoContinue 冲突；增加 USER+CLI 同位置条件断点合并、IDE 用户抢占、取消不可中断求值、sourceIdentity 不匹配和 rate limit 测试。
 
-当前进度说明：授权/撤销、lease、IDEA 服务入口、生产求值、Probe 生命周期、owner 断点合成和用户抢占已实现并有自动化覆盖。Native VALUE_PATH 使用 raw Lua API；首版拒绝任意 Lua 执行和未声明的求值策略。真实 IDEA + UE 的 CLI Probe 一体化运行仍需实机验收。
+当前进度说明：授权/撤销、lease、IDEA 服务入口、生产求值、Probe 生命周期、owner 断点合成和用户抢占已实现并有自动化覆盖。Native VALUE_PATH 使用 raw Lua API；首版拒绝任意 Lua 执行和未声明的求值策略。真实 IDEA 平台测试已通过生产 Gateway 对 Native Lua 完成条件采集、自动继续和断点清理；已安装 IDEA + UE + CodexCli 的一体化运行仍需实机验收。
 
 - [x] **步骤 2：实现服务**
 
@@ -584,7 +585,7 @@ CLI 请求与响应的最小形态：
 ## 计划自检
 
 - 设计稿中的 Agent/VM/暂停/CLI 四层均有对应任务。
-- 本文是分阶段总路线图：首轮实际执行边界为任务 1-7（设计稿阶段 0-2）；任务 8-10 预先定义后续 CLI/Probe/CI 的接口和验收，但不与首轮基础改造一起切换。
+- 本文是分阶段总路线图：最初先实施任务 1-7（设计稿阶段 0-2），随后按用户继续开发的要求实施任务 8-10。当前范围包含完整 P0/P1/P2，尚未关闭的运行验收仍保持未勾选。
 - 任务 1-7 先建立身份、生命周期、协议、teardown、Host adapter 和 source/context 失效，任务 8-9 才开放外部 CLI 控制，任务 10 固化 CI/运行时验收。
 - 每个任务保留未完成勾选，并给出明确文件、接口、测试命令和中文提交信息；勾选状态只表示实施进度，不把计划文本误当成已完成证据。
 - 子模块提交与父仓库指针提交分离，符合本地提交、不 push 和不合并成单一提交的要求。
@@ -631,6 +632,8 @@ CLI 请求与响应的最小形态：
 
 - 生产 Adapter 的 scope/value 引用改为 opaque token，修复同名变量、特殊 key 和满容量淘汰；保留独立中文提交。
 - Native 已提交多 VM/owner 控制、raw VALUE_PATH、source/Host 接口、hook/注入安全与真实 Lua/pipe harness；父仓库已单独提交子模块指针。
-- JVM 223 项测试通过；Windows 动态 API 四配置各 14 项通过，真实 Lua source 两配置各 17 项通过。这些 Native 统计均显式排除了 TCP。
+- JVM 当前构建范围内 199 项测试通过（55 suites），不累计退出构建的历史 AI/MCP 报告；包含真实 Native/IDE/Gateway 联调。Windows 动态 API 四配置各 14 项通过，真实 Lua 5.4 source 两配置各 17 项通过，Lua 5.1/5.2/5.3 source 各 3 项通过。这些 Native 统计均显式排除了 TCP。
+- 联调验证 source reset、表与特殊 key 的有界读取、Probe 自动清理，以及 VM 独立关闭时 IDEA 收到 CLOSING/CLOSED 且 Agent 保持在线；由实际 Gson 报文发现并修复 Native 可选字段读取断言。
+- 最后审查补齐 `wait --probe-id` 取消/超时/真实 socket 断开清理、同 ID 重装代次隔离、清理失败有界重试和诊断；普通 CLI 短连接不删除 Probe，终态事件仍可读取，CLI 等待失败返回非零退出码。已通过定向测试及包含真实联调的全量回归。
 - 新 Release Native 资源已打包，最终插件 ZIP 的八个资源 SHA-256 与输入完全一致；Plugin Verifier 判定 Compatible。
 - 仍未关闭：任务 3 的 Native TCP 验证、任务 10 的实机/跨平台全矩阵。TCP 独立复验失败 2/2；没有修改本机安全策略，没有 push，没有用 skip 或局部通过替代整体验收。
