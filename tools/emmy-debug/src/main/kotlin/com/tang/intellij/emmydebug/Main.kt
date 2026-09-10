@@ -233,11 +233,11 @@ fun main(rawArgs: Array<String>) {
 fun runCli(rawArgs: Array<String>): Int {
     val parsed = CliArgs.parse(rawArgs)
     val command = parsed.positionals.firstOrNull()?.lowercase()
-        ?: throw IllegalArgumentException(usage())
     if (parsed.has("help") || command == "help") {
         System.err.println(usage())
         return 0
     }
+    requireNotNull(command) { usage() }
     if (command == "instance") {
         require(parsed.positionals.size == 1 || parsed.positionals[1].equals("list", true)) {
             "instance requires list"
