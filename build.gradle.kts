@@ -19,6 +19,8 @@ plugins {
     id("org.jetbrains.kotlin.jvm").version("2.1.20")
 }
 
+apply(from = "gradle/emmy-native-resources.gradle.kts")
+
 data class BuildData(
     val ideaSDKShortVersion: String,
     // https://www.jetbrains.com/intellij-repository/releases
@@ -89,7 +91,13 @@ project(":") {
     dependencies {
         implementation(fileTree(baseDir = "libs") { include("*.jar") })
         implementation("com.google.code.gson:gson:2.11.0")
-        implementation("org.scala-sbt.ipcsocket:ipcsocket:1.3.0")
+        // IntelliJ's platform classloader provides the JNA classes and its
+        // matching native library. Do not let ipcsocket's old JNA 5.5.0
+        // transitive dependency create a Java/native version mismatch.
+        implementation("org.scala-sbt.ipcsocket:ipcsocket:1.3.0") {
+            exclude(group = "net.java.dev.jna", module = "jna")
+            exclude(group = "net.java.dev.jna", module = "jna-platform")
+        }
         implementation("org.eclipse.mylyn.github:org.eclipse.egit.github.core:2.1.5")
         implementation(project(":modules:debugger-core"))
         implementation(project(":modules:debugger-transport"))
@@ -148,24 +156,6 @@ project(":") {
     }
 
     tasks {
-        val ipcSocketNative = layout.buildDirectory.dir("ipcsocket-native")
-        val prepareIpcSocketNative = register<Sync>("prepareIpcSocketNative") {
-            val jnaJar = configurations.testRuntimeClasspath.get()
-                .first { it.name == "jna-5.5.0.jar" }
-            from(zipTree(jnaJar)) {
-                include("com/sun/jna/win32-x86-64/jnidispatch.dll")
-                eachFile { path = name }
-            }
-            into(ipcSocketNative)
-        }
-        withType<Test>().configureEach {
-            // IntelliJ bundles a different JNA native version; ipcsocket
-            // must load its matching bundled provider for named pipes.
-            jvmArgs("-Djna.nosys=true")
-            dependsOn(prepareIpcSocketNative)
-            jvmArgs("-Djna.boot.library.path=${ipcSocketNative.get().asFile.absolutePath}")
-        }
-
         buildPlugin {
         }
 

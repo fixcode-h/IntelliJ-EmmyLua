@@ -1,5 +1,6 @@
 import org.gradle.api.GradleException
 import org.gradle.language.jvm.tasks.ProcessResources
+import org.gradle.api.tasks.SourceSetContainer
 
 val emmyNativeDir = providers.gradleProperty("emmyNativeDir")
     .map { file(it).toPath().toAbsolutePath().normalize() }
@@ -34,11 +35,17 @@ val validateEmmyNativeResources = tasks.register("validateEmmyNativeResources") 
     }
 }
 
+if (emmyNativeDir.isPresent) {
+    extensions.getByType<SourceSetContainer>().named("main") {
+        resources.exclude("debugger/emmy/windows/**")
+    }
+}
+
 tasks.named<ProcessResources>("processResources") {
     dependsOn(validateEmmyNativeResources)
     if (emmyNativeDir.isPresent) {
         from(emmyNativeDir) {
-            include("x86/**", "x64/**")
+            include(listOf("x86", "x64").flatMap { arch -> emmyNativeFiles.map { "$arch/$it" } })
             into("debugger/emmy/windows")
         }
     }
