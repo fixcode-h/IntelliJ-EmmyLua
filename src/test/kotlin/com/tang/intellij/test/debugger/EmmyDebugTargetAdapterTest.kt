@@ -35,23 +35,32 @@ class EmmyDebugTargetAdapterTest {
     }
 
     @Test
-    fun `production adapter expands scoped references and rejects stale frame`() {
-        val child = VariableValue("name", LuaValueType.TSTRING.wireId, "player", 4, "string", 0, null)
-        val table = VariableValue("player", LuaValueType.TSTRING.wireId, "table", 5, "table", 0, listOf(child))
+    fun `production adapter keeps scoped references bound and rejects stale frame`() {
+        val dottedChild = VariableValue("a.b", LuaValueType.TSTRING.wireId, "dotted", LuaValueType.TSTRING.wireId, "string", 0, null)
+        val numericChild = VariableValue("7", LuaValueType.TNUMBER.wireId, "numeric", LuaValueType.TSTRING.wireId, "string", 0, null)
+        val local = VariableValue("same", LuaValueType.TSTRING.wireId, "local", LuaValueType.TTABLE.wireId, "table", 0,
+            listOf(dottedChild, numericChild))
+        val upvalue = VariableValue("same", LuaValueType.TSTRING.wireId, "upvalue", LuaValueType.TSTRING.wireId, "string", 0, null)
+        val global = VariableValue("same", LuaValueType.TSTRING.wireId, "global", LuaValueType.TSTRING.wireId, "string", 0, null)
         val backend = FakeBackend(CliCapturedValue("x", true, display = "ok"),
             PauseSnapshot("vm-1", 7, "thread-1", stacks = listOf(
-                Stack("C:/Game.lua", 10, "main", 0, listOf(table), emptyList(), "frame-7"))))
+                Stack("C:/Game.lua", 10, "main", 0, listOf(local), listOf(upvalue), "frame-7", listOf(global)))))
         val adapter = EmmyDebugTargetAdapter(backend)
 
-        val scope = adapter.scopes("vm-1", 7, "frame-7").getOrThrow().single()
-        val expanded = adapter.variablesReference("vm-1", 7, "frame-7", scope.variablesReference)
-        assertTrue(expanded.isSuccess)
-        val player = expanded.getOrThrow().variables.single()
-        assertEquals("player", player.name)
-        assertNotNull(player.variablesReference)
-        val childExpanded = adapter.variablesReference("vm-1", 7, "frame-7", player.variablesReference!!)
-        assertEquals("name", childExpanded.getOrThrow().variables.single().name)
-        assertTrue(adapter.variablesReference("vm-1", 8, "frame-7", scope.variablesReference).isFailure)
+        val scopes = adapter.scopes("vm-1", 7, "frame-7").getOrThrow()
+        assertEquals(listOf("locals", "upvalues", "globals"), scopes.map { it.name })
+        assertEquals("local", adapter.variablesReference("vm-1", 7, "frame-7", scopes[0].variablesReference)
+            .getOrThrow().variables.single().display)
+        assertEquals("upvalue", adapter.variablesReference("vm-1", 7, "frame-7", scopes[1].variablesReference)
+            .getOrThrow().variables.single().display)
+        assertEquals("global", adapter.variablesReference("vm-1", 7, "frame-7", scopes[2].variablesReference)
+            .getOrThrow().variables.single().display)
+        val localSnapshot = adapter.variablesReference("vm-1", 7, "frame-7", scopes[0].variablesReference)
+            .getOrThrow().variables.single()
+        assertNotNull(localSnapshot.variablesReference)
+        val childExpanded = adapter.variablesReference("vm-1", 7, "frame-7", localSnapshot.variablesReference!!)
+        assertEquals(listOf("a.b", "[7]"), childExpanded.getOrThrow().variables.map { it.name })
+        assertTrue(adapter.variablesReference("vm-1", 8, "frame-7", scopes[0].variablesReference).isFailure)
     }
 
     private fun request() = CliEvaluationRequest("vm-1", 1, "frame-1", "locals.player")

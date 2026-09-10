@@ -38,7 +38,9 @@ emmy-debug variables --target <target-id> --vm <vm-id> --pause <pause-id> --fram
 
 变量展开必须提供有界的 `--max-depth`、`--max-nodes` 和 `--max-bytes`。`--json` 适合脚本和 AI 工具消费。
 
-`--path` 是 `VALUE_PATH`：它只能引用当前暂停帧快照中实际存在的 raw `locals`、`upvalues`、`globals` 名称，以及其 children 路径；不会执行 Lua 表达式、函数或元方法。`scopes` 返回的 `variablesReference` 可直接用于后续变量展开，暂停、恢复、reset 或切换 frame 后必须重新查询。
+`--path` 是 `VALUE_PATH`：它只能引用当前暂停帧快照中实际存在的 raw `locals`、`upvalues`、`globals` 名称，以及其 children 路径；不会执行 Lua 表达式、函数或元方法。`scopes` 返回的 `variablesReference` 是绑定当前 VM/pause/frame 的 opaque token，只能通过 `variablesReference` 请求展开，不能当作 `--path` 重新解析；暂停、恢复、reset 或切换 frame 后必须重新查询。
+
+`--path locals`、`--path upvalues` 和 `--path globals` 是 scope 选择器；scope 返回的 opaque token 不受同名变量或特殊 key 影响。
 
 VM 和 source 相关响应中的 `sourceIdentity` 表示宿主运行时注册的元数据：`chunkName`、规范化后的 `canonicalPath`、`sourceEpoch` 以及可用时的运行时字节 SHA-256。CLI/IDEA 不会用本地磁盘文件重新计算 hash 来替代宿主注册值。
 
