@@ -19,6 +19,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -26,3 +28,8 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - name: Test, build and verify
         run: ./gradlew --no-daemon -DIDEA_VER=${{ matrix.idea-version }} test buildPlugin verifyPlugin
+      - name: Verify clean checkout and submodules
+        shell: bash
+        run: |
+          git diff --exit-code --submodule=diff
+          git submodule foreach --recursive 'git diff --exit-code'
