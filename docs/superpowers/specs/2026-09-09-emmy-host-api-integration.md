@@ -32,6 +32,30 @@ OnLuaStateDestroyed / FLuaEnv 析构入口
 - 不在 `DllMain`、Lua allocator 回调或 loader lock 中调用 Host API。
 - 宿主的 Lua ABI/layout descriptor 应在 Agent 初始化后对账；当前 UnLua 使用定制 `lua-5.4.3`、`LUA_IDSIZE=256` 和 SP hook 扩展，不能按通用 Lua 5.4 处理。
 
+## SourceIdentity 注册
+
+宿主在 `Emmy_RegisterLuaVm` 成功并取得 `registrationId` 后，按实际加载的脚本字节注册 source identity：
+
+```cpp
+typedef struct EmmyLuaSourceIdentity {
+    uint32_t size;
+    uint32_t version;
+    uint64_t sourceEpoch;
+    const char* chunkName;
+    const char* canonicalPath;
+    const char* sha256;
+} EmmyLuaSourceIdentity;
+
+int Emmy_RegisterLuaSource(uint64_t registrationId,
+                           const EmmyLuaSourceIdentity* source);
+```
+
+- `sha256` 必须是宿主实际交给 Lua loader 的字节内容的 SHA-256 十六进制值，不是 IDEA 磁盘文件的 hash；Agent 只保存元数据，不读取 Lua 或 IDEA 磁盘。
+- 注册前必须确认 `registrationId` 仍对应活动 VM，且 `sourceEpoch` 等于该 VM 当前 epoch。`chunkName`、`canonicalPath` 和 hash 由 Agent 复制并做长度、路径和 hash 格式校验。
+- 同一 VM、同一 epoch、同一 chunk 已登记后，不允许用不同 hash 覆盖。若脚本内容或加载上下文发生变化，先调用 `Emmy_ResetLuaVmContext` 产生新 epoch，再注册新 identity。
+- 没有可提供的 host hash 时，只能使用 `raw chunk path + sourceEpoch` 做精确匹配；不得用 fuzzy 匹配，也不得把 IDEA 磁盘 hash 冒充运行时 hash。未验证的 source identity 不得标记为 verified。
+- `sourceEpoch` 在 VM 初始注册时从 1 开始；PIE/HotReload reset 后使用 Agent 返回的新 epoch，旧 epoch 的 source identity 不再用于解析。
+
 ## HotReload 与 PIE reset
 
 HotReload 或 PIE reset 不等同于 VM close：

@@ -38,6 +38,10 @@ emmy-debug variables --target <target-id> --vm <vm-id> --pause <pause-id> --fram
 
 变量展开必须提供有界的 `--max-depth`、`--max-nodes` 和 `--max-bytes`。`--json` 适合脚本和 AI 工具消费。
 
+VM 和 source 相关响应中的 `sourceIdentity` 表示宿主运行时注册的元数据：`chunkName`、规范化后的 `canonicalPath`、`sourceEpoch` 以及可用时的运行时字节 SHA-256。CLI/IDEA 不会用本地磁盘文件重新计算 hash 来替代宿主注册值。
+
+宿主未提供 hash 时，只能按当前 VM 的 raw chunk path 与 `sourceEpoch` 精确匹配；此类 source identity 不应视为内容已验证。PIE/HotReload 发生 reset 后，旧 epoch 的 source identity、暂停帧和断点引用均应重新查询。
+
 ## 受限求值
 
 CLI 只允许暂停帧快照上的 `VALUE_PATH`，不执行任意 Lua 表达式、函数或元方法。legacy Agent 不开放 AI 求值和 Probe。
