@@ -148,10 +148,22 @@ project(":") {
     }
 
     tasks {
+        val ipcSocketNative = layout.buildDirectory.dir("ipcsocket-native")
+        val prepareIpcSocketNative = register<Sync>("prepareIpcSocketNative") {
+            val jnaJar = configurations.testRuntimeClasspath.get()
+                .first { it.name == "jna-5.5.0.jar" }
+            from(zipTree(jnaJar)) {
+                include("com/sun/jna/win32-x86-64/jnidispatch.dll")
+                eachFile { path = name }
+            }
+            into(ipcSocketNative)
+        }
         withType<Test>().configureEach {
             // IntelliJ bundles a different JNA native version; ipcsocket
             // must load its matching bundled provider for named pipes.
             jvmArgs("-Djna.nosys=true")
+            dependsOn(prepareIpcSocketNative)
+            jvmArgs("-Djna.boot.library.path=${ipcSocketNative.get().asFile.absolutePath}")
         }
 
         buildPlugin {

@@ -8,6 +8,8 @@ import org.scalasbt.ipcsocket.Win32NamedPipeSocket
 import java.net.Socket
 import java.net.ConnectException
 import java.nio.charset.StandardCharsets
+import java.io.File
+import java.io.IOException
 import org.junit.Assume.assumeNoException
 import org.junit.Assume.assumeTrue
 import org.junit.Assert.assertEquals
@@ -20,6 +22,7 @@ class CliGatewayServerTest {
     fun `windows named pipe serves authenticated JSONL requests`() {
         assumeTrue("named pipe test requires Windows", System.getProperty("os.name").startsWith("Windows", true))
         System.setProperty("jna.nosys", "true")
+        System.setProperty("jna.boot.library.path", File("build/ipcsocket-native").absoluteFile.path)
         val gateway = CliGatewayService(CliTargetProvider {
             listOf(CliTargetSummary("target-pipe", "Demo", "RUNNING", true))
         })
@@ -31,7 +34,8 @@ class CliGatewayServerTest {
             throw AssertionError("Windows named pipe provider unavailable", error)
         }
         try {
-            Win32NamedPipeSocket("\\\\.\\pipe\\${endpoint.host}").use { socket ->
+            val socket = connectNamedPipeWithRetry(endpoint.host)
+            socket.use { socket ->
                 val reader = socket.getInputStream().bufferedReader(StandardCharsets.UTF_8)
                 val writer = socket.getOutputStream().bufferedWriter(StandardCharsets.UTF_8)
                 writer.write("{\"token\":\"pipe-token\"}\n")
@@ -44,6 +48,19 @@ class CliGatewayServerTest {
         } finally {
             server.close()
         }
+    }
+
+    private fun connectNamedPipeWithRetry(name: String): Win32NamedPipeSocket {
+        var last: IOException? = null
+        repeat(20) {
+            try {
+                return Win32NamedPipeSocket("\\\\.\\pipe\\$name")
+            } catch (error: IOException) {
+                last = error
+                Thread.sleep(50)
+            }
+        }
+        throw last ?: IOException("named pipe connection failed")
     }
 
     @Test

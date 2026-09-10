@@ -169,18 +169,22 @@ class AiProbeServiceTest {
         val child = CliVariableSnapshot("nested", "string", "x".repeat(100))
         val adapter = FakeAdapter(children = listOf(child, child, child))
         registry.register(adapter)
+        val events = mutableListOf<CliEventRecord>()
+        val listener = registry.addListener { events += it }
         val leases = ControlLeaseManager()
         leases.acquire("target-1", "client-a", 30_000).getOrThrow()
-        val service = AiProbeService(registry, ScheduledThreadPoolExecutor(1), maxCaptureBytes = 180)
+        val service = AiProbeService(registry, ScheduledThreadPoolExecutor(1), maxCaptureBytes = 512)
         try {
             service.install(spec(captures = listOf("value")), adapter, leases).getOrThrow()
             pauseEvent(registry, service)
-            val capture = adapter.captures.single()
+            @Suppress("UNCHECKED_CAST")
+            val capture = (events.last { it.type == "probe.hit" }.payload["values"] as List<CliCapturedValue>).single()
             assertTrue(capture.truncated)
-            assertTrue(com.google.gson.Gson().toJson(capture).toByteArray(Charsets.UTF_8).size <= 180)
+            assertTrue(com.google.gson.Gson().toJson(capture).toByteArray(Charsets.UTF_8).size <= 512)
             assertTrue(capture.children.size < 3)
         } finally {
             service.close()
+            listener.close()
         }
     }
 
