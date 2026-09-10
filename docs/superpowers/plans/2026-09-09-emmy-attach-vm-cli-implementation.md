@@ -1,10 +1,12 @@
 # Emmy Attach VM 与 CLI 调试实施计划
 
-> **For agentic workers:** 本计划按任务逐项执行；每个任务完成独立测试并创建本地中文提交。当前仓库没有可用的 `executing-plans` skill，因此由当前会话按本计划内联执行，不使用远端提交。
+> 按任务实施、审查和验证，创建独立的本地中文提交，不推送远端。本文所在目录沿用历史路径，当前实施不使用 Superpowers 工作流。
 
 **目标：** 将 Emmy Attach 从隐式单 VM 调试改造成具备明确 Agent/VM 生命周期、VM-scoped 调试路由和可供后续 `emmy-debug` CLI 使用的稳定基础契约。
 
-**架构：** 保留现有 IDEA XDebugger 会话和 Emmy v1 wire id，在其上追加显式的 v2 Envelope、Agent 握手响应、VM snapshot/lifecycle 事件和 opaque VM 身份。原生 Agent 以 `NativeVmRegistry` 管理每个 VM，每个 VM 独占 Debugger 和 HookState；IDEA 以 `VmRegistry` 接收并缓存状态。CLI Gateway、授权租约和 AI Probe 建立在这些 DTO 之上，放在后续任务中。
+**架构：** 保留现有 IDEA XDebugger 会话和 Emmy v1 wire id，在其上追加显式的 v2 Envelope、Agent 握手响应、VM snapshot/lifecycle 事件和 opaque VM 身份。原生 Agent 以 `NativeVmRegistry` 管理每个 VM，每个 VM 独占 Debugger 和 HookState；IDEA 以 `VmRegistry` 接收并缓存状态。CLI Gateway、授权租约和 AI Probe 已建立在这些 DTO 之上，通过生产 Adapter 接入已有调试会话。
+
+**进度口径（2026-09-10）：** P0、P1、P2 全部纳入下列十项任务。源码实施与本地自动化验证已覆盖主要链路；真实 IDEA/UE/PIE、受本机环境阻塞的 Native TCP，以及尚未运行的远端跨平台 CI 仍是开放验收项。任务 10 的“全矩阵”保持未完成。逐项证据以 [验证矩阵](../specs/2026-09-09-emmy-validation-matrix.md) 为准，不以文件存在或复选框代替运行记录。
 
 **技术栈：** Kotlin 2.1/JVM 17/21、IntelliJ Platform XDebugger、Gson、C++11、libuv、nlohmann/json、Windows EasyHook、现有 Gradle/CMake 构建链。
 
@@ -225,11 +227,11 @@ bool ReconcileExistingVms(NativeVmRegistry& destination);
 
   在接收缓冲区追加常量上限；超过上限关闭当前连接并调用一次 OnDisconnect；解析异常不让 transport event loop 崩溃。为每条请求校验 requestId 长度、deadline、epoch 和幂等 hash；实现 cancel 请求的明确错误响应。
 
-- [ ] **步骤 5：实现 Native Agent 认证和重连 epoch**
+- [x] **步骤 5：实现 Native Agent 认证和重连 epoch**
 
   `TransportAuth` 比较一次性高熵随机 token（首版不引入新的加密库）；认证失败延迟关闭连接且不调用 `ProtoHandler`。重连保留 agentSessionId、递增 connectionEpoch，并在 Ready 后按 snapshotEventSeq 重放。
 
-- [ ] **步骤 6：修正 Attach bootstrap 状态**
+- [x] **步骤 6：修正 Attach bootstrap 状态**
 
   `EmmyAttachTargetBootstrap` 生成一次性 token，传给 `emmy_tool attach`；`emmy_tool` 通过受保护共享内存/参数传给注入 Agent，输出 machine-readable status；IDEA 轮询 endpoint/handshake，使用指数退避和明确总超时，失败时记录 rollback 状态。
 
@@ -237,11 +239,11 @@ bool ReconcileExistingVms(NativeVmRegistry& destination);
 
   运行：`./gradlew.bat :modules:debugger-emmy-protocol:test`；构建 native Debug target；使用本地 socket harness 完成 InitReq -> InitRsp -> ReadyReq -> ReadyRsp -> vm.snapshot 的回环。
 
-- [ ] **步骤 8：本地提交**
+- [x] **步骤 8：本地提交**
 
   子模块提交：`git commit -m "协议：补齐 Emmy 握手响应与 VM 生命周期事件"`。父仓库提交：`git commit -m "同步：更新 Emmy 协议事件子模块"`。
 
-当前进度说明：任务 3 已完成 wire id、ProtocolSession、InitRsp/ReadyRsp、vm.snapshot、vm.lifecycle、Host/Hook fallback discovery、IDEA v2 分发、接收/发送 frame 上限、解析错误隔离、可选 token 认证、失败断开、有限重连以及 Attach bootstrap machine-readable 状态；认证 token 的重复附加重协商、完整旧请求 epoch 淘汰、指数退避终态和 rollback 证据仍未完成，不能将任务 3 视为整体完成。
+当前进度说明：认证、重连 epoch、幂等/取消、bootstrap 状态和有界退避已实现。真实 Native 命名管道 harness 已覆盖未认证拒绝、Init/Ready/snapshot、断点/求值/继续、重复请求和重连旧 epoch 拒绝；TCP 同链路仍受本机连接阻塞影响，真实进程重复注入和 IDEA rollback 尚需实机验收，因此本任务的完整运行验证保留开放。
 
 ### 任务 4：per-VM Debugger、HookState 与控制路由
 
@@ -290,23 +292,23 @@ RouteResult Evaluate(uint64_t vmId, uint64_t pauseId, uint64_t frameId, const Ev
 
   Manager 通过 NativeVmRegistry 查找 vmId；找不到返回结构化 `VM_NOT_FOUND`；legacy 请求仅在唯一活动 VM 时转发，否则 `AMBIGUOUS_VM`。
 
-- [ ] **步骤 4：绑定暂停代次**
+- [x] **步骤 4：绑定暂停代次**
 
   Debugger 每次 HandleBreak 递增 pauseId，并记录命中 thread 和 `PauseScope::Thread`；continue/step/close 先清空活动 pause；迟到 Eval 依据 vmId+pauseId+threadId 丢弃。只有未来实现所有 Lua owner thread 的安全屏障后才能声明 `PauseScope::Vm`。
 
-- [ ] **步骤 5：增加并发/一致性回归**
+- [x] **步骤 5：增加并发/一致性回归**
 
   用两个 VM、同一 VM 两个 coroutine 和交错命中顺序验证：一个 thread 暂停时另一个 thread 仍可运行；CLI/IDE 返回 `consistency=THREAD_ONLY`，不会返回全 VM 一致性承诺。
 
-- [ ] **步骤 6：构建与回归**
+- [x] **步骤 6：构建与回归**
 
   运行 native Debug build 和原有 IDEA `:test`；使用 Lua 5.4 harness 验证两个 VM 的断点/求值路由。
 
-- [ ] **步骤 7：本地提交**
+- [x] **步骤 7：本地提交**
 
   子模块：`git commit -m "调试器：隔离每个 Lua VM 的状态与控制路由"`；父仓库：`git commit -m "同步：更新 per-VM 调试器子模块"`。
 
-当前进度说明：任务 4 已完成 per-VM HookState、opaque vmId 绑定、显式 Action/Eval 路由入口、BreakNotify 身份和 pauseId 校验基础；完整 v2 Eval 响应关联、线程级暂停一致性和并发回归仍未完成。
+当前进度说明：per-VM HookState、完整 v2 控制/求值响应、VM/thread/pause/frame/context/source 绑定和 owner thread 控制已实现。resumed 在 Lua owner 实际执行动作后发布；真实 Lua harness 覆盖双 VM、coroutine 单步隔离、reset 和暂停中关闭；暂停语义仍为 THREAD，不承诺 VM 全局一致性。
 
 ### 任务 5：安全 teardown、hook chaining 与 ABI 描述
 
@@ -333,7 +335,7 @@ RouteResult Evaluate(uint64_t vmId, uint64_t pauseId, uint64_t frameId, const Ev
 - `HookQuiescence { EnterCallback(), LeaveCallback(), DisableAndWait(deadline), InFlightCount() }`；模块卸载必须在计数归零后进行。
 - `LuaAbiDescriptor` 必须包含 `LUA_VERSION_NUM`、release/build hash、`sizeof(lua_State)`、关键字段 offset、`LUA_IDSIZE`、SP hook ABI 标记；不匹配时禁用私有布局读取。
 
-- [ ] **步骤 1：写 teardown/ABI 测试**
+- [x] **步骤 1：写 teardown/ABI 测试**
 
   测试 disable 后 callback 不进入 Facade、在途计数归零、重复 disable/unhook 幂等、不同 `LUA_IDSIZE`/layoutHash 被拒绝；增加先由宿主安装 hook、再由 Emmy 安装、再由宿主替换 hook 的 chain 恢复测试。
 
@@ -345,19 +347,19 @@ RouteResult Evaluate(uint64_t vmId, uint64_t pauseId, uint64_t frameId, const Ev
 
   `Attach()`、`OnBreak()`、`SendLog()` 先读取连接快照；Transport 不存在或非 Ready 时只入队/返回错误，不解引用空指针。Transporter 停止前先发布 disabled 标志，再等待 callback quiescence；关闭期间拒绝新的 Lua owner task。
 
-- [ ] **步骤 4：加入 ABI fingerprint**
+- [x] **步骤 4：加入 ABI fingerprint**
 
   Host 在注册时可传 layout descriptor；自动探测结果与 descriptor 不一致时 VM 进入 ERROR，禁止读取私有结构。为当前 UnLua `lua-5.4.3 + LUA_IDSIZE=256 + sphook` 建立明确 fingerprint fixture；不能把 Emmy 内置 5.4.6 头文件当作通用 ABI。
 
-- [ ] **步骤 5：实现暂停粒度和 Host 值提供器边界**
+- [x] **步骤 5：实现暂停粒度和 Host 值提供器边界**
 
   默认只实现 `THREAD_PAUSE/THREAD_ONLY`；增加 `HostValueProvider` 回调注册和 GameThread 调度接口，任何 UObject/UStruct 读取都经过有效性检查与白名单，失败时返回 `HOST_VALUE_UNAVAILABLE`，不从 native 直接调用 Unreal UObject。
 
-- [ ] **步骤 6：运行验证并提交**
+- [x] **步骤 6：运行验证并提交**
 
   构建 x86/x64 native targets；运行 detach 后完整 Lua 调用、PIE close/recreate 和错误 ABI harness；提交 `安全：增加 Emmy hook teardown 屏障与 ABI 校验`。
 
-当前进度说明：任务 5 已完成 EasyHook handle 持有、Destroy 回收和 Facade 空 Transporter 防护；在途回调 quiescence、hook chain 恢复、ABI fingerprint 和 HostValueProvider 仍未完成。
+当前进度说明：disabled/quiescence/unhook 屏障、失败保留句柄以供重试、宿主 hook chaining、ABI 描述/拒绝与 HostValueProvider 边界均已实现并有 Native 自动化测试。HostValueProvider 的 GameThread 调度、对象有效性和白名单仍由实际 UE 适配器负责；EasyHook 注入后完整 Detach/PIE 周期尚未实机验证。
 
 ### 任务 6：IDEA VmRegistry、握手状态和 legacy 边界
 
@@ -401,19 +403,19 @@ RouteResult Evaluate(uint64_t vmId, uint64_t pauseId, uint64_t frameId, const Ev
 
   VM lifecycle、resume、disconnect、connectionEpoch 和 `contextGeneration/sourceEpoch` 变化时清空 pause/frame/evaluation references；非当前 VM 的暂停进入队列，用户明确选择后才切换 UI。
 
-- [ ] **步骤 5：加入 source identity 和重连状态机**
+- [x] **步骤 5：加入 source identity 和重连状态机**
 
   解析 canonical path、source hash、loader epoch；断线后按固定退避重连，达到上限才终止 Target；重连成功先应用 snapshot，再恢复事件消费，旧 epoch 响应一律丢弃。
 
-- [ ] **步骤 6：运行 IDEA 测试与构建**
+- [x] **步骤 6：运行 IDEA 测试与构建**
 
   运行：`./gradlew.bat :test --tests 'com.tang.intellij.test.debugger.VmRegistryTest' :modules:debugger-emmy-protocol:test`；再运行 `./gradlew.bat test`。
 
-- [ ] **步骤 7：本地提交**
+- [x] **步骤 7：本地提交**
 
   `git add src modules && git commit -m "IDEA：增加 VM 注册表并区分 Agent 与 VM 就绪状态"`
 
-当前进度说明：任务 6 已完成纯 Kotlin VmRegistry、eventSeq/epoch 幂等、gap 检测、legacy VM 记录、v2 消息接入和有界 PauseSnapshotStore 失效；SourceIdentity 已定义但未接入断点匹配，UI 仲裁和完整重连状态机仍未完成。
+当前进度说明：VmRegistry、event gap/epoch 处理、PauseSnapshotStore、source identity、重连状态机与多 VM 暂停 UI 仲裁已接入生产路径，并有 JVM/构建验证。真实 IDEA 多会话与用户交互属于独立验收层，不由 JVM 测试代替。
 
 ### 任务 7：UE/UnLua 宿主适配示例与契约验证
 
@@ -443,15 +445,15 @@ RouteResult Evaluate(uint64_t vmId, uint64_t pauseId, uint64_t frameId, const Ev
 
   说明 Host API 不在 DllMain 调用，不在 lua_close 返回后读取 state，不把临时 userdata-header state 注册为 VM；给出 `OnLuaStateCreated -> Register -> Ready`、`OnLuaStateDestroyed -> BeginClose -> lua_close -> EndClose/Release` 的固定顺序，并单独列出 HotReload/reset 顺序。
 
-- [ ] **步骤 3：写 HostValueProvider 与 ABI fixture**
+- [x] **步骤 3：写 HostValueProvider 与 ABI fixture**
 
   在样例中定义 `DescribeUserdata(vmId, threadId, valueRef, limits)` 和 `DispatchToGameThread(requestId, deadline)`；fixture 覆盖 UObject 已销毁、反射字段拒绝、超时和返回副本，确认不跨线程持有 Unreal 指针。
 
-- [ ] **步骤 4：运行文档/JSON 静态检查并提交**
+- [x] **步骤 4：运行文档/JSON 静态检查并提交**
 
   运行 JSON parse、代码围栏和链接检查；提交 `文档：补充 UE UnLua Host API 接入契约`。
 
-当前进度说明：任务 7 已完成 Host API 生命周期契约、动态导出示例、ABI 字段和 UnLua 接入检查表；HostValueProvider 可执行 fixture、真实 UE/PIE 验证仍未完成。
+当前进度说明：生命周期、动态导出、ABI、source identity、HostValueProvider 的接入契约和可执行 fixture 已提供。该任务提供宿主适配示例，不修改本仓库之外的 UE/UnLua 工程；真实 UE/PIE 接入与验证保持未验证。
 
 ### 任务 8：CLI Gateway 基础（只读）
 
@@ -497,7 +499,7 @@ CLI 请求与响应的最小形态：
 
   运行 CLI protocol 和 IDEA tests；增加 stale descriptor、未信任项目脱敏、NDJSON done/cancel、并发限流和 endpoint 清理测试；提交 `CLI：增加 IDEA 调试会话只读网关基础`。
 
-当前进度说明：任务 8 已完成独立 JSONL DTO、只读 Gateway 核心、loopback IPC listener、descriptor 原子写入/过期清理和基础脱敏测试；Windows named-pipe 优先适配、wait/cancel 流和 IDEA Application 生命周期服务注册仍未完成。当前环境的 JVM loopback socket 被系统策略阻断，server 集成测试会自动跳过，协议/Gateway 单元测试仍可独立验证。
+当前进度说明：JSONL、Windows named pipe、wait/cancel、descriptor/端点清理、限流/脱敏和 Application 生命周期服务均已实现。JNA 已统一为 IntelliJ 平台版本；named-pipe 集成测试正常执行，不以 skip 代替通过。CLI 生产 Adapter 提供真实会话的栈、scope 和变量引用访问。
 
 ### 任务 9：CLI 控制、授权租约与 AI Probe
 
@@ -527,17 +529,17 @@ CLI 请求与响应的最小形态：
 
   覆盖 TARGET_BUSY、过期 lease、owner 隔离、VM close、stale pause、截断和 autoContinue 冲突；增加 USER+CLI 同位置条件断点合并、IDE 用户抢占、取消不可中断求值、sourceIdentity 不匹配和 rate limit 测试。
 
-当前进度说明：任务 9 已完成授权 grant、独占 lease、受限 VALUE_PATH 解析和 owner-aware 断点合成的纯协议层测试；IDEA 服务接入、真实 Lua 值读取、Probe 生命周期和 autoContinue 安全规则仍未完成。
+当前进度说明：授权/撤销、lease、IDEA 服务入口、生产求值、Probe 生命周期、owner 断点合成和用户抢占已实现并有自动化覆盖。Native VALUE_PATH 使用 raw Lua API；首版拒绝任意 Lua 执行和未声明的求值策略。真实 IDEA + UE 的 CLI Probe 一体化运行仍需实机验收。
 
-- [ ] **步骤 2：实现服务**
+- [x] **步骤 2：实现服务**
 
   所有控制请求先校验 token、target grant、lease、vm state、pause reference 和 source identity，再进入 DebugTargetAdapter；实现 lease TTL/heartbeat、每 client/target 限流、Probe cleanup 和审计摘要。
 
-- [ ] **步骤 3：实现受限求值与断点合成**
+- [x] **步骤 3：实现受限求值与断点合成**
 
   先在 Kotlin 侧解析 `VALUE_PATH` AST 并拒绝危险 token；`BreakpointComposer` 生成可回滚的 composite snapshot，记录每个 owner 的贡献和命中原因；只在完整 snapshot ACK 后替换 Agent 端断点。
 
-- [ ] **步骤 4：运行全套验证并提交**
+- [x] **步骤 4：运行全套验证并提交**
 
   运行协议、核心、IDEA、CLI tests；提交 `AI调试：增加授权租约与条件采集 Probe`。
 
@@ -559,15 +561,15 @@ CLI 请求与响应的最小形态：
 - Harness 必须覆盖 Host-before-Agent、Agent-before-Host、双 VM、同 VM 双 coroutine、context reset、暂停中关闭、认证失败、重连 epoch、frame limit 和 detach quiescence。
 - fuzz fixture 必须覆盖畸形 JSON、未知 v2 type、重复 requestId、旧 epoch、超长 payload、非法 VM/pause/frame ID。
 
-- [ ] **步骤 1：写 CI 失败门槛**
+- [x] **步骤 1：写 CI 失败门槛**
 
   先在 workflow 中加入协议和 native harness job；缺少子模块 checkout、构建失败、任一 fixture 失败或未生成测试报告均使 job 失败。
 
-- [ ] **步骤 2：修正 native 构建配置**
+- [x] **步骤 2：修正 native 构建配置**
 
   在 `emmy_debugger/CMakeLists.txt` 使用 `${emmy_SOURCE_DIR}/third-party/libuv-1.46.0/include`；确认 Windows x86/x64 目标都链接相同协议/Registry 源文件，并记录编译器与 Lua layout fingerprint。
 
-- [ ] **步骤 3：实现端到端 harness**
+- [x] **步骤 3：实现端到端 harness**
 
   Harness 通过 Host API 注册 VM，在 Agent 激活后对账；依次驱动 lifecycle、pause、close、reconnect 和 stale reference，输出 machine-readable JSON 结果。
 
@@ -575,7 +577,7 @@ CLI 请求与响应的最小形态：
 
   运行：`./gradlew.bat --no-daemon test buildPlugin verifyPlugin`；运行 native CMake x64/x86 Debug/Release；在可用 UE 环境运行 Editor/PIE smoke。分别记录静态、单元、原生、IDEA、UE、CLI 六级证据。
 
-- [ ] **步骤 5：本地提交**
+- [x] **步骤 5：本地提交**
 
   `git add .github EmmyLuaDebugger docs && git commit -m "验证：增加 Emmy VM 生命周期与 CLI 调试验收矩阵"`
 
@@ -624,3 +626,11 @@ CLI 请求与响应的最小形态：
 | P2-S4 CI/构建/运行矩阵 | 任务 10 | Gradle、CMake x86/x64、Lua/UE/PIE/CLI 六级证据 |
 
 说明：`P0-S*`、`P1-S*`、`P2-S*` 是本轮复核新增的交叉风险编号；原设计稿的 P0/P1/P2 与 F-01 至 F-08 均已逐项映射。受限求值虽然在原稿的 AI 能力段落中出现，本计划将其提升为 P0 安全门槛，未通过时不开放 Probe。
+
+## 2026-09-10 收尾记录
+
+- 生产 Adapter 的 scope/value 引用改为 opaque token，修复同名变量、特殊 key 和满容量淘汰；保留独立中文提交。
+- Native 已提交多 VM/owner 控制、raw VALUE_PATH、source/Host 接口、hook/注入安全与真实 Lua/pipe harness；父仓库已单独提交子模块指针。
+- JVM 223 项测试通过；Windows 动态 API 四配置各 14 项通过，真实 Lua source 两配置各 17 项通过。这些 Native 统计均显式排除了 TCP。
+- 新 Release Native 资源已打包，最终插件 ZIP 的八个资源 SHA-256 与输入完全一致；Plugin Verifier 判定 Compatible。
+- 仍未关闭：任务 3 的 Native TCP 验证、任务 10 的实机/跨平台全矩阵。TCP 独立复验失败 2/2；没有修改本机安全策略，没有 push，没有用 skip 或局部通过替代整体验收。
