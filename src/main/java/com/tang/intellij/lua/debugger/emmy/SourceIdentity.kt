@@ -65,8 +65,11 @@ data class SourceIdentity(
             }
             val body = bodyText.split('/').filter { it.isNotEmpty() && it != "." }
             val parts = ArrayDeque<String>()
+            val absolute = hasDrive && replaced.length > 2 && replaced[2] == '/' ||
+                replaced.startsWith('/')
             body.forEach { part ->
                 if (part == ".." && parts.isNotEmpty() && parts.last() != "..") parts.removeLast()
+                else if (part == ".." && !absolute) parts.addLast(part)
                 else if (part != "..") parts.addLast(part)
             }
             val joined = parts.joinToString("/")
