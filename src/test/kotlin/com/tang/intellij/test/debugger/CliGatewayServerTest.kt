@@ -9,10 +9,24 @@ import java.net.ConnectException
 import java.nio.charset.StandardCharsets
 import org.junit.Assume.assumeNoException
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CliGatewayServerTest {
+    @Test
+    fun `named pipe endpoint accepts canonical and short names`() {
+        assertEquals("emmylua-test", CliGatewayServer.normalizePipeName("emmylua-test"))
+        assertEquals("emmylua.test", CliGatewayServer.normalizePipeName("\\\\.\\pipe\\emmylua.test"))
+    }
+
+    @Test
+    fun `named pipe endpoint rejects paths and unsafe names`() {
+        assertThrows(IllegalArgumentException::class.java) { CliGatewayServer.normalizePipeName("..\\pipe") }
+        assertThrows(IllegalArgumentException::class.java) { CliGatewayServer.normalizePipeName("has space") }
+        assertThrows(IllegalArgumentException::class.java) { CliGatewayServer.normalizePipeName("a".repeat(81)) }
+    }
+
     @Test
     fun `loopback server authenticates and serves JSONL requests`() {
         val gateway = CliGatewayService(CliTargetProvider {

@@ -1,82 +1,219 @@
 package com.tang.intellij.lua.debugger.cli
 
 import com.google.gson.JsonParser
-import java.io.BufferedReader
+import org.scalasbt.ipcsocket.Win32NamedPipeServerSocket
 import java.io.BufferedWriter
+import java.io.BufferedInputStream
+import java.io.InputStream
 import java.io.IOException
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.Semaphore
 import java.util.concurrent.atomic.AtomicBoolean
 
-data class CliServerEndpoint(val host: String, val port: Int)
+data class CliServerEndpoint(
+    val host: String,
+    val port: Int,
+    val endpoint: String = if (port > 0) "tcp://$host:$port" else host
+)
 
-/** Loopback JSONL transport. A future named-pipe adapter can reuse the same Gateway. */
+/** Authenticated JSONL server. TCP is an explicit fallback; named pipe is preferred on Windows. */
 class CliGatewayServer(
     private val gateway: CliGatewayService,
     private val token: String,
-    private val maxClients: Int = 8
+    private val maxClients: Int = 8,
+    private val maxConcurrentRequests: Int = 16
 ) : AutoCloseable {
     private val running = AtomicBoolean()
-    private val clients: ExecutorService = Executors.newCachedThreadPool()
+    private val clients: ExecutorService = Executors.newCachedThreadPool { task ->
+        Thread(task, "EmmyLua-CliClient").apply { isDaemon = true }
+    }
+    private val requests: ExecutorService = Executors.newFixedThreadPool(maxConcurrentRequests.coerceAtLeast(1)) { task ->
+        Thread(task, "EmmyLua-CliRequest").apply { isDaemon = true }
+    }
+    private val clientSlots = Semaphore(maxClients.coerceAtLeast(1))
     private var serverSocket: ServerSocket? = null
 
     @Synchronized
     fun start(): CliServerEndpoint {
         check(running.compareAndSet(false, true)) { "CLI server is already running" }
-        val socket = ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"))
-        serverSocket = socket
+        return try {
+            val socket = ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"))
+            serverSocket = socket
+            acceptLoop(socket)
+            CliServerEndpoint("127.0.0.1", socket.localPort)
+        } catch (error: Throwable) {
+            running.set(false)
+            throw error
+        }
+    }
+
+    /** Starts a Windows named-pipe endpoint. The name must be a pipe name, not a filesystem path. */
+    @Synchronized
+    fun startNamedPipe(name: String): CliServerEndpoint {
+        val shortName = Companion.normalizePipeName(name)
+        check(running.compareAndSet(false, true)) { "CLI server is already running" }
+        return try {
+            val socket = Win32NamedPipeServerSocket("\\\\.\\pipe\\$shortName")
+            serverSocket = socket
+            acceptLoop(socket)
+            CliServerEndpoint(shortName, 0, "npipe://$shortName")
+        } catch (error: Throwable) {
+            running.set(false)
+            throw error
+        }
+    }
+
+    private fun acceptLoop(socket: ServerSocket) {
         clients.submit {
             while (running.get()) {
                 val client = try {
                     socket.accept()
                 } catch (_: IOException) {
                     break
+                } catch (_: Throwable) {
+                    if (running.get()) continue else break
                 }
-                clients.submit { serve(client) }
+                if (!clientSlots.tryAcquire()) {
+                    runCatching { client.close() }
+                    continue
+                }
+                try {
+                    clients.submit {
+                        try { serve(client) } finally { clientSlots.release() }
+                    }
+                } catch (_: RejectedExecutionException) {
+                    clientSlots.release()
+                    runCatching { client.close() }
+                }
             }
         }
-        return CliServerEndpoint("127.0.0.1", socket.localPort)
     }
 
     private fun serve(socket: Socket) {
-        socket.use { client ->
-            client.soTimeout = 30_000
-            val reader = client.getInputStream().bufferedReader(StandardCharsets.UTF_8)
-            val writer = client.getOutputStream().bufferedWriter(StandardCharsets.UTF_8)
-            if (!authenticate(reader, writer)) return
-            while (running.get()) {
-                val line = reader.readLine() ?: return
-                val response = runCatching {
-                    gateway.handle(CliJsonLines.decodeRequest(line))
-                }.getOrElse { error ->
-                    CliJsonLines.error("", "INVALID_REQUEST", error.message ?: "invalid request")
+        val waitIds = ConcurrentHashMap.newKeySet<String>()
+        try {
+            socket.use { client ->
+                client.soTimeout = 30_000
+                val input = BufferedInputStream(client.getInputStream())
+                val writer = client.getOutputStream().bufferedWriter(StandardCharsets.UTF_8)
+                if (!authenticate(input, writer)) return@use
+                // The authentication handshake is bounded; an authenticated
+                // client may keep the connection open while waiting for events.
+                client.soTimeout = 0
+                val outstanding = Semaphore(32)
+                while (running.get()) {
+                    val line = try {
+                        CliJsonLines.readBoundedLine(input)
+                    } catch (error: CliProtocolException) {
+                        write(writer, CliJsonLines.error("", error.code, error.message, error.retryable))
+                        return@use
+                    } catch (_: IOException) { return@use }
+                    if (line == null) return@use
+                    val request = try {
+                        CliJsonLines.decodeRequest(line)
+                    } catch (error: CliProtocolException) {
+                        write(writer, CliJsonLines.error("", error.code, error.message, error.retryable))
+                        continue
+                    } catch (error: Throwable) {
+                        write(writer, CliJsonLines.error("", CliErrorCodes.INVALID_ARGUMENT,
+                            error.message ?: "invalid request"))
+                        continue
+                    }
+                    // Cancellation must be serviced even when all request
+                    // workers are occupied by long-running waits.
+                    if (request.operation == CliOperations.CANCEL) {
+                        write(writer, gateway.handle(request))
+                        continue
+                    }
+                    if (!outstanding.tryAcquire()) {
+                        write(writer, CliJsonLines.error(request.requestId, CliErrorCodes.RATE_LIMITED,
+                            "too many outstanding requests", true))
+                        continue
+                    }
+                    if (request.operation == CliOperations.WAIT) waitIds += request.requestId
+                    try {
+                        requests.submit {
+                            try {
+                                if (request.operation == CliOperations.WAIT) {
+                                    gateway.handleStreaming(request, null) { response -> write(writer, response) }
+                                } else {
+                                    write(writer, gateway.handle(request))
+                                }
+                            } finally {
+                                if (request.operation == CliOperations.WAIT) waitIds -= request.requestId
+                                outstanding.release()
+                            }
+                        }
+                    } catch (_: RejectedExecutionException) {
+                        if (request.operation == CliOperations.WAIT) waitIds -= request.requestId
+                        outstanding.release()
+                        write(writer, CliJsonLines.error(request.requestId, "SERVER_CLOSED", "CLI server is closed", true))
+                    }
                 }
+            }
+        } finally {
+            waitIds.toList().forEach { id -> gateway.cancelWait(id) }
+        }
+    }
+
+    private fun write(writer: BufferedWriter, response: CliResponse) {
+        synchronized(writer) {
+            runCatching {
                 writer.write(CliJsonLines.encode(response))
                 writer.newLine()
                 writer.flush()
+            }.onFailure { error ->
+                if (error is CliProtocolException && error.code == CliErrorCodes.RESPONSE_TOO_LARGE) {
+                    runCatching {
+                        writer.write(CliJsonLines.encode(CliJsonLines.error(
+                            response.requestId,
+                            CliErrorCodes.RESPONSE_TOO_LARGE,
+                            "response exceeds the protocol size limit"
+                        )))
+                        writer.newLine()
+                        writer.flush()
+                    }
+                }
             }
         }
     }
 
-    private fun authenticate(reader: BufferedReader, writer: BufferedWriter): Boolean {
-        val line = reader.readLine() ?: return false
+    private fun authenticate(input: InputStream, writer: BufferedWriter): Boolean {
+        val line = try {
+            CliJsonLines.readBoundedLine(input)
+        } catch (error: CliProtocolException) {
+            writeRaw(writer, "{\"ok\":false,\"error\":{\"code\":\"${error.code}\",\"message\":\"authentication line too large\"}}")
+            return false
+        } catch (_: IOException) {
+            return false
+        } ?: return false
+        if (line.isBlank()) {
+            writeRaw(writer, "{\"ok\":false,\"error\":{\"code\":\"${CliErrorCodes.INVALID_ARGUMENT}\",\"message\":\"authentication line is empty\"}}")
+            return false
+        }
         val supplied = runCatching {
-            JsonParser.parseString(line).asJsonObject.get("token")?.asString
+            val json = JsonParser.parseString(line).asJsonObject
+            json.get("token")?.asString ?: json.get("authorization")?.asString?.removePrefix("Bearer ")
         }.getOrNull()
         val accepted = supplied != null && constantTimeEquals(token, supplied)
-        val response = if (accepted) {
-            "{\"ok\":true,\"authenticated\":true}"
-        } else {
-            "{\"ok\":false,\"error\":{\"code\":\"NOT_AUTHORIZED\",\"message\":\"invalid CLI token\"}}"
-        }
-        writer.write(response)
-        writer.newLine()
-        writer.flush()
+        writeRaw(writer, if (accepted) "{\"ok\":true,\"authenticated\":true}" else
+            "{\"ok\":false,\"error\":{\"code\":\"NOT_AUTHORIZED\",\"message\":\"invalid CLI token\"}}")
         return accepted
+    }
+
+    private fun writeRaw(writer: BufferedWriter, value: String) {
+        synchronized(writer) {
+            writer.write(value)
+            writer.newLine()
+            writer.flush()
+        }
     }
 
     private fun constantTimeEquals(expected: String, actual: String): Boolean {
@@ -95,6 +232,18 @@ class CliGatewayServer(
         if (!running.compareAndSet(true, false)) return
         runCatching { serverSocket?.close() }
         serverSocket = null
+        gateway.close()
         clients.shutdownNow()
+        requests.shutdownNow()
+        runCatching { clients.awaitTermination(2, java.util.concurrent.TimeUnit.SECONDS) }
+        runCatching { requests.awaitTermination(2, java.util.concurrent.TimeUnit.SECONDS) }
+    }
+
+    companion object {
+        internal fun normalizePipeName(name: String): String {
+            val shortName = name.removePrefix("\\\\.\\pipe\\")
+            require(shortName.matches(Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,79}"))) { "invalid pipe name" }
+            return shortName
+        }
     }
 }
