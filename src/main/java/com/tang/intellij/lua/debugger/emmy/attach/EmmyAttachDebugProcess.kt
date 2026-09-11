@@ -21,6 +21,9 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
     override val minimumLogLevel: DebugLogLevel
         get() = configuration.logLevel
 
+    /** Per-profile opt-in shown in the attach settings; still gated by project trust. */
+    override fun configurationAllowsCliAutoGrant(): Boolean = configuration.autoAuthorizeCliClients
+
     override fun createTargetBootstrap(): EmmyTargetBootstrap =
         EmmyAttachTargetBootstrap(configuration, ::log)
 
@@ -29,8 +32,16 @@ class EmmyAttachDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sess
         val state = runCatching { Gson().fromJson(json, AttachedNotify::class.java).state }.getOrNull()
         val stateText = state?.let { " 0x${it.toString(16)}" }.orEmpty()
         log("已附加到 Lua 状态$stateText", DebugLogLevel.RUNTIME)
+        if (isV2Negotiated()) {
+            // v2 carries the authoritative opaque VM id in vm.snapshot. The
+            // legacy native state address is diagnostic only; registering a
+            // legacy-* VM here would make later v2 pauses resolve to a
+            // different identity and be discarded.
+            log("v2 已协商，忽略 legacy AttachedNotify 的 VM 注册，仅保留状态地址诊断", DebugLogLevel.DEBUG)
+            return true
+        }
         state?.let {
-            vmRegistry.legacyAttached(it)
+            vmRegistry.legacyAttached(it, currentConnectionEpoch())
             if (vmRegistry.legacyAttachStatus() == LegacyAttachStatus.AMBIGUOUS) {
                 log("legacy AttachedNotify 已注册，但当前存在多个 VM；为避免误控，不会隐式选择 VM", DebugLogLevel.WARNING)
             }

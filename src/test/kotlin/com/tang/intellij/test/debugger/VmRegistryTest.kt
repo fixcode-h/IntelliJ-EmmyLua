@@ -73,6 +73,42 @@ class VmRegistryTest {
     }
 
     @Test
+    fun `legacy native vm id resolves to the registered legacy record`() {
+        val registry = VmRegistry()
+        val legacy = registry.legacyAttached(0x1234, connectionEpoch = 1)
+
+        // A legacy agent reports `vm-1`; its pause must land on the registered record.
+        assertEquals(legacy.vmId, registry.normalizeLegacyVmId("vm-1"))
+        // The mapping is stable across calls.
+        assertEquals(legacy.vmId, registry.normalizeLegacyVmId("vm-1"))
+        // An id that already names a record is returned unchanged.
+        assertEquals(legacy.vmId, registry.normalizeLegacyVmId(legacy.vmId))
+
+        registry.setPause(registry.normalizeLegacyVmId("vm-1")!!, 7)
+        assertEquals(7L, registry.resolve(legacy.vmId)?.activePauseId)
+        assertNull(registry.resolve("vm-1"))
+    }
+
+    @Test
+    fun `legacy native vm id is never aliased onto unknown or v2 records`() {
+        // Nothing registered yet: the caller keeps the native id.
+        assertNull(VmRegistry().normalizeLegacyVmId("vm-1"))
+
+        // Two legacy records: never guess which one a native id belongs to.
+        val ambiguous = VmRegistry()
+        ambiguous.legacyAttached(0x1234, connectionEpoch = 1)
+        ambiguous.legacyAttached(0x5678, connectionEpoch = 1)
+        assertNull(ambiguous.normalizeLegacyVmId("vm-1"))
+
+        // v2 records are authoritative and must not absorb an older protocol id.
+        val v2 = VmRegistry()
+        val vm = VmDto("vm-9", 1, "PIE", "READY", null, "HOST_API")
+        assertEquals(VmApplyStatus.APPLIED, v2.applySnapshot(VmSnapshotDto(1, listOf(vm)), "agent", 1).status)
+        assertNull(v2.normalizeLegacyVmId("vm-1"))
+        assertEquals("vm-9", v2.normalizeLegacyVmId("vm-9"))
+    }
+
+    @Test
     fun `closed generation cannot be resurrected and newer generation is accepted`() {
         val registry = VmRegistry()
         val vm = VmDto("vm-reused", 1, "PIE", "READY", null, "HOST_API")
@@ -116,5 +152,33 @@ class VmRegistryTest {
                 payload = payload)
         )
         assertEquals(VmApplyStatus.INVALID, result.status)
+    }
+
+    @Test
+    fun `missing v2 snapshot payload reports the message used by attach diagnostics`() {
+        val result = VmRegistry().applyEnvelope(
+            EmmyV2Envelope(kind = "event", type = "vm.snapshot", agentSessionId = "agent", connectionEpoch = 1)
+        )
+        assertEquals(VmApplyStatus.INVALID, result.status)
+        assertEquals("vm.snapshot payload is missing", result.message)
+    }
+
+    @Test
+    fun `v2 handshake discards a pre-handshake legacy attach and re-arms the fence`() {
+        val registry = VmRegistry()
+        // AttachedNotify can beat InitRsp: it registers legacy-* and clears the fence.
+        registry.legacyAttached(0x1234)
+        assertTrue(!registry.isAwaitingSnapshot())
+        assertEquals(1, registry.list().size)
+
+        registry.rearmSnapshotFenceForV2()
+        assertTrue(registry.isAwaitingSnapshot())
+        assertTrue(registry.list().isEmpty())
+
+        // The authoritative snapshot then registers the real VM the pause refers to.
+        val vm = VmDto("vm-1", 1, "PIE", "PAUSED", null, "HOOK_FALLBACK")
+        assertEquals(VmApplyStatus.APPLIED, registry.applySnapshot(VmSnapshotDto(3, listOf(vm)), "agent", 1).status)
+        assertTrue(!registry.isAwaitingSnapshot())
+        assertEquals("vm-1", registry.resolve("vm-1")?.vmId)
     }
 }

@@ -54,6 +54,10 @@ import java.util.UUID
 abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(session), ITransportHandler, EmmyDebugBackend {
     private companion object {
         const val MAX_RECONNECT_ATTEMPTS = 6
+        /** A rejected snapshot response must be retried, but never forever. */
+        const val MAX_SNAPSHOT_RETRY_ATTEMPTS = 4
+        /** First-party CLI shipped with the plugin; used when no allow-list is set. */
+        const val DEFAULT_CLI_AUTO_GRANT_CLIENT = "emmy-debug"
     }
     private val editorsProvider = LuaDebuggerEditorsProvider()
     private val evaluationRequests = RequestBroker(
@@ -72,6 +76,7 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
     private val reconnectScheduled = AtomicBoolean()
     private val v2RequestSequence = AtomicLong()
     private val snapshotRequestOutstanding = AtomicBoolean()
+    private val snapshotRetryAttempt = AtomicInteger()
     private val cliBreakpointRevision = AtomicLong()
     private val wireBreakpointRevision = AtomicLong()
     private val cliBreakpoints = java.util.concurrent.ConcurrentHashMap<String, CliBreakpointSpec>()
@@ -338,6 +343,16 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
                     log("Emmy InitRsp 身份与当前连接不一致", DebugLogLevel.WARNING)
                     return
                 }
+                if (v2Negotiated) {
+                    // v2 identity is now known: drop anything a pre-handshake
+                    // legacy AttachedNotify registered and re-arm the snapshot
+                    // fence so the authoritative vm.snapshot is the only source
+                    // of VM records.
+                    vmRegistry.rearmSnapshotFenceForV2()
+                    awaitingVmSnapshot = vmRegistry.isAwaitingSnapshot()
+                    snapshotRequestOutstanding.set(false)
+                    snapshotRetryAttempt.set(0)
+                }
             }
             MessageCMD.ReadyRsp -> {
                 val obj = parseLegacyObject(cmd, json) ?: return
@@ -361,7 +376,18 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
                 // v2 publishes the complete, epoch-stamped pause; its legacy
                 // companion must not resurrect a pause after reset/resume.
                 if (v2Negotiated) return
-                val data = parseLegacy<BreakNotify>(cmd, json) ?: return
+                val parsed = parseLegacy<BreakNotify>(cmd, json) ?: return
+                // A legacy agent reports its own protocol id (`vm-1`) while the
+                // record is registered as `legacy-<epoch>-<stateAddress>`. Fold
+                // them into one identity so the pause reaches setPause,
+                // pauseSnapshots and the published event consistently.
+                val mappedVmId = parsed.vmId?.let { vmRegistry.normalizeLegacyVmId(it) }
+                val data = if (mappedVmId != null && mappedVmId != parsed.vmId) {
+                    BreakNotify(
+                        parsed.stacks, mappedVmId, parsed.pauseId, parsed.threadId,
+                        parsed.pauseScope, parsed.consistency, parsed.pauseReason, parsed.reasons
+                    )
+                } else parsed
                 val vmId = data.vmId
                 val pauseId = data.pauseId
                 var present = true
@@ -438,11 +464,49 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
         ))
     }
 
+    /** Keep protocol diagnostics useful without flooding IDEA logs. */
+    private fun boundedV2Payload(payload: JsonObject?): String {
+        if (payload == null) return "<none>"
+        val compact = payload.toString().replace(Regex("\\s+"), " ")
+        return if (compact.length <= 2048) compact else compact.take(2048) + "..."
+    }
+
+    private fun snapshotVmSummary(payload: JsonObject?): String {
+        if (payload == null) return "snapshotEventSeq=<none> vms=<none>"
+        val sequence = runCatching { payload.get("snapshotEventSeq")?.asLong }.getOrNull()
+        val vmSummary = runCatching {
+            payload.getAsJsonArray("vms")?.mapNotNull { element ->
+                runCatching {
+                    val vm = element.asJsonObject
+                    val id = vm.get("vmId")?.asString ?: "<missing>"
+                    val generation = vm.get("generation")?.asLong ?: 0L
+                    val state = vm.get("state")?.asString ?: "<missing>"
+                    val context = vm.get("contextGeneration")?.asLong?.toString() ?: "-"
+                    val source = vm.get("sourceEpoch")?.asLong?.toString() ?: "-"
+                    "$id/$generation/$state/context=$context/source=$source"
+                }.getOrNull()
+            }?.joinToString(",") ?: "<none>"
+        }.getOrElse { "<malformed>" }
+        return "snapshotEventSeq=${sequence ?: "<missing>"} vms=$vmSummary"
+    }
+
+    protected fun isV2Negotiated(): Boolean = v2Negotiated
+
+    /**
+     * Connection epoch of the current transport. The attach path passes it to
+     * the legacy VM record so its pause snapshots compare equal.
+     */
+    protected fun currentConnectionEpoch(): Long? = connectionEpoch
+
+    private fun v2EnvelopeContext(envelope: EmmyV2Envelope): String =
+        "requestId=${envelope.requestId ?: "-"} agentSessionId=${envelope.agentSessionId ?: "-"} " +
+            "connectionEpoch=${envelope.connectionEpoch ?: "-"} contextGeneration=${envelope.contextGeneration ?: "-"} " +
+            "sourceEpoch=${envelope.sourceEpoch ?: "-"} targetVm=${envelope.target?.vmId ?: "-"}"
+
     /**
      * v2 lifecycle messages are deliberately handled separately from legacy
-     * BreakNotify/EvalRsp DTOs. VmRegistry ownership is added in the next
-     * phase; this hook keeps the wire contract observable without coupling the
-     * transport to XDebugger objects.
+     * BreakNotify/EvalRsp DTOs. The VM registry is the authority for v2
+     * identity and pause fencing; legacy DTOs remain isolated for compatibility.
      */
     protected open fun handleV2Envelope(json: String): Boolean {
         val envelope = runCatching { EmmyV2Envelope.fromJson(json) }
@@ -454,6 +518,10 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
             "agent.ready" -> {
                 if (!acceptHandshake(envelope)) return true
                 v2Negotiated = true
+                vmRegistry.rearmSnapshotFenceForV2()
+                awaitingVmSnapshot = vmRegistry.isAwaitingSnapshot()
+                snapshotRequestOutstanding.set(false)
+                snapshotRetryAttempt.set(0)
                 agentReady = true
                 markInitialized()
                 if (awaitingVmSnapshot) requestVmSnapshot()
@@ -466,9 +534,10 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
                 val previousVm = lifecyclePayload?.let { vmRegistry.resolve(it.vmId) }
                 val result = vmRegistry.applyEnvelope(envelope)
                 if (envelope.type == "vm.snapshot") {
-                    if (result.status == VmApplyStatus.APPLIED || result.status == VmApplyStatus.DUPLICATE) {
+                    if (result.accepted) {
                         awaitingVmSnapshot = vmRegistry.isAwaitingSnapshot()
                         snapshotRequestOutstanding.set(false)
+                        snapshotRetryAttempt.set(0)
                         if (!awaitingVmSnapshot) {
                             // The reconnect attempt is considered successful
                             // only after the snapshot fence is applied. This
@@ -477,6 +546,11 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
                             reconnectAttempt.set(0)
                             reconnectScheduled.set(false)
                         }
+                    } else if (envelope.requestId != null) {
+                        // A response always terminates our request, success or
+                        // not. Latching the flag here used to drop every later
+                        // snapshot request, leaving the VM unregistered.
+                        retryVmSnapshotAfterRejection(envelope.error?.code ?: result.status.name)
                     }
                 } else if (result.requiresSnapshot) {
                     requestVmSnapshot()
@@ -514,20 +588,63 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
                             ))
                     }
                 }
-                log("Emmy v2 ${envelope.type} received: ${result.status}", DebugLogLevel.DEBUG)
+                if (envelope.type == "vm.snapshot") {
+                    val level = if (result.accepted) DebugLogLevel.DEBUG else DebugLogLevel.WARNING
+                    log(
+                        "Emmy v2 vm.snapshot received: status=${result.status} " +
+                            "message=${result.message ?: "-"} ok=${envelope.ok ?: "-"} " +
+                            "error=${envelope.error?.code ?: "-"} ${v2EnvelopeContext(envelope)} " +
+                            "${snapshotVmSummary(envelope.payload)} payload=${boundedV2Payload(envelope.payload)}",
+                        level
+                    )
+                } else {
+                    val level = if (result.status == VmApplyStatus.APPLIED || result.status == VmApplyStatus.DUPLICATE) {
+                        DebugLogLevel.DEBUG
+                    } else DebugLogLevel.WARNING
+                    log(
+                        "Emmy v2 vm.lifecycle received: status=${result.status} " +
+                            "message=${result.message ?: "-"} ${v2EnvelopeContext(envelope)} " +
+                            "payload=${boundedV2Payload(envelope.payload)}",
+                        level
+                    )
+                }
                 true
             }
             "debug.paused" -> {
-                if (!vmRegistry.acceptsEpoch(envelope.agentSessionId, envelope.connectionEpoch)) return true
+                fun reject(reason: String): Boolean {
+                    log(
+                        "Emmy v2 debug.paused rejected: reason=$reason ${v2EnvelopeContext(envelope)} " +
+                            "registryConnected=${vmRegistry.isConnected()} awaitingSnapshot=${vmRegistry.isAwaitingSnapshot()} " +
+                            "payload=${boundedV2Payload(envelope.payload)}",
+                        DebugLogLevel.WARNING
+                    )
+                    return true
+                }
+                if (!vmRegistry.acceptsEpoch(envelope.agentSessionId, envelope.connectionEpoch)) {
+                    return reject("connection epoch/session mismatch or snapshot fence")
+                }
                 val paused = envelope.payload?.let {
                     runCatching { EmmyJson.gson.fromJson(it, DebugPausedDto::class.java) }.getOrNull()
                 }
                 val vmId = envelope.target?.vmId
-                if (paused != null && vmId != null && vmRegistry.resolve(vmId) != null) {
-                    val vm = vmRegistry.resolve(vmId) ?: return true
-                    if (!vmRegistry.isControlReady(vmId) || paused.pauseId <= 0 ||
-                        envelope.contextGeneration != vm.contextGeneration || envelope.sourceEpoch != vm.sourceEpoch ||
-                        envelope.target?.pauseId != paused.pauseId || envelope.target?.threadId != paused.threadId) return true
+                if (paused == null) return reject("malformed or missing payload")
+                if (vmId == null) return reject("target.vmId is missing")
+                val vm = vmRegistry.resolve(vmId) ?: return reject("unknown VM $vmId")
+                if (!vmRegistry.isControlReady(vmId)) return reject("VM is not control-ready: state=${vm.state}")
+                if (paused.pauseId <= 0) return reject("pauseId must be positive")
+                if (envelope.contextGeneration != vm.contextGeneration) {
+                    return reject("contextGeneration mismatch: envelope=${envelope.contextGeneration} registry=${vm.contextGeneration}")
+                }
+                if (envelope.sourceEpoch != vm.sourceEpoch) {
+                    return reject("sourceEpoch mismatch: envelope=${envelope.sourceEpoch} registry=${vm.sourceEpoch}")
+                }
+                if (envelope.target?.pauseId != paused.pauseId) {
+                    return reject("target.pauseId mismatch: target=${envelope.target?.pauseId} payload=${paused.pauseId}")
+                }
+                if (envelope.target?.threadId != paused.threadId) {
+                    return reject("target.threadId mismatch: target=${envelope.target?.threadId} payload=${paused.threadId}")
+                }
+                run {
                     val pause = PauseSnapshot(
                             vmId = vmId,
                             pauseId = paused.pauseId,
@@ -541,7 +658,7 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
                             reasons = paused.reasons.toSet()
                         )
                     val offered = pauseSnapshots.offer(pause)
-                    if (offered.status == PauseOfferStatus.STALE) return true
+                    if (offered.status == PauseOfferStatus.STALE) return reject("pause snapshot is stale")
                     vmRegistry.setPause(vmId, paused.pauseId)
                     onBreak(BreakNotify(
                         stacks = paused.stacks,
@@ -617,9 +734,24 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
             }
             "debug.breakpoints.replace" -> {
                 if (envelope.kind == "response") {
-                    if (!isCurrentEnvelope(envelope)) return true
+                    if (!isCurrentEnvelope(envelope)) {
+                        log(
+                            "忽略 Emmy v2 断点替换 ACK：会话不匹配 ${v2EnvelopeContext(envelope)} " +
+                                "payload=${boundedV2Payload(envelope.payload)}",
+                            DebugLogLevel.WARNING
+                        )
+                        return true
+                    }
                     val requestId = envelope.requestId
                     if (requestId != null) {
+                        val ackRevision = runCatching { envelope.payload?.get("revision")?.asLong }.getOrNull()
+                        val ackCount = runCatching { envelope.payload?.get("count")?.asInt }.getOrNull()
+                        log(
+                            "收到 Emmy v2 断点替换 ACK：requestId=$requestId ok=${envelope.ok != false} " +
+                                "revision=${ackRevision ?: "-"} count=${ackCount ?: "-"} " +
+                                "error=${envelope.error?.code ?: "-"}",
+                            if (envelope.ok == false) DebugLogLevel.WARNING else DebugLogLevel.DEBUG
+                        )
                         val result = if (envelope.ok == false) {
                             Result.failure<Long>(IllegalStateException(
                                 envelope.error?.code ?: "BREAKPOINT_REPLACE_FAILED"
@@ -632,7 +764,12 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
                                 Result.success(revision)
                             }
                         }
-                        v2BreakpointRequests.remove(requestId)?.complete(result)
+                        val pending = v2BreakpointRequests.remove(requestId)
+                        if (pending == null) {
+                            log("忽略迟到的 Emmy v2 断点替换 ACK：requestId=$requestId", DebugLogLevel.WARNING)
+                        } else {
+                            pending.complete(result)
+                        }
                     }
                 }
                 true
@@ -642,6 +779,16 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
     }
 
     private fun requestVmSnapshot() {
+        // A v2 request without the handshake identity is rejected by the agent
+        // (MISSING_AGENT_SESSION_ID) with a null payload. Sending it anyway used
+        // to latch `snapshotRequestOutstanding`, after which every later request
+        // was silently dropped and the VM never registered.
+        val session = agentSessionId
+        val epoch = connectionEpoch
+        if (session.isNullOrBlank() || epoch == null || epoch <= 0L) {
+            log("暂不请求 VM snapshot：v2 握手身份尚未建立", DebugLogLevel.DEBUG)
+            return
+        }
         if (!snapshotRequestOutstanding.compareAndSet(false, true)) return
         val requestId = "vm-snapshot-${v2RequestSequence.incrementAndGet()}"
         val activeTransport = transporter
@@ -657,8 +804,8 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
                     kind = "request",
                     type = "vm.snapshot",
                     requestId = requestId,
-                    agentSessionId = agentSessionId,
-                    connectionEpoch = connectionEpoch
+                    agentSessionId = session,
+                    connectionEpoch = epoch
                 )
             )
         )
@@ -666,6 +813,32 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
             snapshotRequestOutstanding.set(false)
             log("请求 VM snapshot 失败: ${error.message}", DebugLogLevel.WARNING)
             scheduleReconnect(reconnectAttempt.get() + 1)
+        }
+    }
+
+    /**
+     * Releases the snapshot latch and retries with a bounded backoff. Without
+     * this a single rejected response fences the VM out of the registry for the
+     * whole session, so every `debug.paused` is discarded as an unknown VM.
+     */
+    private fun retryVmSnapshotAfterRejection(reason: String) {
+        snapshotRequestOutstanding.set(false)
+        if (session.isStopped || reconnectStopped.get()) return
+        val attempt = snapshotRetryAttempt.incrementAndGet()
+        if (attempt > MAX_SNAPSHOT_RETRY_ATTEMPTS) {
+            log("VM snapshot 连续被拒 $attempt 次（$reason），停止自动重试", DebugLogLevel.WARNING)
+            return
+        }
+        log("VM snapshot 请求被拒绝（$reason），准备第 $attempt 次重试", DebugLogLevel.WARNING)
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val delay = (100L shl (attempt - 1)).coerceAtMost(1_000L)
+            try {
+                Thread.sleep(delay)
+            } catch (_: InterruptedException) {
+                return@executeOnPooledThread
+            }
+            if (session.isStopped || reconnectStopped.get()) return@executeOnPooledThread
+            lifecycle.execute(sessionGeneration) { requestVmSnapshot() }
         }
     }
 
@@ -778,10 +951,10 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
         val identity = SourceIdentity.fromPath(shortPath)
         val protocolBreakpoint = if (breakpoint.isLogMessage) {
             BreakPoint(shortPath, breakpoint.line + 1, logMessage = breakpoint.logExpressionObject?.expression,
-                sourceIdentity = identity.toWire(), owner = "USER", breakpointId = "idea-$id")
+                sourceIdentity = identity.toWire(), owner = "IDEA", breakpointId = "idea-$id")
         } else {
             BreakPoint(shortPath, breakpoint.line + 1, condition = breakpoint.conditionExpression?.expression,
-                sourceIdentity = identity.toWire(), owner = "USER", breakpointId = "idea-$id")
+                sourceIdentity = identity.toWire(), owner = "IDEA", breakpointId = "idea-$id")
         }
         val previous = breakpoints.put(id, protocolBreakpoint)
         if (sendUpdate && previous != protocolBreakpoint &&
@@ -1156,6 +1329,11 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
             val future = acknowledgement ?: CompletableFuture<Result<Long>>()
             v2BreakpointRequests[requestId] = future
             try {
+                log(
+                    "发送 Emmy v2 断点替换：requestId=$requestId revision=$revision count=${snapshot.size} " +
+                        "agentSessionId=${agentSessionId ?: "-"} connectionEpoch=${connectionEpoch ?: "-"}",
+                    DebugLogLevel.DEBUG
+                )
                 active.send(EmmyV2Message(EmmyV2Envelope(
                     kind = "request",
                     type = "debug.breakpoints.replace",
@@ -1173,6 +1351,7 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
 
         // Legacy agents do not send an ACK. Clear + replace keeps removals
         // deterministic while preserving the v1 wire ids.
+        log("发送 Emmy legacy 断点替换：count=${snapshot.size} v2Negotiated=$v2Negotiated", DebugLogLevel.DEBUG)
         active.send(AddBreakPointReq(snapshot, clear = true, replaceComposite = true))
         acknowledgement?.complete(Result.success(0L))
         return Result.success(0L)
@@ -1185,7 +1364,31 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
         runCatching {
             CliGatewayApplicationService.getInstance().register(this)
             cliRegistered = true
+            autoAuthorizeCliClients()
         }.onFailure { log("CLI Gateway 注册 Emmy target 失败: ${it.message}", DebugLogLevel.WARNING) }
+    }
+
+    /**
+     * Whether the concrete run configuration opted into CLI auto-grant.
+     */
+    protected open fun configurationAllowsCliAutoGrant(): Boolean = false
+
+    /**
+     * Grants the first-party local CLI client without a manual prompt when the
+     * run configuration opted in. Off by default: the gateway can read debuggee
+     * values and drive execution, so this only ever runs for trusted projects,
+     * and the grant stays withdrawable from Tools.
+     */
+    private fun autoAuthorizeCliClients() {
+        if (!configurationAllowsCliAutoGrant()) return
+        if (!projectTrusted) {
+            log("已启用 CLI 自动授权，但项目未受信任，已跳过", DebugLogLevel.WARNING)
+            return
+        }
+        val gateway = CliGatewayApplicationService.getInstance()
+        runCatching { gateway.grant(debugTargetId, DEFAULT_CLI_AUTO_GRANT_CLIENT) }
+            .onSuccess { log("已自动授权 CLI 客户端: $DEFAULT_CLI_AUTO_GRANT_CLIENT", DebugLogLevel.RUNTIME) }
+            .onFailure { log("自动授权 CLI 客户端失败: ${it.message}", DebugLogLevel.WARNING) }
     }
 
     private fun unregisterCliTarget() {
@@ -1234,7 +1437,10 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
             vm.state in setOf("LOST", "CLOSED", "CLOSING", "ERROR")) return null
         val selected = pauseId ?: vm.activePauseId ?: return null
         val snapshot = pauseSnapshots.get(vmId, selected) ?: return null
-        if (snapshot.connectionEpoch != null && snapshot.connectionEpoch != vm.connectionEpoch) return null
+        // Compare epochs only when both sides know theirs: a legacy record may be
+        // registered before the handshake bound the transport epoch.
+        if (snapshot.connectionEpoch != null && vm.connectionEpoch != null &&
+            snapshot.connectionEpoch != vm.connectionEpoch) return null
         if (snapshot.contextGeneration != null && vm.contextGeneration != null &&
             snapshot.contextGeneration != vm.contextGeneration) return null
         if (snapshot.sourceEpoch != null && vm.sourceEpoch != null && snapshot.sourceEpoch != vm.sourceEpoch) return null

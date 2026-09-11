@@ -9,6 +9,11 @@ import com.tang.intellij.lua.debugger.emmy.VmSnapshotDto
  * executor in production; synchronized methods also keep CLI/test readers safe.
  */
 class VmRegistry {
+    private companion object {
+        /** Id prefix of VMs registered from the legacy AttachedNotify path. */
+        const val LEGACY_VM_ID_PREFIX = "legacy-"
+    }
+
     private val records = linkedMapOf<String, VmRecordModel>()
     /**
      * A VM id is opaque but can be reused by a host after a Lua state is
@@ -55,6 +60,22 @@ class VmRegistry {
         if (connectionEpoch != null) epoch = connectionEpoch
         connected = true
         return true
+    }
+
+    /**
+     * Re-arms the snapshot fence once the v2 handshake identity is known.
+     *
+     * A legacy `AttachedNotify` may arrive before `InitRsp`. That path registers
+     * a `legacy-*` record, marks the registry connected and clears the snapshot
+     * fence, so the authoritative `vm.snapshot` is never requested and every
+     * later `debug.paused` is discarded as an unknown VM. Dropping pre-handshake
+     * records and re-arming the fence makes message ordering irrelevant.
+     */
+    @Synchronized
+    fun rearmSnapshotFenceForV2() {
+        records.entries.removeIf { it.key.startsWith(LEGACY_VM_ID_PREFIX) }
+        legacyAliases.clear()
+        awaitingSnapshot = true
     }
 
     @Synchronized
@@ -226,12 +247,18 @@ class VmRegistry {
         return runCatching {
             when (envelope.type) {
                 "vm.snapshot" -> {
-                    val payload = envelope.payload ?: return@runCatching VmApplyResult(VmApplyStatus.INVALID)
+                    val payload = envelope.payload ?: return@runCatching VmApplyResult(
+                        VmApplyStatus.INVALID,
+                        message = "vm.snapshot payload is missing"
+                    )
                     val snapshot = EmmyJson.gson.fromJson(payload, VmSnapshotDto::class.java)
                     applySnapshot(snapshot, sessionId, epoch)
                 }
                 "vm.lifecycle" -> {
-                    val payload = envelope.payload ?: return@runCatching VmApplyResult(VmApplyStatus.INVALID)
+                    val payload = envelope.payload ?: return@runCatching VmApplyResult(
+                        VmApplyStatus.INVALID,
+                        message = "vm.lifecycle payload is missing"
+                    )
                     val lifecycle = EmmyJson.gson.fromJson(payload, VmLifecycleDto::class.java)
                     applyLifecycle(lifecycle, sessionId, epoch)
                 }
@@ -246,7 +273,7 @@ class VmRegistry {
     fun legacyAttached(stateAddress: Long, connectionEpoch: Long? = null): VmRecordModel {
         connected = true
         awaitingSnapshot = false
-        val legacyId = "legacy-${connectionEpoch ?: 0}-$stateAddress"
+        val legacyId = "$LEGACY_VM_ID_PREFIX${connectionEpoch ?: 0}-$stateAddress"
         val record = VmRecordModel(
             vmId = legacyId,
             generation = 1,
@@ -260,6 +287,41 @@ class VmRegistry {
         val registered = record.copy(connectionEpoch = connectionEpoch)
         records[legacyId] = registered
         return registered
+    }
+
+    /**
+     * Native legacy agents publish their own opaque VM id (for example `vm-1`)
+     * in v1 `BreakNotify`, while a legacy attach is registered here as
+     * `legacy-<epoch>-<stateAddress>`. Remember the mapping so both sides name
+     * the same record.
+     */
+    private val legacyAliases = linkedMapOf<String, String>()
+
+    /**
+     * Maps the VM id a legacy agent reports onto the record registered for the
+     * legacy attach.
+     *
+     * Without this mapping `setPause("vm-1", …)` hits an unknown id and is
+     * dropped, while the pause snapshot is stored under `vm-1`; every later
+     * lookup through the registry id (IDE variables panel and the CLI
+     * stack/scopes/variables/eval commands) then misses and reports a stale
+     * pause.
+     *
+     * Returns null when the id cannot be mapped safely: nothing registered, more
+     * than one legacy candidate, or a v2 record set. Callers must then keep the
+     * original id.
+     */
+    @Synchronized
+    fun normalizeLegacyVmId(nativeVmId: String): String? {
+        if (records.containsKey(nativeVmId)) return nativeVmId
+        legacyAliases[nativeVmId]?.let { mapped -> if (records.containsKey(mapped)) return mapped }
+        // Never fold an older protocol id into a v2 record: its id is
+        // authoritative and shared with the agent.
+        val legacy = records.values.filter { it.vmId.startsWith(LEGACY_VM_ID_PREFIX) }
+        if (legacy.size != 1) return null
+        val target = legacy.single().vmId
+        legacyAliases[nativeVmId] = target
+        return target
     }
 
     @Synchronized

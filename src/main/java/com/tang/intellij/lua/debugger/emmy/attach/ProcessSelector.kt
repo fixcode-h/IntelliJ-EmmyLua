@@ -34,7 +34,7 @@ import java.awt.Dimension
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import java.io.File
-import java.nio.charset.Charset
+import java.nio.charset.StandardCharsets
 import javax.swing.*
 
 /**
@@ -71,8 +71,9 @@ class ProcessSelector(private val project: Project) {
             val output = process.inputStream.readBytes()
             process.waitFor()
             
-            // 使用CP936编码解析输出(中文系统)
-            val outputStr = String(output, Charset.forName("CP936"))
+            // emmy_tool 以 UTF-8 输出（窗口标题由宽字符转 UTF-8）。此前按 CP936 解码，
+            // 中文标题会变成 "璋冭瘯娓告垙" 这类乱码，并一路带进 attach 配置名与 CLI targetId。
+            val outputStr = String(output, StandardCharsets.UTF_8)
             parseProcessList(outputStr, processName, emptyList(), filterUEProcesses)
         } catch (e: Exception) {
             throw Exception("获取进程列表失败: ${e.message}", e)
