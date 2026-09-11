@@ -6,7 +6,7 @@
 
 **架构：** 保留现有 IDEA XDebugger 会话和 Emmy v1 wire id，在其上追加显式的 v2 Envelope、Agent 握手响应、VM snapshot/lifecycle 事件和 opaque VM 身份。原生 Agent 以 `NativeVmRegistry` 管理每个 VM，每个 VM 独占 Debugger 和 HookState；IDEA 以 `VmRegistry` 接收并缓存状态。CLI Gateway、授权租约和 AI Probe 已建立在这些 DTO 之上，通过生产 Adapter 接入已有调试会话。
 
-**进度口径（2026-09-10）：** P0、P1、P2 全部纳入下列十项任务。源码实施与本地自动化验证已覆盖主要链路，包括真实 IDEA 平台会话 → Native Lua 宿主 → CLI Gateway 的条件采集与 VM 生命周期闭环；已安装 IDEA GUI/EasyHook/UE/PIE、受本机环境阻塞的 Native TCP，以及尚未运行的远端跨平台 CI 仍是开放验收项。任务 10 的“全矩阵”保持未完成。逐项证据以 [验证矩阵](../specs/2026-09-09-emmy-validation-matrix.md) 为准，不以文件存在或复选框代替运行记录。
+**进度口径（2026-09-10）：** P0、P1、P2 全部纳入下列十项任务。源码实施与本地自动化验证已覆盖主要链路，包括真实 IDEA 平台会话 → Native Lua 宿主 → CLI Gateway 的条件采集与 VM 生命周期闭环；x64 Lua 5.4 source 的 Native TCP 两项在受限临时放行下通过，规则已删除。已安装 IDEA GUI/EasyHook/UE/PIE、其他 Native 配置的 TCP，以及尚未运行的远端跨平台 CI 仍是开放验收项。任务 10 的“全矩阵”保持未完成。逐项证据以 [验证矩阵](../specs/2026-09-09-emmy-validation-matrix.md) 为准，不以文件存在或复选框代替运行记录。
 
 **技术栈：** Kotlin 2.1/JVM 17/21、IntelliJ Platform XDebugger、Gson、C++11、libuv、nlohmann/json、Windows EasyHook、现有 Gradle/CMake 构建链。
 
@@ -235,7 +235,7 @@ bool ReconcileExistingVms(NativeVmRegistry& destination);
 
   `EmmyAttachTargetBootstrap` 生成一次性 token，传给 `emmy_tool attach`；`emmy_tool` 通过受保护共享内存/参数传给注入 Agent，输出 machine-readable status；IDEA 轮询 endpoint/handshake，使用指数退避和明确总超时，失败时记录 rollback 状态。
 
-- [ ] **步骤 7：运行验证**
+- [x] **步骤 7：运行验证**
 
   运行：`./gradlew.bat :modules:debugger-emmy-protocol:test`；构建 native Debug target；使用本地 socket harness 完成 InitReq -> InitRsp -> ReadyReq -> ReadyRsp -> vm.snapshot 的回环。
 
@@ -243,7 +243,7 @@ bool ReconcileExistingVms(NativeVmRegistry& destination);
 
   子模块提交：`git commit -m "协议：补齐 Emmy 握手响应与 VM 生命周期事件"`。父仓库提交：`git commit -m "同步：更新 Emmy 协议事件子模块"`。
 
-当前进度说明：认证、重连 epoch、幂等/取消、bootstrap 状态和有界退避已实现。真实 Native 命名管道 harness 已覆盖未认证拒绝、Init/Ready/snapshot、断点/求值/继续、重复请求和重连旧 epoch 拒绝；TCP 同链路仍受本机连接阻塞影响，真实进程重复注入和 IDEA rollback 尚需实机验收，因此本任务的完整运行验证保留开放。
+当前进度说明：认证、重连 epoch、幂等/取消、bootstrap 状态和有界退避已实现。真实 Native 命名管道 harness 已覆盖未认证拒绝、Init/Ready/snapshot、断点/求值/继续、重复请求和重连旧 epoch 拒绝；x64 Lua 5.4 source 的 TCP 并发和协议 harness 在经授权的精确临时放行下 2/2 通过，完成本步骤要求的真实 socket 回环验证。其他配置的 TCP、真实进程重复注入和 IDEA rollback 仍由任务 10 的全矩阵跟踪。
 
 ### 任务 4：per-VM Debugger、HookState 与控制路由
 
@@ -636,4 +636,5 @@ CLI 请求与响应的最小形态：
 - 联调验证 source reset、表与特殊 key 的有界读取、Probe 自动清理，以及 VM 独立关闭时 IDEA 收到 CLOSING/CLOSED 且 Agent 保持在线；由实际 Gson 报文发现并修复 Native 可选字段读取断言。
 - 最后审查补齐 `wait --probe-id` 取消/超时/真实 socket 断开清理、同 ID 重装代次隔离、清理失败有界重试和诊断；普通 CLI 短连接不删除 Probe，终态事件仍可读取，CLI 等待失败返回非零退出码。已通过定向测试及包含真实联调的全量回归。
 - 新 Release Native 资源已打包，最终插件 ZIP 的八个资源 SHA-256 与输入完全一致；Plugin Verifier 判定 Compatible。
-- 仍未关闭：任务 3 的 Native TCP 验证、任务 10 的实机/跨平台全矩阵。TCP 独立复验失败 2/2；没有修改本机安全策略，没有 push，没有用 skip 或局部通过替代整体验收。
+- Native TCP 放行前独立复验失败 2/2；WFP 确认本机 Windows 防火墙的 Query User Default 拦截回环入站。17:46 经授权临时放行两个精确 exe 后，x64 Lua 5.4 source 的相同两项 2/2 通过，规则已删除，没有留下持久放行；[诊断记录](../../native-tcp-firewall-diagnosis-20260910.md) 明确区分直接原因与尚未查明的策略来源。
+- 仍未关闭：任务 10 的其他 Native 配置 TCP、实机/跨平台全矩阵。项目继续使用 TCP，没有 push，没有用 skip 或局部通过替代整体验收。
