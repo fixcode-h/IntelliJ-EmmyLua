@@ -49,10 +49,20 @@ class ProcessAttachmentManager {
     )
     
     /**
-     * 检查进程是否已被附加
+     * 检查进程是否已被附加。
+     *
+     * 以"会话是否仍然存活"为准，而不是只看 PID 是否有记录：
+     * `sessionStopped()` 并不保证在所有断开路径上触发（例如直接关闭运行窗口、
+     * 进程先于会话退出）。只按 PID 判断会把已结束的会话当成活动会话，导致
+     * 再次附加同一进程时被误判为"已经被附加调试"而直接失败。
      */
     fun isProcessAttached(pid: Int): Boolean {
-        return attachedProcesses.containsKey(pid)
+        val info = attachedProcesses[pid] ?: return false
+        if (info.session.isStopped) {
+            attachedProcesses.remove(pid, info)
+            return false
+        }
+        return true
     }
     
     /**
