@@ -393,7 +393,12 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
                 var present = true
                 var emitEvent = true
                 if (vmId != null && pauseId != null) {
-                    vmRegistry.setPause(vmId, pauseId)
+                    if (!vmRegistry.setPause(vmId, pauseId)) {
+                        log(
+                            "legacy 暂停未能登记：vmId=$vmId 不在 VM 注册表中，暂停查询将不可用",
+                            DebugLogLevel.DEBUG
+                        )
+                    }
                     val vm = vmRegistry.resolve(vmId)
                     val pause = PauseSnapshot(
                         vmId = vmId,
@@ -659,7 +664,12 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
                         )
                     val offered = pauseSnapshots.offer(pause)
                     if (offered.status == PauseOfferStatus.STALE) return reject("pause snapshot is stale")
-                    vmRegistry.setPause(vmId, paused.pauseId)
+                    if (!vmRegistry.setPause(vmId, paused.pauseId)) {
+                        log(
+                            "v2 暂停未能登记：vmId=$vmId 当前不可暂停，暂停查询将不可用",
+                            DebugLogLevel.DEBUG
+                        )
+                    }
                     onBreak(BreakNotify(
                         stacks = paused.stacks,
                         vmId = vmId,

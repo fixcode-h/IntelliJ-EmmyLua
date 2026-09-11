@@ -84,7 +84,7 @@ class VmRegistryTest {
         // An id that already names a record is returned unchanged.
         assertEquals(legacy.vmId, registry.normalizeLegacyVmId(legacy.vmId))
 
-        registry.setPause(registry.normalizeLegacyVmId("vm-1")!!, 7)
+        assertTrue(registry.setPause(registry.normalizeLegacyVmId("vm-1")!!, 7))
         assertEquals(7L, registry.resolve(legacy.vmId)?.activePauseId)
         assertNull(registry.resolve("vm-1"))
     }

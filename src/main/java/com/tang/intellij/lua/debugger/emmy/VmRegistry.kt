@@ -345,11 +345,20 @@ class VmRegistry {
         }
     }
 
+    /**
+     * Records the active pause for a VM.
+     *
+     * Returns false when the id is unknown or the VM can no longer be paused.
+     * Callers must surface that instead of losing the pause silently: a pause
+     * stored under an unregistered id made every later lookup (IDE variables
+     * panel and CLI stack/scopes/variables/eval) report a stale reference.
+     */
     @Synchronized
-    fun setPause(vmId: String, pauseId: Long) {
-        val current = records[vmId] ?: return
-        if (current.state == "LOST" || current.state == "CLOSED" || current.state == "CLOSING") return
+    fun setPause(vmId: String, pauseId: Long): Boolean {
+        val current = records[vmId] ?: return false
+        if (current.state == "LOST" || current.state == "CLOSED" || current.state == "CLOSING") return false
         records[vmId] = current.copy(activePauseId = pauseId)
+        return true
     }
 
     @Synchronized
