@@ -1109,13 +1109,29 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
 
     override fun run() {
         notifyCliUserControl()
+        // Capture the pause identity before the snapshot store is cleared: the
+        // agent rejects every non-Break action that arrives without a pause id
+        // (PAUSE_ID_REQUIRED), so sending Continue after clearing would let the
+        // agent drop the request and leave the target frozen with no client able
+        // to resume it.
+        val (actionVmId, actionPauseId, actionThreadId) = currentActionTarget()
         clearInlineSnapshot()
         pauseSnapshots.clear()
         vmRegistry.list().forEach { vmRegistry.invalidatePause(it.vmId) }
         cancelEvaluationsThen(CancellationException("Emmy execution resumed")) {
             publishCliEvent("debug.resumed")
-            sendActionToAgent(DebugAction.Continue)
+            sendActionToAgent(DebugAction.Continue, actionVmId, actionPauseId, actionThreadId)
         }
+    }
+
+    /**
+     * Pause identity an action must carry. Read it before the local pause state
+     * is torn down, otherwise the action reaches the agent without a pause id and
+     * is rejected as PAUSE_ID_REQUIRED.
+     */
+    private fun currentActionTarget(): Triple<String?, Long?, String?> {
+        val pause = pauseSnapshots.currentUiPause()
+        return Triple(pause?.vmId ?: currentVmId(), pause?.pauseId, pause?.threadId)
     }
 
     private fun removeTemporaryBreakpoint() {
@@ -1127,12 +1143,13 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
     final override fun stop() {
         reconnectStopped.set(true)
         cancelV2Requests(CancellationException("Emmy debug session stopped"))
+        val (actionVmId, actionPauseId, actionThreadId) = currentActionTarget()
         pauseSnapshots.clear()
         clearInlineSnapshot()
         cancelEvaluationsThen(CancellationException("Emmy debug session stopped")) {
             lifecycle.post(sessionGeneration, DebugSessionEvent.STOP_REQUESTED) {
                 removeTemporaryBreakpoint()
-                sendActionToAgent(DebugAction.Stop)
+                sendActionToAgent(DebugAction.Stop, actionVmId, actionPauseId, actionThreadId)
                 send(StopSign())
                 runCatching { transporter?.close() }
                 transporter = null
@@ -1189,31 +1206,34 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
 
     override fun startStepOver(context: XSuspendContext?) {
         notifyCliUserControl()
+        val (actionVmId, actionPauseId, actionThreadId) = currentActionTarget()
         clearInlineSnapshot()
         pauseSnapshots.clear()
         cancelEvaluationsThen(CancellationException("Emmy execution resumed")) {
             publishCliEvent("debug.resumed")
-            sendActionToAgent(DebugAction.StepOver)
+            sendActionToAgent(DebugAction.StepOver, actionVmId, actionPauseId, actionThreadId)
         }
     }
 
     override fun startStepInto(context: XSuspendContext?) {
         notifyCliUserControl()
+        val (actionVmId, actionPauseId, actionThreadId) = currentActionTarget()
         clearInlineSnapshot()
         pauseSnapshots.clear()
         cancelEvaluationsThen(CancellationException("Emmy execution resumed")) {
             publishCliEvent("debug.resumed")
-            sendActionToAgent(DebugAction.StepIn)
+            sendActionToAgent(DebugAction.StepIn, actionVmId, actionPauseId, actionThreadId)
         }
     }
 
     override fun startStepOut(context: XSuspendContext?) {
         notifyCliUserControl()
+        val (actionVmId, actionPauseId, actionThreadId) = currentActionTarget()
         clearInlineSnapshot()
         pauseSnapshots.clear()
         cancelEvaluationsThen(CancellationException("Emmy execution resumed")) {
             publishCliEvent("debug.resumed")
-            sendActionToAgent(DebugAction.StepOut)
+            sendActionToAgent(DebugAction.StepOut, actionVmId, actionPauseId, actionThreadId)
         }
     }
 
@@ -1385,9 +1405,9 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
 
     /**
      * Grants the first-party local CLI client without a manual prompt when the
-     * run configuration opted in. Off by default: the gateway can read debuggee
-     * values and drive execution, so this only ever runs for trusted projects,
-     * and the grant stays withdrawable from Tools.
+     * run configuration opts in (checked by default). The gateway can read
+     * debuggee values and drive execution, so this still only ever runs for
+     * trusted projects, and the grant stays withdrawable from Tools.
      */
     private fun autoAuthorizeCliClients() {
         if (!configurationAllowsCliAutoGrant()) return
