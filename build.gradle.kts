@@ -119,13 +119,25 @@ project(":") {
         val fixtureExecutable = System.getenv("EMMY_IDE_FIXTURE_EXE")
             ?.takeIf { it.isNotBlank() }
             ?: System.getProperty("emmy.fixture.exe")?.takeIf { it.isNotBlank() }
+        val attachFixtureExecutable = System.getenv("EMMY_ATTACH_FIXTURE_EXE")
+            ?.takeIf { it.isNotBlank() }
+            ?: System.getProperty("emmy.attach.fixture.exe")?.takeIf { it.isNotBlank() }
         inputs.property("emmyFixtureExecutable", fixtureExecutable ?: "")
+        inputs.property("emmyAttachFixtureExecutable", attachFixtureExecutable ?: "")
         if (fixtureExecutable != null) {
             systemProperty("emmy.fixture.exe", fixtureExecutable)
             inputs.file(fixtureExecutable)
         } else {
             exclude("**/EmmyNativeIdeFixtureIntegrationTest.class")
-            logger.lifecycle("未设置 EMMY_IDE_FIXTURE_EXE：普通测试任务排除 Native/IDE 集成套件；专用 Windows CI 必须提供测试宿主。")
+        }
+        if (attachFixtureExecutable != null) {
+            systemProperty("emmy.attach.fixture.exe", attachFixtureExecutable)
+            inputs.file(attachFixtureExecutable)
+        } else {
+            exclude("**/EmmyNativeAttachIntegrationTest.class")
+        }
+        if (fixtureExecutable == null && attachFixtureExecutable == null) {
+            logger.lifecycle("未设置 Native/IDE fixture：普通测试任务排除 Native/IDE 集成套件；专用 Windows CI 必须提供测试宿主。")
         }
     }
 

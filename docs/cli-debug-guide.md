@@ -92,3 +92,18 @@ Probe 只在暂停原因完全属于该 Probe 时自动继续；用户控制、�
 `NOT_AUTHORIZED` 表示需要在 IDEA 中授予目标权限；`LEASE_REQUIRED` 或 `LEASE_EXPIRED` 表示需要重新获取租约；`STALE_PAUSE_REFERENCE` 表示暂停帧已变化，应重新查询 VM 和 pause；`EVALUATION_DENIED` 表示请求不是允许的 `VALUE_PATH`。
 
 CLI 返回 0 表示请求成功；2 表示参数错误，3 表示 Gateway/实例不可用，4 表示 target/VM 选择错误，5 表示超时或过期引用，6 表示权限/租约/求值受限，7 表示其他服务端失败，8 表示 target 正被占用。`wait` 同样依据最终 `done` 返回退出码，超时不会返回成功。
+
+## 独立 Lua Attach 验收宿主
+
+Windows 下可以用仓库内的真实 Lua 5.4 宿主替代 UE 做 Attach 回归。宿主只加载 `lua54.dll`，不会预加载 Emmy；调试器必须走生产 `emmy_tool attach` 注入路径。
+
+```powershell
+cmake -S EmmyLuaDebugger -B build/native-attach -G Ninja `
+  -DEMMY_USE_LUA_SOURCE=ON -DEMMY_VM_REGISTRY_TEST=ON -DEMMY_LUA_VERSION=54 `
+  -DCMAKE_BUILD_TYPE=Debug
+cmake --build build/native-attach --target emmy_attach_lua_fixture --parallel 4
+$env:EMMY_ATTACH_FIXTURE_EXE = (Resolve-Path build/native-attach/emmy_debugger/emmy_attach_lua_fixture.exe).Path
+./gradlew.bat --no-daemon :test --tests '*EmmyNativeAttachIntegrationTest'
+```
+
+集成测试会启动 `emmy_attach_lua_fixture.exe --source <临时 Lua 文件>`，由生产 `EmmyAttachDebugProcess` 调用 `emmy_tool attach`，然后经 CLI 验证 VM snapshot、断点暂停、受限求值、table 展开、Probe 自动继续、pause/context 失效以及 VM 关闭后 Agent 保持在线。普通 Gradle 测试未设置 `EMMY_ATTACH_FIXTURE_EXE` 时会排除该测试；不会自动附加任意用户进程。

@@ -27,12 +27,13 @@ jobs:
       - name: Build real Lua fixture
         run: |
           cmake -S EmmyLuaDebugger -B build/native-ide -G Ninja -DCMAKE_BUILD_TYPE=Debug -DEMMY_USE_LUA_SOURCE=ON -DEMMY_VM_REGISTRY_TEST=ON -DEMMY_LUA_VERSION=54
-          cmake --build build/native-ide --target emmy_native_ide_fixture --parallel 4
+          cmake --build build/native-ide --target emmy_native_ide_fixture emmy_attach_lua_fixture --parallel 4
       - name: Verify Native to IDEA to CLI
         shell: pwsh
         run: |
           $env:EMMY_IDE_FIXTURE_EXE = (Resolve-Path build/native-ide/emmy_debugger/emmy_native_ide_fixture.exe).Path
-          ./gradlew.bat --no-daemon :test --tests '*EmmyNativeIdeFixtureIntegrationTest'
+          $env:EMMY_ATTACH_FIXTURE_EXE = (Resolve-Path build/native-ide/emmy_debugger/emmy_attach_lua_fixture.exe).Path
+          ./gradlew.bat --no-daemon :test --tests '*EmmyNativeIdeFixtureIntegrationTest' --tests '*EmmyNativeAttachIntegrationTest'
       - uses: actions/upload-artifact@v4
         if: always()
         with:

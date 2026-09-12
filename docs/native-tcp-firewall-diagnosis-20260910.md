@@ -59,3 +59,48 @@ Microsoft 的 [WFP 条件标志说明](https://learn.microsoft.com/en-us/windows
 真实 EmmyAttach 监听发生在被附加进程内，防火墙按宿主可执行文件识别；测试 exe 的放行不会自动放行 UnrealEditor 等宿主。UE/PIE 尚未实机验收，不能据本次结果擅自给宿主添加规则。
 
 原始 WFP 文件包含其他本机程序信息，只保存在忽略的 `build/verification-tools`，不提交；本文只记录与本次目标直接相关的字段。
+
+## 后续处置（2026-09-11）：改为 IPv4 回环监听 + 一条全局回环入站例外
+
+上一节只证明了"给单个测试 exe 加精确入站 Allow 后 TCP 链路正常"，没有给出可交付的默认配置，因此
+Attach 调试仍表现为"注入成功、监听成功，但 IDEA 连不上、断点从不命中"。
+
+原因：Attach Agent 原先调用 `SocketServerTransporter::Listen("localhost", ...)`，在本机 `localhost` 先解析到
+`::1`；而 Windows 防火墙规则**无法表达 IPv6 回环地址条件**（`New-NetFirewallRule -LocalAddress ::1` 直接报
+"已指定未指定的多播、广播或回环 IPv6 地址"），所以 `::1` 监听永远覆盖不到"仅回环"的放行规则。
+
+实测对照（同一份源码、同一客户端，仅改绑定地址）：
+
+| 绑定 | 系统监听通知弹窗 | 生成的规则 | 回环连接 |
+| --- | --- | --- | --- |
+| `0.0.0.0` | 弹出（用户点"允许访问"） | 程序级 Inbound Allow，`Protocol=TCP+UDP`、地址/端口不限、`Profile=Public` | 通 |
+| `127.0.0.1` | 不弹 | 无 | 超时被丢弃（整个 90 秒生命周期 `accepted=0`） |
+
+处置：
+
+1. Native 侧把 attach 调试端口与日志捕获端口都显式绑定到 `127.0.0.1`
+   （`emmy_facade.cpp` 的 `EmmyFacade::StartupHookMode`、`emmy_hook.windows.cpp` 的 `redirect`）；
+   `emmy_tool` 的日志回连（`emmy_tool/src/windows/utility.cpp`）本来就是 `127.0.0.1`，此前与该监听不匹配，现一并修正。
+2. 本机增加一条**与程序无关、仅限 IPv4 回环**的入站例外；此后任何宿主 exe（含新发布的自研 Lua 宿主）都不再需要单独放行：
+
+   ```powershell
+   New-NetFirewallRule -DisplayName "Emmy Debug - Loopback Inbound TCP" `
+     -Direction Inbound -Action Allow -Protocol TCP `
+     -LocalAddress 127.0.0.1 -RemoteAddress 127.0.0.1 -Profile Any
+   ```
+
+   撤销：`Remove-NetFirewallRule -DisplayName "Emmy Debug - Loopback Inbound TCP"`。
+3. 验证：在**不存在任何 fixture 专有规则**、只有上述全局回环例外的前提下，
+   `EmmyNativeAttachIntegrationTest` 通过（`tests=1 failures=0`，line 3 断点命中、受限求值、table 展开、
+   Probe 自动继续、上下文重置与 VM 关闭全部通过），且测试沙箱实际加载的是绑定 `127.0.0.1` 的新 `emmy_hook.dll`。
+   x86/x64 两套资源已按 `docs/emmy-native-resource-build.md` 重新收集并覆盖。
+
+边界与残留风险：
+
+- 该例外只覆盖 **IPv4 回环**。若将来把监听改回 `::1`，必须改用 `Set-NetFirewallProfile -DefaultInboundAction Allow`
+  或按 exe 放行，因为 IPv6 回环地址写不进规则地址字段。
+- 系统监听通知弹窗产生的是**程序级、协议/端口/地址全开**的持久规则（Profile 取决于弹窗里勾选的网络类型），
+  比"仅回环"宽得多；用户点"取消"会生成 Block 规则，且此后不再弹窗。
+- 极少数禁用 IPv4 回环的宿主环境需要重新评估绑定地址。
+- 本机防火墙为何会过滤回环仍未定位（见上文"已排除与尚未确定的原因"）；上述处置是在既定环境下选择的最小暴露方案，
+  不代表成因已解释清楚。
