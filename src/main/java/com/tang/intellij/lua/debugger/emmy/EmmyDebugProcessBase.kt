@@ -933,6 +933,21 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
 
     protected fun markInitialized() {
         agentReady = true
+        // v2 breakpoints travel on their own wire path: the snapshot sent before
+        // the handshake (sendCompositeBreakpointSnapshotLegacy in the InitReq
+        // path) only reaches a legacy agent. Without this resend a v2 session
+        // keeps no agent-side breakpoints at all, and any breakpoint that existed
+        // before attach silently never fires.
+        val token = sessionGeneration
+        if (token != 0L) {
+            runCatching {
+                lifecycle.execute(token) {
+                    if (!v2Negotiated || !isCurrentConnection()) return@execute
+                    runCatching { sendCompositeBreakpointSnapshotLegacy() }
+                        .onFailure { log("v2 断点重新同步失败: ${it.message}", DebugLogLevel.WARNING) }
+                }
+            }.onFailure { log("无法安排 v2 断点同步: ${it.message}", DebugLogLevel.WARNING) }
+        }
         lifecycle.post(sessionGeneration, DebugSessionEvent.INITIALIZED)
     }
 
