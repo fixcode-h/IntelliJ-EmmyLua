@@ -4,6 +4,7 @@ import com.google.gson.JsonParser
 import com.tang.intellij.lua.debugger.emmy.attach.AttachBootstrapStatus
 import com.tang.intellij.lua.debugger.emmy.attach.AttachToolRunner
 import com.tang.intellij.lua.debugger.emmy.attach.isAttachBootstrapReady
+import com.tang.intellij.lua.debugger.emmy.attach.isAttachToolCompatible
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -34,6 +35,26 @@ class EmmyAttachTargetBootstrapTest {
         assertFalse(run("incomplete").status?.let { isAttachBootstrapReady(it, 4242) } == true)
     }
 
+    @Test fun `capability probe distinguishes current and legacy tools`() {
+        val current = AttachToolRunner(2_000L).runCapabilities(
+            javaCommand("capabilities"), File(System.getProperty("user.dir"))
+        )
+        assertEquals(0, current.exitCode)
+        assertTrue(isAttachToolCompatible(current.capabilities))
+
+        val legacy = AttachToolRunner(2_000L).runCapabilities(
+            javaCommand("legacy"), File(System.getProperty("user.dir"))
+        )
+        assertEquals(0, legacy.exitCode)
+        assertFalse(isAttachToolCompatible(legacy.capabilities))
+        assertTrue(legacy.output.any { it == "legacy tool" })
+    }
+
+    @Test fun `unterminated tool output is retained`() {
+        val result = run("unterminated")
+        assertEquals(listOf("legacy tool"), result.output)
+    }
+
     @Test fun `overlong line is bounded and sleeping child is terminated`() {
         val output = run("overlong")
         assertEquals(0, output.exitCode)
@@ -62,6 +83,9 @@ class EmmyAttachTargetBootstrapTest {
                 "incomplete" -> println("{\"schemaVersion\":1,\"status\":\"auth-ready\",\"pid\":4242,\"injected\":true,\"listening\":true,\"authReady\":false}")
                 "overlong" -> print("x".repeat(100_000))
                 "sleep" -> Thread.sleep(10_000)
+                "capabilities" -> println("{\"schemaVersion\":1,\"tool\":\"emmy_tool\",\"attachBootstrapStatus\":true,\"attachStatusSchemaVersion\":1,\"attachAuthTokenEnv\":\"EMMY_ATTACH_AUTH_TOKEN\"}")
+                "legacy" -> println("legacy tool")
+                "unterminated" -> print("legacy tool")
             }
         }
     }

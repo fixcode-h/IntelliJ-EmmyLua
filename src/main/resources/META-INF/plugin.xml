@@ -44,17 +44,14 @@
         <applicationService serviceImplementation="com.tang.intellij.lua.debugger.cli.CliGatewayApplicationService"/>
     </extensions>
     <actions>
-        <action id="EmmyLua.GrantCliDebugAccess"
-                class="com.tang.intellij.lua.debugger.cli.GrantCliDebugAccessAction"
-                text="授予 EmmyLua CLI 调试权限..."
-                description="允许本机 CLI 读取和控制选定的调试会话">
-            <add-to-group group-id="ToolsMenu" anchor="last"/>
-        </action>
+        <!-- Granting is declarative now (the run configuration opt-in). What must
+             stay reachable is the kill switch: an already granted client has to
+             be withdrawable without tearing the debug session down. -->
         <action id="EmmyLua.RevokeCliDebugAccess"
                 class="com.tang.intellij.lua.debugger.cli.RevokeCliDebugAccessAction"
                 text="撤销 EmmyLua CLI 调试权限..."
                 description="撤销本机 CLI 对选定调试会话的访问权限">
-            <add-to-group group-id="ToolsMenu" anchor="last"/>
+            <add-to-group group-id="ToolsMenu" anchor="first"/>
         </action>
     </actions>
 </idea-plugin>

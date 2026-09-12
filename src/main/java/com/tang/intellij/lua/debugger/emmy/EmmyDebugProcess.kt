@@ -25,6 +25,9 @@ open class EmmyDebugProcess(session: XDebugSession) : EmmyDebugProcessBase(sessi
     override val minimumLogLevel: DebugLogLevel
         get() = configuration.logLevel
 
+    /** Per-profile opt-in shown in the Emmy run configuration; still gated by project trust. */
+    override fun configurationAllowsCliAutoGrant(): Boolean = configuration.autoAuthorizeCliClients
+
     override fun createTargetBootstrap(): EmmyTargetBootstrap =
         ConfiguredEmmyTargetBootstrap(configuration)
 }

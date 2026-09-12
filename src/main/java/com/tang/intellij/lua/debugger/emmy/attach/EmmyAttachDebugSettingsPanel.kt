@@ -18,9 +18,7 @@ package com.tang.intellij.lua.debugger.emmy.attach
 
 import com.intellij.openapi.options.SettingsEditor
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.util.SystemInfoRt
-import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.JBUI
 import com.tang.intellij.lua.debugger.emmy.EmmyWinArch
 import com.tang.intellij.lua.debugger.DebugLogLevel
@@ -34,18 +32,16 @@ import javax.swing.*
 class EmmyAttachDebugSettingsPanel(private val project: Project) : SettingsEditor<EmmyAttachDebugConfiguration>() {
 
     // UI组件
-    private val pidField = JBTextField()
-    private val selectProcessButton = JButton("选择进程")
     private val x64RadioButton = JRadioButton("x64")
     private val x86RadioButton = JRadioButton("x86") 
     private val captureLogCheckBox = JCheckBox("捕获日志")
     private val autoAttachSingleCheckBox = JCheckBox("自动附加单个进程")
     private val filterUEProcessesCheckBox = JCheckBox("过滤虚幻引擎进程")
+    private val autoAuthorizeCliCheckBox = JCheckBox("自动授权本机 CLI/AI 客户端访问本次会话")
 
     private val logLevelComboBox = JComboBox(DebugLogLevel.entries.toTypedArray())
 
     private val panel: JPanel
-    private val processSelector = ProcessSelector(project)
 
     init {
         // 创建架构选择按钮组
@@ -58,13 +54,6 @@ class EmmyAttachDebugSettingsPanel(private val project: Project) : SettingsEdito
         x64RadioButton.isVisible = SystemInfoRt.isWindows
         x86RadioButton.isVisible = SystemInfoRt.isWindows
 
-        // 设置字段属性 - PID字段可编辑，但建议通过按钮选择
-        pidField.isEditable = true
-        pidField.toolTipText = "进程ID，建议通过「选择进程」按钮选择，也可手动输入。每次启动调试都会重置为0"
-
-        // 选择进程按钮事件
-        selectProcessButton.addActionListener { selectProcess() }
-
         // 架构选择事件
         x64RadioButton.addActionListener { fireEditorStateChanged() }
         x86RadioButton.addActionListener { fireEditorStateChanged() }
@@ -73,6 +62,11 @@ class EmmyAttachDebugSettingsPanel(private val project: Project) : SettingsEdito
         captureLogCheckBox.addActionListener { fireEditorStateChanged() }
         autoAttachSingleCheckBox.addActionListener { fireEditorStateChanged() }
         filterUEProcessesCheckBox.addActionListener { fireEditorStateChanged() }
+        autoAuthorizeCliCheckBox.addActionListener { fireEditorStateChanged() }
+        autoAuthorizeCliCheckBox.toolTipText =
+            "勾选后，attach 会话建立时会自动把本机 CLI/AI 客户端（默认 emmy-debug）加入授权名单；\n" +
+                "仅对受信任的项目生效，客户端名单可在 Settings → Languages & Frameworks → EmmyLua → Debugger 中配置。\n" +
+                "该能力可读取被调试进程的值并控制执行，请按需开启。"
         logLevelComboBox.addActionListener { fireEditorStateChanged() }
         
         // 设置日志等级默认值和提示
@@ -86,15 +80,6 @@ class EmmyAttachDebugSettingsPanel(private val project: Project) : SettingsEdito
     private fun createPanel(): JPanel {
         val panel = JPanel()
         panel.layout = BoxLayout(panel, BoxLayout.Y_AXIS)
-        
-        // 进程选择部分
-        val processPanel = JPanel(BorderLayout())
-        processPanel.add(JLabel("目标进程PID:"), BorderLayout.WEST)
-        val pidPanel = JPanel(BorderLayout())
-        pidPanel.add(pidField, BorderLayout.CENTER)
-        pidPanel.add(selectProcessButton, BorderLayout.EAST)
-        processPanel.add(pidPanel, BorderLayout.CENTER)
-        panel.add(processPanel)
 
         // 架构选择部分（仅Windows）
         if (SystemInfoRt.isWindows) {
@@ -111,6 +96,7 @@ class EmmyAttachDebugSettingsPanel(private val project: Project) : SettingsEdito
         panel.add(captureLogCheckBox)
         panel.add(autoAttachSingleCheckBox)
         panel.add(filterUEProcessesCheckBox)
+        panel.add(autoAuthorizeCliCheckBox)
         
         // 日志等级选择
         val logLevelPanel = JPanel(BorderLayout())
@@ -121,7 +107,7 @@ class EmmyAttachDebugSettingsPanel(private val project: Project) : SettingsEdito
         // 添加使用说明
         val helpText = JTextArea()
         helpText.text = "使用说明:\n" +
-            "1. 目标进程选择: 默认PID为0，必须通过\"选择进程\"按钮选择目标进程\n" +
+            "1. 目标进程选择: 启动调试时选择目标进程\n" +
             "2. 架构选择: Windows系统会自动检测进程架构，也可手动选择\n" +
             "3. 调试选项: 可启用日志捕获、自动附加等功能\n" +
             "4. 进程过滤: 支持虚幻引擎进程过滤，黑名单过滤可在插件设置中配置\n" +
@@ -139,30 +125,7 @@ class EmmyAttachDebugSettingsPanel(private val project: Project) : SettingsEdito
         return panel
     }
 
-    /**
-     * 选择进程
-     */
-    private fun selectProcess() {
-        val autoAttachSingle = autoAttachSingleCheckBox.isSelected
-        val filterUEProcesses = filterUEProcessesCheckBox.isSelected
-
-        val selectedProcess = try {
-            processSelector.showProcessSelectionDialog("", autoAttachSingle, filterUEProcesses)
-        } catch (error: Exception) {
-            Messages.showErrorDialog(project, error.message ?: "获取进程列表失败", "错误")
-            null
-        }
-
-        selectedProcess?.let { process ->
-            pidField.text = process.pid.toString()
-            fireEditorStateChanged()
-        }
-    }
-
     override fun resetEditorFrom(@NotNull configuration: EmmyAttachDebugConfiguration) {
-        // 总是显示空的PID，确保用户每次都需要选择进程
-        pidField.text = ""
-        
         if (SystemInfoRt.isWindows) {
             when (configuration.winArch) {
                 EmmyWinArch.X64 -> x64RadioButton.isSelected = true
@@ -173,13 +136,12 @@ class EmmyAttachDebugSettingsPanel(private val project: Project) : SettingsEdito
         captureLogCheckBox.isSelected = configuration.captureLog
         autoAttachSingleCheckBox.isSelected = configuration.autoAttachSingleProcess
         filterUEProcessesCheckBox.isSelected = configuration.filterUEProcesses
+        autoAuthorizeCliCheckBox.isSelected = configuration.autoAuthorizeCliClients
         logLevelComboBox.selectedItem = configuration.logLevel
     }
 
     override fun applyEditorTo(@NotNull configuration: EmmyAttachDebugConfiguration) {
-        // 如果用户没有选择进程（PID为空或0），则保持为0
-        val inputPid = pidField.text.trim()
-        configuration.pid = if (inputPid.isEmpty()) 0 else inputPid.toIntOrNull() ?: 0
+        configuration.pid = 0
         configuration.processName = ""
         
         if (SystemInfoRt.isWindows) {
@@ -189,6 +151,7 @@ class EmmyAttachDebugSettingsPanel(private val project: Project) : SettingsEdito
         configuration.captureLog = captureLogCheckBox.isSelected
         configuration.autoAttachSingleProcess = autoAttachSingleCheckBox.isSelected
         configuration.filterUEProcesses = filterUEProcessesCheckBox.isSelected
+        configuration.autoAuthorizeCliClients = autoAuthorizeCliCheckBox.isSelected
         configuration.logLevel = logLevelComboBox.selectedItem as DebugLogLevel
         // 使用插件设置中的黑名单
         configuration.threadFilterBlacklist = emptyList()

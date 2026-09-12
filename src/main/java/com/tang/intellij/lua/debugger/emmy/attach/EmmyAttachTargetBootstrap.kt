@@ -77,6 +77,17 @@ class EmmyAttachTargetBootstrap(
     }
 
     private fun runAttachTool(toolPath: String, hookPath: String, toolDir: File, authToken: String) {
+        val capabilities = AttachToolRunner(timeoutMillis = 5_000L)
+            .runCapabilities(listOf(toolPath, "capabilities"), toolDir)
+        if (capabilities.exitCode != 0 || !isAttachToolCompatible(capabilities.capabilities)) {
+            error(
+                "Native 附加工具过旧或不兼容，已在注入前终止: " +
+                    "exitCode=${capabilities.exitCode} tool=$toolPath " +
+                    "输出=${summarizeToolOutput(capabilities.output)}"
+            )
+        }
+        log("Native 附加工具能力探测通过: ${capabilities.capabilities}", DebugLogLevel.DEBUG)
+
         val commands = mutableListOf(
             toolPath,
             "attach",
@@ -107,9 +118,14 @@ class EmmyAttachTargetBootstrap(
         val exitCode = result.exitCode
         if (exitCode != 0) {
             val status = result.status
-            error("附加失败，emmy_tool 退出码: $exitCode，状态=${status?.status ?: "unknown"}，错误=${status?.message ?: "未提供"}")
+            error(
+                "附加失败，emmy_tool 退出码: $exitCode，状态=${status?.status ?: "unknown"}，" +
+                    "错误=${status?.message ?: "未提供"}，输出=${summarizeToolOutput(result.output)}"
+            )
         }
-        val status = checkNotNull(result.status) { "附加工具未返回结构化启动状态（无法证明已注入/监听）" }
+        val status = checkNotNull(result.status) {
+            "附加工具未返回结构化启动状态（无法证明已注入/监听），输出=${summarizeToolOutput(result.output)}"
+        }
         check(isAttachBootstrapReady(status, configuration.pid)) {
             if (status.alreadyAttached) {
                 "目标进程已有 Emmy Agent，当前无法安全重协商认证 token"
@@ -172,21 +188,59 @@ class EmmyAttachTargetBootstrap(
     }
 }
 
-internal data class AttachToolResult(val exitCode: Int, val status: AttachBootstrapStatus?)
+internal data class AttachToolResult(
+    val exitCode: Int,
+    val status: AttachBootstrapStatus?,
+    val output: List<String> = emptyList()
+)
+
+internal data class AttachToolCapabilitiesResult(
+    val exitCode: Int,
+    val capabilities: AttachToolCapabilities?,
+    val output: List<String> = emptyList()
+)
 
 internal class AttachToolRunner(
     private val timeoutMillis: Long = 90_000L
 ) {
     fun run(command: List<String>, directory: File, authToken: String, onLine: (String) -> AttachBootstrapStatus?): AttachToolResult {
-        val process = ProcessBuilder(command).directory(directory).redirectErrorStream(true).apply {
+        val result = runProcess(command, directory, authToken, onLine)
+        return AttachToolResult(result.exitCode, result.payload, result.output)
+    }
+
+    fun runCapabilities(command: List<String>, directory: File): AttachToolCapabilitiesResult {
+        val result = runProcess(command, directory, null) { line ->
+            val json = runCatching { JsonParser.parseString(line).asJsonObject }.getOrNull()
+            if (json?.get("schemaVersion")?.asInt == 1) AttachToolCapabilities.fromJson(json) else null
+        }
+        return AttachToolCapabilitiesResult(result.exitCode, result.payload, result.output)
+    }
+
+    private data class ProcessResult<T>(
+        val exitCode: Int,
+        val payload: T?,
+        val output: List<String>
+    )
+
+    private fun <T> runProcess(
+        command: List<String>,
+        directory: File,
+        authToken: String?,
+        onLine: (String) -> T?
+    ): ProcessResult<T> {
+        val builder = ProcessBuilder(command).directory(directory).redirectErrorStream(true)
+        if (authToken != null) {
             // Avoid exposing the attach token in command-line inspection tools.
-            environment()["EMMY_ATTACH_AUTH_TOKEN"] = authToken
-        }.start()
-        val status = AtomicReference<AttachBootstrapStatus?>(null)
+            builder.environment()["EMMY_ATTACH_AUTH_TOKEN"] = authToken
+        }
+        val process = builder.start()
+        val payload = AtomicReference<T?>(null)
+        val output = java.util.Collections.synchronizedList(mutableListOf<String>())
         val reader = Thread {
             try {
                 readLines(process) { line ->
-                    onLine(line)?.let(status::set)
+                    output.add(line)
+                    onLine(line)?.let(payload::set)
                 }
             } catch (_: Exception) {
                 // Process shutdown may close the stream while the reader is blocked.
@@ -195,14 +249,16 @@ internal class AttachToolRunner(
         try {
             if (!process.waitFor(timeoutMillis, TimeUnit.MILLISECONDS)) {
                 terminate(process)
-                throw IllegalStateException("附加工具在 ${timeoutMillis / 1000} 秒内未退出，已终止（可能卡在注入或继承输出管道）")
+                throw IllegalStateException(
+                    "工具进程在 ${timeoutMillis / 1000} 秒内未退出，已终止（可能卡在注入或继承输出管道）"
+                )
             }
             reader.join(1_000L)
-            return AttachToolResult(process.exitValue(), status.get())
+            return ProcessResult(process.exitValue(), payload.get(), output.toList())
         } catch (error: InterruptedException) {
             terminate(process)
             Thread.currentThread().interrupt()
-            throw IllegalStateException("附加工具等待被中断，已终止", error)
+            throw IllegalStateException("工具进程等待被中断，已终止", error)
         } finally {
             runCatching { process.inputStream.close() }
             runCatching { reader.join(1_000L) }
@@ -224,14 +280,27 @@ internal class AttachToolRunner(
         val line = ByteArrayOutputStream(4 * 1024)
         var truncated = false
         var totalBytes = 0L
+        fun flushLine() {
+            if (!truncated && line.size() > 0) {
+                onLine(line.toByteArray().toString(StandardCharsets.UTF_8).trimEnd('\r'))
+            }
+            line.reset()
+            truncated = false
+        }
         while (true) {
             if (input.available() == 0) {
-                if (!process.isAlive) return
+                if (!process.isAlive) {
+                    flushLine()
+                    return
+                }
                 Thread.sleep(10L)
                 continue
             }
             val count = input.read(buffer)
-            if (count < 0) return
+            if (count < 0) {
+                flushLine()
+                return
+            }
             totalBytes += count
             if (totalBytes > 1024 * 1024) {
                 process.destroy()
@@ -256,6 +325,35 @@ internal class AttachToolRunner(
 internal fun isAttachBootstrapReady(status: AttachBootstrapStatus, expectedPid: Int): Boolean =
     status.pid == expectedPid && status.injected && status.listening &&
         status.authReady && status.status == "auth-ready"
+
+internal data class AttachToolCapabilities(
+    val schemaVersion: Int,
+    val tool: String,
+    val attachBootstrapStatus: Boolean,
+    val attachStatusSchemaVersion: Int,
+    val attachAuthTokenEnv: String?
+) {
+    companion object {
+        fun fromJson(json: com.google.gson.JsonObject): AttachToolCapabilities = AttachToolCapabilities(
+            schemaVersion = json.get("schemaVersion")?.asInt ?: 0,
+            tool = json.get("tool")?.asString ?: "",
+            attachBootstrapStatus = json.get("attachBootstrapStatus")?.asBoolean ?: false,
+            attachStatusSchemaVersion = json.get("attachStatusSchemaVersion")?.asInt ?: 0,
+            attachAuthTokenEnv = json.get("attachAuthTokenEnv")?.asString
+        )
+    }
+}
+
+internal fun isAttachToolCompatible(capabilities: AttachToolCapabilities?): Boolean =
+    capabilities != null &&
+        capabilities.schemaVersion == 1 &&
+        capabilities.tool == "emmy_tool" &&
+        capabilities.attachBootstrapStatus &&
+        capabilities.attachStatusSchemaVersion == 1 &&
+        capabilities.attachAuthTokenEnv == "EMMY_ATTACH_AUTH_TOKEN"
+
+internal fun summarizeToolOutput(output: List<String>): String =
+    output.takeLast(8).joinToString(" | ").ifBlank { "无输出" }.take(1_000)
 
 internal data class AttachBootstrapStatus(
     val status: String,
