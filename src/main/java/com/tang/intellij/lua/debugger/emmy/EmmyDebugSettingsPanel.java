@@ -49,6 +49,8 @@ public class EmmyDebugSettingsPanel extends SettingsEditor<EmmyDebugConfiguratio
     private final JPanel codePanel = new JPanel(new BorderLayout());
     private final JCheckBox waitIDECheckBox = new JCheckBox("Block the program and wait for the IDE.");
     private final JCheckBox breakWhenIDEConnectedCheckBox = new JCheckBox("Force break when connected.");
+    private final JCheckBox autoAuthorizeCliCheckBox =
+        new JCheckBox("Auto-authorise local CLI/AI clients (they can read values and control execution).");
     private final JComboBox<DebugLogLevel> logLevelComboBox = new JComboBox<>();
 
     private final JRadioButton x64RadioButton = new JRadioButton("x64");
@@ -86,6 +88,11 @@ public class EmmyDebugSettingsPanel extends SettingsEditor<EmmyDebugConfiguratio
 
         waitIDECheckBox.addActionListener(e -> onChanged());
         breakWhenIDEConnectedCheckBox.addActionListener(e -> onChanged());
+        autoAuthorizeCliCheckBox.addActionListener(e -> onChanged());
+        autoAuthorizeCliCheckBox.setToolTipText(
+            "勾选后，本会话建立时会自动把本机 CLI/AI 客户端（emmy-debug）加入授权名单。\n" +
+                "仅对受信任的项目生效；该能力可读取被调试进程的值并控制执行。\n" +
+                "已授予的访问可随时用 Tools → 撤销 EmmyLua CLI 调试权限 撤回。");
 
         logLevelComboBox.setModel(new DefaultComboBoxModel<>(DebugLogLevel.values()));
         logLevelComboBox.setSelectedItem(DebugLogLevel.RUNTIME);
@@ -121,10 +128,11 @@ public class EmmyDebugSettingsPanel extends SettingsEditor<EmmyDebugConfiguratio
         addRow(5, winArchLabel, winArchPanel);
         addRow(6, new JLabel(), waitIDECheckBox);
         addRow(7, new JLabel(), breakWhenIDEConnectedCheckBox);
+        addRow(8, new JLabel(), autoAuthorizeCliCheckBox);
 
         GridBagConstraints hintConstraints = new GridBagConstraints();
         hintConstraints.gridx = 0;
-        hintConstraints.gridy = 8;
+        hintConstraints.gridy = 9;
         hintConstraints.gridwidth = 2;
         hintConstraints.anchor = GridBagConstraints.WEST;
         hintConstraints.insets = new Insets(8, 0, 4, 0);
@@ -132,7 +140,7 @@ public class EmmyDebugSettingsPanel extends SettingsEditor<EmmyDebugConfiguratio
 
         GridBagConstraints codeConstraints = new GridBagConstraints();
         codeConstraints.gridx = 0;
-        codeConstraints.gridy = 9;
+        codeConstraints.gridy = 10;
         codeConstraints.gridwidth = 2;
         codeConstraints.weightx = 1.0;
         codeConstraints.weighty = 1.0;
@@ -177,6 +185,7 @@ public class EmmyDebugSettingsPanel extends SettingsEditor<EmmyDebugConfiguratio
 
         pipelineInput.setText(configuration.getPipeName());
         logLevelComboBox.setSelectedItem(configuration.getLogLevel());
+        autoAuthorizeCliCheckBox.setSelected(configuration.getAutoAuthorizeCliClients());
 
         if (SystemInfoRt.isWindows) {
             if (configuration.getWinArch() == EmmyWinArch.X64) {
@@ -198,6 +207,7 @@ public class EmmyDebugSettingsPanel extends SettingsEditor<EmmyDebugConfiguratio
 
         configuration.setPipeName(pipelineInput.getText());
         configuration.setLogLevel((DebugLogLevel) logLevelComboBox.getSelectedItem());
+        configuration.setAutoAuthorizeCliClients(autoAuthorizeCliCheckBox.isSelected());
         if (SystemInfoRt.isWindows) {
             configuration.setWinArch(x64RadioButton.isSelected() ? EmmyWinArch.X64 : EmmyWinArch.X86);
         }

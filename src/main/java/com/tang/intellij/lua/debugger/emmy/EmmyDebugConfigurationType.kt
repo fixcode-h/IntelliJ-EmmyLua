@@ -109,6 +109,12 @@ class EmmyDebugConfiguration(project: Project, factory: EmmyDebuggerConfiguratio
     var winArch = EmmyWinArch.X64
     var pipeName = "emmy"
     var logLevel = DebugLogLevel.RUNTIME
+    /**
+     * Checked by default: grant the local CLI/AI client access to the session
+     * without a manual prompt. Still requires a trusted project, and the grant
+     * stays withdrawable from Tools.
+     */
+    var autoAuthorizeCliClients = true
 
     override fun getConfigurationEditor(): SettingsEditor<out RunConfiguration> {
         val group = SettingsEditorGroup<EmmyDebugConfiguration>()
@@ -133,6 +139,7 @@ class EmmyDebugConfiguration(project: Project, factory: EmmyDebuggerConfiguratio
         JDOMExternalizerUtil.writeField(element, "PIPE", pipeName)
         JDOMExternalizerUtil.writeField(element, "WIN_ARCH", winArch.configId)
         JDOMExternalizerUtil.writeField(element, "LOG_LEVEL", logLevel.value.toString())
+        JDOMExternalizerUtil.writeField(element, "AUTO_AUTHORIZE_CLI_CLIENTS", autoAuthorizeCliClients.toString())
     }
 
     override fun readExternal(element: Element) {
@@ -157,6 +164,8 @@ class EmmyDebugConfiguration(project: Project, factory: EmmyDebuggerConfiguratio
         EmmyDebugTransportType.fromStoredValue(JDOMExternalizerUtil.readField(state, "TYPE"))?.let { type = it }
         EmmyWinArch.fromStoredValue(JDOMExternalizerUtil.readField(state, "WIN_ARCH"))?.let { winArch = it }
         logLevel = DebugLogLevel.fromValue(JDOMExternalizerUtil.readField(state, "LOG_LEVEL")?.toIntOrNull())
+        autoAuthorizeCliClients =
+            JDOMExternalizerUtil.readField(state, "AUTO_AUTHORIZE_CLI_CLIENTS")?.toBoolean() ?: true
     }
 
     companion object {

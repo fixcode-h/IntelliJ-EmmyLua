@@ -49,7 +49,10 @@ enum class MessageCMD(val wireId: Int) {
     StartHookReq(15),
     StartHookRsp(16),
 
-    LogNotify(17);
+    LogNotify(17),
+
+    /** Versioned envelope command. Legacy wire ids 0..17 must never change. */
+    EnvelopeV2(18);
 
     companion object {
         private val byWireId = entries.associateBy(MessageCMD::wireId)
@@ -84,7 +87,8 @@ class InitMessage(
     val customHelperPath: String = "", // 自定义 helper 目录路径（可选，可断点调试）
     val emmyHelperName: String = "emmyHelper",      // 主 helper 脚本名称
     val emmyHelperExtName: String = "emmyHelper_ue", // 扩展脚本名称（可自定义）
-    val ext: Array<String>
+    val ext: Array<String>,
+    val authToken: String = ""
 ) : Message(MessageCMD.InitReq)
 
 enum class DebugAction(val wireId: Int) {
@@ -123,10 +127,11 @@ enum class LuaValueType(val wireId: Int) {
 class VariableValue(val name: String,
                     val nameType: Int,
                     val value: String,
-                    val valueType: Int,
-                    val valueTypeName: String,
-                    val cacheId: Int,
-                    val children: List<VariableValue>?) {
+                     val valueType: Int,
+                     val valueTypeName: String,
+                     val cacheId: Int,
+                     val children: List<VariableValue>?,
+                     val truncated: Boolean = false) {
     val nameTypeValue: LuaValueType get() {
         return LuaValueType.fromWireId(nameType)
     }
@@ -152,12 +157,41 @@ class Stack(
         val functionName: String,
         val level: Int,
         val localVariables: List<VariableValue>,
-        val upvalueVariables: List<VariableValue>
+        val upvalueVariables: List<VariableValue>,
+        /** Optional opaque frame identity emitted by v2 agents. */
+        val frameId: String = "",
+        /** Globals are optional for legacy agents and default to an empty list. */
+        val globalVariables: List<VariableValue> = emptyList(),
+        /** Identity of loaded source bytes, supplied by the native host. */
+        val sourceIdentity: SourceIdentityWire? = null
 )
 
-class BreakNotify(val stacks: List<Stack>)
+class BreakNotify(
+    val stacks: List<Stack>,
+    val vmId: String? = null,
+    val pauseId: Long? = null,
+    val threadId: String? = null,
+    val pauseScope: String? = null,
+    val consistency: String? = null,
+    val pauseReason: String? = null,
+    /** All independent causes that contributed to this pause. */
+    val reasons: List<String> = emptyList()
+)
 
-class EvalReq(val expr: String, val stackLevel: Int, val cacheId: Int, val depth: Int) : Message(MessageCMD.EvalReq) {
+class EvalReq(
+    val expr: String,
+    val stackLevel: Int,
+    val cacheId: Int,
+    val depth: Int,
+    /** Optional source/frame identity; absent for legacy agents. */
+    val sourceIdentity: SourceIdentityWire? = null,
+    val vmId: String? = null,
+    val pauseId: Long? = null,
+    val threadId: String? = null,
+    val frameId: String? = null,
+    val contextGeneration: Long? = null,
+    val sourceEpoch: Long? = null
+) : Message(MessageCMD.EvalReq) {
     val seq = makeSeq()
 }
 
@@ -169,10 +203,44 @@ data class BreakPoint(
     val condition: String? = null,
     val logMessage: String? = null,
     val hitCondition: String? = null,
-    val runToHere: Boolean = false
+    val runToHere: Boolean = false,
+    /** Optional identity fields are ignored by v1 agents that do not understand them. */
+    val sourceIdentity: SourceIdentityWire? = null,
+    /** Stable owner namespace, for example IDEA or CLI:client-a. */
+    val owner: String? = null,
+    /** Stable id inside the owner namespace. */
+    val breakpointId: String? = null,
+    /** Empty means all VMs in the process; otherwise an opaque VM id. */
+    val vmId: String? = null,
+    /** When true, contributions replace the complete key atomically. */
+    val composite: Boolean = false,
+    val contributions: List<BreakpointContributionWire> = emptyList()
 )
 
-class AddBreakPointReq(val breakPoints: List<BreakPoint>) : Message(MessageCMD.AddBreakPointReq)
+data class BreakpointContributionWire(
+    val owner: String,
+    val breakpointId: String? = null,
+    val condition: String? = null,
+    val logMessage: String? = null,
+    val hitCondition: String? = null,
+    val runToHere: Boolean = false,
+    val autoContinue: Boolean = false
+)
+
+data class SourceIdentityWire(
+    val canonicalPath: String,
+    val uri: String,
+    val sourceHash: String? = null,
+    val loaderEpoch: Long? = null,
+    val sourceEpoch: Long? = null,
+    val verified: Boolean = false
+)
+
+class AddBreakPointReq(
+    val breakPoints: List<BreakPoint>,
+    val clear: Boolean = false,
+    val replaceComposite: Boolean = false
+) : Message(MessageCMD.AddBreakPointReq)
 
 class RemoveBreakPointReq(val breakPoints: List<BreakPoint>) : Message(MessageCMD.RemoveBreakPointReq)
 

@@ -54,13 +54,20 @@ abstract class LuaDebugProcess protected constructor(session: XDebugSession) : X
         topToolbar.remove(actionManager.getAction(XDebuggerActions.FORCE_STEP_INTO))
     }
 
+    /**
+     * Wall-clock prefix for console lines. Attach, handshake and pause sequences
+     * are diagnosed by their ordering, and the debug console itself has no clock.
+     */
+    private val logTimeFormatter = java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss.SSS")
+
     final override fun log(text: String, level: DebugLogLevel) {
         if (!level.isEnabledFor(minimumLogLevel)) return
+        val stamped = "[${java.time.LocalTime.now().format(logTimeFormatter)}] $text"
         val consoleView = session.consoleView
         if (consoleView != null) {
-            consoleView.print("$text\n", level.contentType)
+            consoleView.print("$stamped\n", level.contentType)
         } else {
-            kotlin.io.println(text)
+            kotlin.io.println(stamped)
         }
     }
 

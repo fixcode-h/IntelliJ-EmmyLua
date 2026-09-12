@@ -25,7 +25,8 @@ import com.intellij.xdebugger.frame.XValueChildrenList
 import com.tang.intellij.lua.debugger.SourceMappingService
 import com.tang.intellij.lua.debugger.emmy.value.LuaXValue
 
-class EmmyDebugStackFrame(val data: Stack, val process: EmmyDebugProcessBase) : XStackFrame() {
+class EmmyDebugStackFrame(val data: Stack, val process: EmmyDebugProcessBase,
+                          val pause: PauseSnapshot? = null) : XStackFrame() {
     private val values = XValueChildrenList()
     private var evaluator: EmmyEvaluator? = null
     

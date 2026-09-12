@@ -12,9 +12,12 @@ class EmmyProtocolGoldenTest {
     fun `message command wire ids remain stable`() {
         assertEquals(
             listOf(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17),
-            MessageCMD.entries.map(MessageCMD::wireId)
+            MessageCMD.entries
+                .filter { it != MessageCMD.EnvelopeV2 }
+                .map(MessageCMD::wireId)
         )
         MessageCMD.entries.forEach { assertEquals(it, MessageCMD.fromWireId(it.wireId)) }
+        assertEquals(MessageCMD.EnvelopeV2, MessageCMD.fromWireId(18))
         assertEquals(MessageCMD.Unknown, MessageCMD.fromWireId(999))
     }
 

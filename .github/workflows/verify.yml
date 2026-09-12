@@ -10,6 +10,38 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  native-ide-integration:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Build real Lua fixture
+        run: |
+          cmake -S EmmyLuaDebugger -B build/native-ide -G Ninja -DCMAKE_BUILD_TYPE=Debug -DEMMY_USE_LUA_SOURCE=ON -DEMMY_VM_REGISTRY_TEST=ON -DEMMY_LUA_VERSION=54
+          cmake --build build/native-ide --target emmy_native_ide_fixture emmy_attach_lua_fixture --parallel 4
+      - name: Verify Native to IDEA to CLI
+        shell: pwsh
+        run: |
+          $env:EMMY_IDE_FIXTURE_EXE = (Resolve-Path build/native-ide/emmy_debugger/emmy_native_ide_fixture.exe).Path
+          $env:EMMY_ATTACH_FIXTURE_EXE = (Resolve-Path build/native-ide/emmy_debugger/emmy_attach_lua_fixture.exe).Path
+          ./gradlew.bat --no-daemon :test --tests '*EmmyNativeIdeFixtureIntegrationTest' --tests '*EmmyNativeAttachIntegrationTest'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-ide-integration
+          if-no-files-found: error
+          path: |
+            build/test-results/test/*.xml
+            build/252/idea-sandbox/**/idea.log
   verify:
     runs-on: ubuntu-latest
     strategy:
@@ -19,10 +51,28 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "21"
       - uses: gradle/actions/setup-gradle@v4
       - name: Test, build and verify
-        run: ./gradlew --no-daemon -DIDEA_VER=${{ matrix.idea-version }} test buildPlugin verifyPlugin
+        run: ./gradlew --no-daemon -DIDEA_VER=${{ matrix.idea-version }} test buildPlugin verifyPlugin :tools:emmy-debug:installDist
+      - name: Preserve JVM and plugin verification reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: verification-idea-${{ matrix.idea-version }}
+          if-no-files-found: error
+          path: |
+            build/test-results/test/*.xml
+            modules/*/build/test-results/test/*.xml
+            tools/emmy-debug/build/test-results/test/*.xml
+            build/reports/pluginVerifier/**
+      - name: Verify clean checkout and submodules
+        shell: bash
+        run: |
+          git diff --exit-code --submodule=diff
+          git submodule foreach --recursive 'git diff --exit-code'

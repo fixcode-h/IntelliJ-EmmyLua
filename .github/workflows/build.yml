@@ -1,0 +1,85 @@
+name: Verify Native
+
+on:
+  push:
+    branches: [dev, master]
+  pull_request:
+
+concurrency:
+  group: native-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    name: Native ${{ matrix.os }} ${{ matrix.arch }} ${{ matrix.configuration }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, arch: x64, configuration: Debug }
+          - { os: windows-latest, arch: x64, configuration: Release }
+          - { os: windows-latest, arch: x86, configuration: Debug }
+          - { os: windows-latest, arch: x86, configuration: Release }
+          - { os: ubuntu-latest, arch: x64, configuration: Debug }
+          - { os: macos-latest, arch: x64, configuration: Debug }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: lukka/get-cmake@latest
+      - name: Configure
+        shell: bash
+        run: >-
+          cmake -S EmmyLuaDebugger -B "$RUNNER_TEMP/emmy-native-${{ matrix.arch }}-${{ matrix.configuration }}"
+          -DEMMY_VM_REGISTRY_TEST=ON
+          -DCMAKE_BUILD_TYPE=${{ matrix.configuration }}
+          ${{ runner.os == 'Windows' && format('-A {0}', matrix.arch == 'x86' && 'Win32' || 'x64') || '' }}
+      - name: Build
+        run: cmake --build "$RUNNER_TEMP/emmy-native-${{ matrix.arch }}-${{ matrix.configuration }}" --config ${{ matrix.configuration }} --parallel
+      - name: Run Native tests
+        shell: bash
+        run: |
+          ctest --test-dir "$RUNNER_TEMP/emmy-native-${{ matrix.arch }}-${{ matrix.configuration }}" \
+            -C "${{ matrix.configuration }}" --output-on-failure
+      - name: Upload Native test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-ctest-${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.configuration }}
+          path: ${{ runner.temp }}/emmy-native-${{ matrix.arch }}-${{ matrix.configuration }}/Testing
+          if-no-files-found: warn
+      - name: Verify clean checkout and submodules
+        shell: bash
+        run: |
+          git diff --exit-code --submodule=diff
+          git submodule foreach --recursive 'git diff --exit-code'
+
+  lua54-source:
+    name: Native Lua54 source lifecycle harness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: lukka/get-cmake@latest
+      - name: Configure and build source harness
+        run: |
+          cmake -S EmmyLuaDebugger -B "$RUNNER_TEMP/emmy-lua54-source" \
+            -DEMMY_VM_REGISTRY_TEST=ON -DEMMY_USE_LUA_SOURCE=ON -DEMMY_LUA_VERSION=54 \
+            -DCMAKE_BUILD_TYPE=Debug
+          cmake --build "$RUNNER_TEMP/emmy-lua54-source" --target emmy_vm_lifecycle_harness --parallel
+      - name: Run source lifecycle harness
+        run: ctest --test-dir "$RUNNER_TEMP/emmy-lua54-source" -R emmy_vm_lifecycle_harness --output-on-failure
+      - name: Upload lifecycle test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-lua54-source-ctest
+          path: ${{ runner.temp }}/emmy-lua54-source/Testing
+          if-no-files-found: warn
+      - name: Verify clean checkout and submodules
+        shell: bash
+        run: |
+          git diff --exit-code --submodule=diff
+          git submodule foreach --recursive 'git diff --exit-code'

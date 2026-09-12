@@ -23,7 +23,19 @@ import com.tang.intellij.lua.debugger.emmy.value.LuaXValue
 class EmmyEvaluator(val frame: EmmyDebugStackFrame, val process: EmmyDebugProcessBase) : LuaDebuggerEvaluator() {
 
     fun eval(express: String, cacheId: Int, xEvaluationCallback: XEvaluationCallback, depth: Int = 1) {
-        val req = EvalReq(express, frame.data.level, cacheId, depth)
+        val req = EvalReq(
+            express,
+            frame.data.level,
+            cacheId,
+            depth,
+            sourceIdentity = SourceIdentity.fromPath(frame.data.file).toWire(),
+            vmId = frame.pause?.vmId,
+            pauseId = frame.pause?.pauseId,
+            threadId = frame.pause?.threadId,
+            frameId = frame.data.frameId.takeIf { it.isNotBlank() },
+            contextGeneration = frame.pause?.contextGeneration,
+            sourceEpoch = frame.pause?.sourceEpoch
+        )
         process.requestEvaluation(req) { result ->
             result.onSuccess { response ->
                 val value = response.value

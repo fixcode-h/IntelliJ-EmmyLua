@@ -90,6 +90,12 @@ class EmmyAttachDebugConfiguration(project: Project, factory: EmmyAttachDebugger
     var winArch = EmmyWinArch.X64
     var captureLog: Boolean = false
     var autoAttachSingleProcess: Boolean = true
+    /**
+     * Checked by default for attach profiles: grant the local CLI/AI client
+     * access to the session without a manual prompt. Still requires a trusted
+     * project, and the grant stays withdrawable from Tools.
+     */
+    var autoAuthorizeCliClients: Boolean = true
     var filterUEProcesses: Boolean = true  // 默认勾选过滤虚幻引擎进程
     var threadFilterBlacklist: List<String> = listOf("winlogon", "csrss", "wininit", "services")
     var logLevel: DebugLogLevel = DebugLogLevel.RUNTIME
@@ -130,6 +136,7 @@ class EmmyAttachDebugConfiguration(project: Project, factory: EmmyAttachDebugger
         JDOMExternalizerUtil.writeField(element, "WIN_ARCH", winArch.configId)
         JDOMExternalizerUtil.writeField(element, "CAPTURE_LOG", captureLog.toString())
         JDOMExternalizerUtil.writeField(element, "AUTO_ATTACH_SINGLE_PROCESS", autoAttachSingleProcess.toString())
+        JDOMExternalizerUtil.writeField(element, "AUTO_AUTHORIZE_CLI_CLIENTS", autoAuthorizeCliClients.toString())
         JDOMExternalizerUtil.writeField(element, "FILTER_UE_PROCESSES", filterUEProcesses.toString())
         JDOMExternalizerUtil.writeField(element, "THREAD_FILTER_BLACKLIST", threadFilterBlacklist.joinToString(","))
         JDOMExternalizerUtil.writeField(element, "LOG_LEVEL", logLevel.value.toString())
@@ -152,6 +159,8 @@ class EmmyAttachDebugConfiguration(project: Project, factory: EmmyAttachDebugger
         captureLog = captureLogStr?.toBoolean() ?: false
         val autoAttachStr = JDOMExternalizerUtil.readField(state, "AUTO_ATTACH_SINGLE_PROCESS")
         autoAttachSingleProcess = autoAttachStr?.toBoolean() ?: true
+        val autoAuthorizeCliStr = JDOMExternalizerUtil.readField(state, "AUTO_AUTHORIZE_CLI_CLIENTS")
+        autoAuthorizeCliClients = autoAuthorizeCliStr?.toBoolean() ?: true
         val filterUEStr = JDOMExternalizerUtil.readField(state, "FILTER_UE_PROCESSES")
         filterUEProcesses = filterUEStr?.toBoolean() ?: true  // 默认勾选过滤虚幻引擎进程
         val blacklistStr = JDOMExternalizerUtil.readField(state, "THREAD_FILTER_BLACKLIST")

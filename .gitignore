@@ -34,3 +34,7 @@ jflex*.jar
 .trae/rules/project_rules.md
 LuaLS.github.io-main
 bin/
+
+# 本地复现与探针脚本产物
+.repro/
+probe-*.txt
