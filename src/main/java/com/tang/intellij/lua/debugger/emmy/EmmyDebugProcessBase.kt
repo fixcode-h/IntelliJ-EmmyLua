@@ -602,6 +602,20 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
                             "${snapshotVmSummary(envelope.payload)} payload=${boundedV2Payload(envelope.payload)}",
                         level
                     )
+                    // The legacy AttachedNotify (cmd 14) is only sent the first time
+                    // the agent sees a Lua state, so a re-attach never prints it. Log
+                    // the v2 identity instead: applying the snapshot is the point
+                    // where this session actually owns an attachable VM. Kept at
+                    // RUNTIME so it shows at every log level.
+                    if (result.status == VmApplyStatus.APPLIED) {
+                        val vms = vmRegistry.list()
+                        log(
+                            "已附加到 Lua VM：" + vms.joinToString(", ") { vm ->
+                                "${vm.vmId}(${vm.state}, lua=${vm.luaVersion ?: "?"}, ${vm.discovery})"
+                            },
+                            DebugLogLevel.RUNTIME
+                        )
+                    }
                 } else {
                     val level = if (result.status == VmApplyStatus.APPLIED || result.status == VmApplyStatus.DUPLICATE) {
                         DebugLogLevel.DEBUG
