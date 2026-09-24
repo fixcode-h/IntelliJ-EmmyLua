@@ -1009,6 +1009,7 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
 
     override fun runToPosition(position: XSourcePosition, context: XSuspendContext?) {
         notifyCliUserControl()
+        val (actionVmId, actionPauseId, actionThreadId) = currentActionTarget()
         clearInlineSnapshot()
         lifecycle.execute(sessionGeneration) {
             removeTemporaryBreakpoint()
@@ -1022,7 +1023,7 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
             )
             temporaryBreakpoint = breakpoint
             sendCompositeBreakpointSnapshotLegacy()
-            sendActionToAgent(DebugAction.Continue)
+            sendActionToAgent(DebugAction.Continue, actionVmId, actionPauseId, actionThreadId)
         }
     }
 
