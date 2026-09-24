@@ -1022,8 +1022,16 @@ abstract class EmmyDebugProcessBase(session: XDebugSession) : LuaDebugProcess(se
                 breakpointId = "run-to-position"
             )
             temporaryBreakpoint = breakpoint
-            sendCompositeBreakpointSnapshotLegacy()
-            sendActionToAgent(DebugAction.Continue, actionVmId, actionPauseId, actionThreadId)
+            val acknowledgement = CompletableFuture<Result<Long>>()
+            val sent = sendCompositeBreakpointSnapshotLegacy(acknowledgement)
+            if (sent.isFailure) return@execute
+            acknowledgement.whenComplete { result, _ ->
+                if (result?.isSuccess == true) {
+                    lifecycle.execute(sessionGeneration) {
+                        sendActionToAgent(DebugAction.Continue, actionVmId, actionPauseId, actionThreadId)
+                    }
+                }
+            }
         }
     }
 
