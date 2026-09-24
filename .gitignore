@@ -38,3 +38,4 @@ bin/
 # 本地复现与探针脚本产物
 .repro/
 probe-*.txt
+.commandcode/taste
