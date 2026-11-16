@@ -38,6 +38,7 @@ private:
 	void SendRaw(MessageKind kind, const json& payload);
 
 	void CmdHello(uint64_t id, const json& args);
+	void ScheduleBreakpointDiagnostics();
 	void CmdSetBreakpoints(uint64_t id, const json& args);
 	void CmdSetOptions(uint64_t id, const json& args);
 	void CmdLoadHelpers(uint64_t id, const json& args);
@@ -55,6 +56,7 @@ private:
 	uint64_t nextSeq_ = 1;
 	std::atomic<bool> handshaken_{false};
 	std::atomic<bool> closed_{false};
+	std::atomic<uint64_t> bpDiagGen_{0};
 	std::string sessionId_;
 };
 

@@ -89,6 +89,9 @@ EMMY_API void Emmy_NotifyLuaError(lua_State* L, int msgIdx);
 /* nargs、errfunc 同 lua_pcall 的参数。返回插入的处理函数的绝对位置；不需要插时返回 0（原样调用即可）。 */
 EMMY_API int Emmy_PrepareHostPcall(lua_State* L, int nargs, int errfunc);
 EMMY_API void Emmy_FinishHostPcall(lua_State* L, int handlerIdx);
+/* 挂 lua_resume 的注入方式在每次恢复协程前调用：协程如果还没挂调试钩子（创建时调试器还没下断点，
+ * 或者遍历协程时没找到它），按当前需要补上。已经有钩子（我们的或宿主自己的）时什么都不做，开销只有一次查找。 */
+EMMY_API void Emmy_SyncThreadHook(lua_State* L);
 /* 宿主日志转发到 IDE（output.category = host）。level: 0 debug 1 info 2 warn 3 error。 */
 EMMY_API void Emmy_Log(int level, const char* text);
 

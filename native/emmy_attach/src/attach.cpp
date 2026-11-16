@@ -38,6 +38,7 @@ struct CoreApi {
 	decltype(&Emmy_UnregisterLuaVm) unregisterLuaVm = nullptr;
 	decltype(&Emmy_PrepareHostPcall) prepareHostPcall = nullptr;
 	decltype(&Emmy_FinishHostPcall) finishHostPcall = nullptr;
+	decltype(&Emmy_SyncThreadHook) syncThreadHook = nullptr; // 可选：旧核心没有
 };
 
 SRWLOCK g_initLock = SRWLOCK_INIT;
@@ -161,6 +162,7 @@ bool LoadCore(const char* version) {
 	EMMY_LOAD(prepareHostPcall, Emmy_PrepareHostPcall)
 	EMMY_LOAD(finishHostPcall, Emmy_FinishHostPcall)
 #undef EMMY_LOAD
+	g_core.syncThreadHook = reinterpret_cast<decltype(g_core.syncThreadHook)>(GetProcAddress(core, "Emmy_SyncThreadHook"));
 	return true;
 }
 
@@ -227,16 +229,22 @@ int PcallkHook(lua_State* L, int a, int r, int e, intptr_t ctx, void* k) {
 int Resume54Hook(lua_State* L, lua_State* from, int n, int* nres) {
 	auto orig = Original<Resume54Fn>();
 	OnLuaEntry(L);
+	// 协程创建时调试器可能还没挂钩子（lua_newthread 继承的是创建者当时的钩子），恢复前补上
+	if (g_core.syncThreadHook) g_core.syncThreadHook(L);
 	return orig(L, from, n, nres);
 }
 int Resume52Hook(lua_State* L, lua_State* from, int n) {
 	auto orig = Original<Resume52Fn>();
 	OnLuaEntry(L);
+	// 协程创建时调试器可能还没挂钩子（lua_newthread 继承的是创建者当时的钩子），恢复前补上
+	if (g_core.syncThreadHook) g_core.syncThreadHook(L);
 	return orig(L, from, n);
 }
 int Resume51Hook(lua_State* L, int n) {
 	auto orig = Original<Resume51Fn>();
 	OnLuaEntry(L);
+	// 协程创建时调试器可能还没挂钩子（lua_newthread 继承的是创建者当时的钩子），恢复前补上
+	if (g_core.syncThreadHook) g_core.syncThreadHook(L);
 	return orig(L, n);
 }
 void CloseHook(lua_State* L) {

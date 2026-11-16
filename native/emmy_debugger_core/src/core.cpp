@@ -546,6 +546,11 @@ void Emmy_FinishHostPcall(lua_State* L, int handlerIdx) {
 	if (handlerIdx > 0 && handlerIdx <= lua_gettop(L)) lua_remove(L, handlerIdx);
 }
 
+void Emmy_SyncThreadHook(lua_State* L) {
+	if (!L) return;
+	if (emmy::HookMux* mux = emmy::FindMux(emmy::lua::GlobalStateOf(L))) mux->EnsureHook(L);
+}
+
 void Emmy_Log(int level, const char* text) {
 	static const char* kLevels[] = {"debug", "info", "warn", "error"};
 	if (level < 0) level = 0;
