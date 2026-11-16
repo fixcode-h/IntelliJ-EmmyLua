@@ -7,7 +7,7 @@ import java.security.SecureRandom
 import java.util.concurrent.TimeUnit
 
 /**
- * Windows 本机附加：调 emmy_tool 把 emmy_hook 注入目标进程，拿到 runtime 实际监听的地址。
+ * Windows 本机附加：调 emmy_tool 把 emmy_attach.dll 注入目标进程，拿到 runtime 实际监听的地址。
  *
  * 约定（native 线程，2026-11-16）：
  * - 位数：`emmy_tool.exe arch_pid <pid>`，退出码 0 = x64，否则 x86；用对应目录下的工具和 dll。

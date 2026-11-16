@@ -3,12 +3,10 @@
 # EmmyLua for IntelliJ IDEA
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![JetBrains Plugin](https://img.shields.io/jetbrains/plugin/v/9768-emmylua.svg)](https://plugins.jetbrains.com/plugin/9768-emmylua)
-[![Downloads](https://img.shields.io/jetbrains/plugin/d/9768-emmylua.svg)](https://plugins.jetbrains.com/plugin/9768-emmylua)
 
-EmmyLua 是一个功能强大的 Lua 语言支持插件，专为 IntelliJ IDEA 系列 IDE 设计。在原有 EmmyLua 功能基础上，本版本特别增加了 **LuaPanda 调试模式**，为 Lua 开发者提供更完整的开发体验。
+EmmyLua 是一个功能强大的 Lua 语言支持插件，专为 IntelliJ IDEA 系列 IDE 设计。在原有 EmmyLua 功能基础上，本版本重写了调试部分：附加本机进程、Android 真机附加，以及给 AI Agent 用的 MCP 调试工具。
 
-> **重构进行中**：调试部分正在按 [调试插件重构设计](docs/design/2026-11-debugger-redesign.md) 重写（附加调试 + Android 真机附加 + MCP）。原 EmmyLuaDebugger 原生调试器已并入本仓库 `native/` 目录，不再使用子模块。开发在 `dev` 分支进行。
+> 调试部分按 [调试插件重构设计](docs/design/2026-11-debugger-redesign.md) 重写（附加调试 + Android 真机附加 + MCP），旧的 Emmy 启动 / Emmy Attach / LuaPanda 调试方式已删除。原 EmmyLuaDebugger 原生调试器已并入本仓库 `native/` 目录，不再使用子模块。开发在 `dev` 分支进行。
 
 ## 📁 仓库结构
 
@@ -16,7 +14,7 @@ EmmyLua 是一个功能强大的 Lua 语言支持插件，专为 IntelliJ IDEA �
 | --- | --- |
 | `src/`、`gen/` | IntelliJ 插件（语言支持 + 调试 IDE 侧） |
 | `modules/` | 调试相关的独立 Kotlin 模块 |
-| `native/` | 原生调试 runtime（原 EmmyLuaDebugger）：调试核心、`emmy_core` Lua 模块、Windows 附加注入、测试 |
+| `native/` | 原生调试 runtime（原 EmmyLuaDebugger）：调试核心 `emmy_debugger_core`、Windows 附加注入、Android agent、测试 |
 | `docs/design/` | 设计文档；`archive/` 下是历史设计 |
 
 ## ✨ 主要特性
@@ -31,13 +29,11 @@ EmmyLua 是一个功能强大的 Lua 语言支持插件，专为 IntelliJ IDEA �
 - **代码折叠** - 支持函数、表、注释等代码块的折叠
 
 ### 🐛 调试功能
-- **LuaPanda 调试器集成** - 支持断点调试、单步执行、变量查看
-  - 自动版本检测和更新提醒
-  - 支持条件断点和日志断点
-  - 实时变量监视和表达式求值
-  - 调用栈跟踪和线程管理
-- **Emmy 调试器支持** - 内置 Emmy 调试器，支持多平台调试
-- **Emmy Attach 调试** - 支持附加到正在运行的 Lua 进程进行调试
+- **Lua 附加** - 附加到本机正在运行的进程（Windows），不用改游戏代码
+- **Lua 真机附加** - 通过 adb 附加 Android 设备上的游戏进程，包内不需要加任何插件
+- **断点** - 条件断点、命中次数、日志断点、Probe（不停下只记录值）、Lua 出错时暂停
+- **变量和协程** - 变量分组展示、修改变量值、查看其他协程的调用栈
+- **MCP 调试工具** - 让 Claude Code、Cursor 等 Agent 直接下断点、看栈和变量
 - **调试控制台** - 交互式调试控制台，支持表达式求值
 
 ### 📚 文档支持
@@ -99,36 +95,15 @@ EmmyLua 是一个功能强大的 Lua 语言支持插件，专为 IntelliJ IDEA �
 
 ### 调试配置
 
-#### LuaPanda 调试器配置
-1. **安装 LuaPanda 库**
-   ```bash
-   # 使用 luarocks 安装
-   luarocks install luapanda
-   ```
+1. **附加本机进程（Windows）**
+   - `Run` → `Attach to Process…`，在列表里选「Lua 附加」下的游戏进程；或新建运行配置「Lua 附加」
+   - 不需要在游戏里加任何代码，插件自动选择 32 / 64 位和 Lua 版本
 
-2. **在项目中集成 LuaPanda**
-   - 插件会自动检测并提示添加 LuaPanda.lua 文件
-   - 或手动将 LuaPanda.lua 复制到项目根目录
+2. **Android 真机附加**
+   - 手机打开 USB 调试并用 adb 连上，游戏包需要可调试（debuggable）
+   - 新建运行配置「Lua 真机附加」，选设备和进程后启动
 
-3. **在代码中启用调试**
-   ```lua
-   require("LuaPanda").start("127.0.0.1", 8818)
-   ```
-
-4. **创建调试配置**
-   - 进入 `Run` → `Edit Configurations`
-   - 点击 `+` → `LuaPandaDebugger`
-   - 配置调试参数（主机、端口等）
-
-#### Emmy 调试器配置
-1. **创建 Emmy 调试配置**
-   - 进入 `Run` → `Edit Configurations`
-   - 点击 `+` → `Emmy Debugger(NEW)` 或 `Emmy Attach Debugger`
-   - 设置目标 Lua 应用程序路径
-
-2. **启动调试会话**
-   - 设置断点
-   - 点击调试按钮启动
+3. **调试设置**在 `Settings` → `Tools` → `EmmyLua 调试`：变量展示规则、MCP 安装等；出错时暂停在断点窗口的「Lua 错误」里打开
 
 ### 类型注解使用
 
@@ -208,10 +183,10 @@ end
 ## 📝 更新日志
 
 ### 最新版本特性 (v1.3.0+)
-- ✅ **增强的 LuaPanda 调试支持**
-  - 自动版本检测和更新提醒
-  - 改进的断点管理和调试体验
-  - 更稳定的远程调试连接
+- ✅ **重写调试部分**
+  - 只保留「Lua 附加」和「Lua 真机附加」两种方式，删除旧的 Emmy / LuaPanda 调试
+  - 新协议 v3、新原生调试核心，运行时开销更低
+  - 内置 MCP 调试工具
 - ✅ **改进的代码补全算法**
   - 更准确的类型推断
   - 更快的补全响应速度
@@ -270,7 +245,7 @@ end
 
 遇到问题？请通过以下方式反馈：
 
-1. **GitHub Issues**：[提交问题](https://github.com/tangzx/IntelliJ-EmmyLua/issues)
+1. **GitHub Issues**：[提交问题](https://github.com/fixcode-h/IntelliJ-EmmyLua/issues)
 2. **功能请求**：使用 "enhancement" 标签
 3. **Bug 报告**：使用 "bug" 标签，并提供详细的复现步骤
 
@@ -287,24 +262,20 @@ end
 
 ## 🙏 致谢
 
-- 感谢所有 [贡献者](https://github.com/tangzx/IntelliJ-EmmyLua/graphs/contributors) 的努力
+- 本项目最初基于 [@tangzx](https://github.com/tangzx) 的 EmmyLua 插件和 EmmyLua 团队的 EmmyLuaDebugger 开发，现独立维护；原作者版权声明按 Apache License 2.0 保留在源码和 [LICENSE](LICENSE.txt) 中
 - 感谢 JetBrains 提供的优秀 IDE 平台
 - 感谢 Lua 社区的支持和反馈
-- 特别感谢 LuaPanda 项目的集成支持
 
 ## 📞 联系方式
 
-- **作者：** [**@tangzx** 阿唐](https://github.com/tangzx)
-- **邮箱：** love.tangzx@qq.com
-- **问题反馈：** [GitHub Issues](https://github.com/tangzx/IntelliJ-EmmyLua/issues)
-- **讨论交流：** [GitHub Discussions](https://github.com/tangzx/IntelliJ-EmmyLua/discussions)
+- **仓库：** [github.com/fixcode-h/IntelliJ-EmmyLua](https://github.com/fixcode-h/IntelliJ-EmmyLua)
+- **问题反馈：** [GitHub Issues](https://github.com/fixcode-h/IntelliJ-EmmyLua/issues)
 
 ## 🌟 支持项目
 
 如果这个插件对您有帮助，请考虑：
 
 - 给我们一个 ⭐ **Star**
-- 在 [JetBrains 插件市场](https://plugins.jetbrains.com/plugin/9768-emmylua) 留下评价
 - 分享给其他 Lua 开发者
 - 参与项目贡献
 

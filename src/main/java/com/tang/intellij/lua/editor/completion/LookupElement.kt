@@ -56,7 +56,7 @@ open class LuaTypeGuessableLookupElement(name: String, val psi: LuaPsiElement, p
     }
 
     /**
-     * https://github.com/tangzx/IntelliJ-EmmyLua/issues/54
+     * 原 EmmyLua 插件的问题 #54
      * @see [com.tang.intellij.lua.documentation.LuaDocumentationProvider]
      */
     override fun getObject(): Any {
@@ -139,7 +139,7 @@ class TyFunctionLookupElement(name: String,
     }
 
     /**
-     * https://github.com/tangzx/IntelliJ-EmmyLua/issues/54
+     * 原 EmmyLua 插件的问题 #54
      */
     override fun getObject(): Any {
         return psi

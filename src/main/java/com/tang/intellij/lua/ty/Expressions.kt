@@ -236,7 +236,7 @@ private fun LuaNameExpr.infer(context: SearchContext): ITy {
          *     self.name = '123'
          * end
          *
-         * https://github.com/EmmyLua/IntelliJ-EmmyLua/issues/93
+         * 原 EmmyLua 插件的问题 #93
          * the type of 'self' should be same of 'xx'
          */
         if (Ty.isInvalid(type)) {

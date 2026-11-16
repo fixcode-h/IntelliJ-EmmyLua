@@ -1,6 +1,5 @@
 -- Tutorial for EmmyDoc
--- https://emmylua.github.io
--- https://github.com/EmmyLua
+-- https://github.com/fixcode-h/IntelliJ-EmmyLua
 
 --------------------------------------------------------------------------------
 -- Tutorial for annotation "@class" and "@field"

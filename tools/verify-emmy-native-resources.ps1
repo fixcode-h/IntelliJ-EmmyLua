@@ -8,7 +8,7 @@ $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $expected = @{}
 foreach ($architecture in @('x86', 'x64')) {
-    foreach ($name in @('EasyHook.dll', 'emmy_core.dll', 'emmy_hook.dll', 'emmy_tool.exe')) {
+    foreach ($name in @('EasyHook.dll', 'emmy_tool.exe', 'emmy_attach.dll')) {
         $resource = "debugger/emmy/windows/$architecture/$name"
         $source = Join-Path $NativeRoot "$architecture/$name"
         $expected[$resource] = (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash
