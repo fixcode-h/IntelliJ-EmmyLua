@@ -18,7 +18,7 @@
 | 两个 Native harness，临时放行前 | 无专用 Allow | TCP 测试 0/2 |
 | 相同 Native harness，临时放行后 | 仅两个精确 exe、仅 IPv4 回环入站 TCP | 2/2，总耗时 0.63 秒 |
 
-临时测试运行于 `EmmyLuaDebugger/build-runtime-20260910`（Windows x64、Lua 5.4 source）。报告为该目录的 `tcp-approved-results.xml`，时间 17:46。该结果不代表其他架构/配置的 TCP 测试也已经执行。
+临时测试运行于 `native/build-runtime-20260910`（Windows x64、Lua 5.4 source）。报告为该目录的 `tcp-approved-results.xml`，时间 17:46。该结果不代表其他架构/配置的 TCP 测试也已经执行。
 
 临时规则使用本次独立 GUID 命名，脚本在 `finally` 中删除规则。现场再次查询 `EmmyLua-Native-TCP-Test-*`，结果为 0；Windows 防火墙事件 2097/2052 也记录了本次两条规则的添加和删除。没有留下持久 Allow，没有关闭防火墙。
 
