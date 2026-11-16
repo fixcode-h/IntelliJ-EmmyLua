@@ -45,7 +45,7 @@ IDE 进程                                         emmylua_ls 进程（Rust）
 IDE 里只保留不需要语义的东西，全部基于一个**手写的 Kotlin 词法器**（不再用 JFlex 生成代码）：
 
 - 文件类型 `Lua`（`.lua`、`.lua.txt`），语法高亮（关键字、字符串、数字、注释、`---@` 注解标签），配色页。
-- 括号匹配、`--` 注释切换、引号配对、回车缩进。
+- 括号匹配、`--` 注释切换、引号配对、回车缩进和补 `end`、Surround With、后缀模板（都只看 token，见 §2.3）。
 - 扁平 PSI：`ParserDefinition` 只把 token 平铺在文件节点下，不建语法树。平台的注释、括号、代码片段编辑器、断点都靠它工作，开销等于一次词法扫描。
 
 语义上的东西（变量是局部还是全局、类名、函数调用）由 emmylua_ls 的**语义高亮**叠加上色。
@@ -75,7 +75,12 @@ IDE 里只保留不需要语义的东西，全部基于一个**手写的 Kotlin 
 | 库目录、源码根 | Lua SDK、模块类型、Lua 源码根 | `.emmyrc.json` 的 `workspace.library` / `workspaceRoots`，加上插件自动探测（§3） |
 | Lua 版本 | 设置里的语言级别 | `.emmyrc.json` 的 `runtime.version`；插件设置里选的版本作为默认值下发 |
 | 新建 Lua 文件、实时模板 | 有 | 保留（只靠文件类型判断上下文，不用 PSI） |
-| 后缀模板、Surround With、内联变量、移动文件改 require | 有 | **去掉**。LSP 没有对应能力；移动文件时 emmylua_ls 通过 `willRenameFiles` 能改 require 的就会改 |
+| 回车补 `end` / `until` / `}`、块内缩进、打 `end` 回退缩进、`---` 回车续行 | EnterHandler + FormattingModel | **基于词法器提供**（`editor/LuaBlocks`、`LuaEnterHandler`、`LuaLineIndentProvider`、`LuaTypedHandler`）。emmylua_ls 0.25.1 声明了 `onTypeFormatting` 但处理函数返回空，所以缩进在 IDE 侧做 |
+| 后缀模板、Surround With | 有 | **基于词法器提供**：后缀模板只认名字 / 成员链 / 下标 / 调用 / 括号表达式，认不准不提供；Surround 按选中的整行包。emmylua_ls 另有 `@` 触发的后缀补全（`completion.postfix`） |
+| 生成函数注解（`---@param` / `---@return`） | 意图动作 | **基于词法器提供**（意图动作「生成函数注解」）：emmylua_ls 0.25.1 的 `codeAction` 没有这一项 |
+| 「外部库」节点、拼写检查词典 | 库提供者、`lua.dic` | **提供**：`AdditionalLibraryRootsProvider` 只展示 emmylua_ls 用的库目录（UE 声明、额外库）；`lua.dic` 补回 |
+| `.emmyrc.json` 补全和校验 | 无 | JSON Schema（拷自 emmylua-analyzer-rust，版本随 `emmyLuaLsVersion`），JSON 插件为可选依赖 |
+| 内联变量、移动文件改 require | 有 | **去掉**。LSP 没有对应能力；移动文件时 emmylua_ls 通过 `willRenameFiles` 能改 require 的就会改 |
 | Lua SDK、Lua 模块类型、LuaCheck 外部工具 | 有 | **去掉**（诊断由 emmylua_ls 做） |
 
 ### 2.4 配置

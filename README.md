@@ -25,12 +25,13 @@ EmmyLua 是一个功能强大的 Lua 语言支持插件，专为 IntelliJ IDEA �
 语言支持按 [语言支持迁移到 LSP](docs/design/lsp-migration.md) 改成了 IDE 只做编辑器外壳、语义分析交给 [emmylua_ls](https://github.com/EmmyLuaLs/emmylua-analyzer-rust)（EmmyLua 官方的 Rust 语言服务器，VS Code 版 EmmyLua 用的也是它）。IDE 里通过 [LSP4IJ](https://github.com/redhat-developer/lsp4ij) 和它通信，大项目不再在 IDE 里建 Lua 索引。
 
 - **IDE 侧**：Lua 文件类型（`.lua`、`.lua.txt`）、语法和注解标签高亮、括号匹配、注释切换、新建 Lua 文件和实时模板
+- **编辑小功能**（只靠词法器，不建语法树）：`then` / `do` / `function(...)` / `repeat` / `{` 后回车自动缩进并补上 `end` / `until` / `}`，打 `end` / `else` 自动回退缩进，`---` 注解行回车续行；Surround With（`if` / `do` / `for` / `function` / `--region`）；后缀模板（`.if` `.ifnot` `.nn` `.null` `.local` `.return` `.print` `.fori` `.forp` `.fora` `.par`）；意图动作「生成函数注解」；`.emmyrc.json` / `.luarc.json` 的字段补全和校验（JSON Schema）；项目树「外部库」里能浏览 UE 声明和额外库目录；拼写检查认得 Lua 关键字和标准库名
 - **emmylua_ls 提供**：补全、跳转到定义 / 实现、查找引用、重命名、悬停文档、参数提示、内联提示、诊断和快速修复、格式化、语义高亮、代码折叠、结构视图、转到符号、调用层次
 - **新版注解语法**：泛型、`---@enum`、`---@overload` 等，和 VS Code / Neovim 上的 EmmyLua 行为一致
 - **标准库**：emmylua_ls 内置，按配置的 Lua 版本（5.1–5.4、LuaJIT）选择
 - **Unreal Engine / UnLua**：IDE 只打开 UE 项目里的 `Content/Script` 时，插件自动往上找 `.uproject`，把 UnLua「Generate IntelliSense」生成的目录（如 `Plugins/UnLua/Intermediate/IntelliSense`）加进库目录，蓝图类型和 `UE.xxx` 都能补全和跳转
 
-以前的 PSI 实现里这些功能**已去掉**：后缀模板、Surround With、彩虹变量、Lua SDK 和 Lua 模块类型、LuaCheck 外部工具（诊断改由 emmylua_ls 做）。
+以前的 PSI 实现里这些功能**已去掉**：彩虹变量、内联变量等重构、Lua SDK 和 Lua 模块类型、LuaCheck 外部工具（诊断改由 emmylua_ls 做）。
 
 ### 🐛 调试功能
 - **Lua 附加** - 附加到本机正在运行的进程（Windows），不用改游戏代码
