@@ -10,6 +10,7 @@ import com.fixcode.intellij.lua.debug.engine.SourceMapper
 import com.fixcode.intellij.lua.debug.engine.fake.EventRecorder
 import com.fixcode.intellij.lua.debug.engine.fake.FakeFrame
 import com.fixcode.intellij.lua.debug.engine.fake.FakeRuntime
+import com.fixcode.intellij.lua.debug.engine.transport.Connector
 import com.fixcode.intellij.lua.debug.engine.transport.TcpConnector
 import com.fixcode.intellij.lua.debug.protocol.ProtocolMessage
 import com.fixcode.intellij.lua.debug.protocol.Welcome
@@ -50,9 +51,10 @@ abstract class BehaviorTestBase {
     protected fun newSession(
         config: SessionConfig = testConfig(),
         mapper: SourceMapper = SourceMapper(),
-        port: Int = runtime.port
+        port: Int = runtime.port,
+        wrap: (Connector) -> Connector = { it }
     ): DebugSession {
-        session = DebugSession(config, TcpConnector("127.0.0.1", port), mapper)
+        session = DebugSession(config, wrap(TcpConnector("127.0.0.1", port)), mapper)
         events = EventRecorder(session)
         extraSessions += session
         return session
@@ -63,11 +65,12 @@ abstract class BehaviorTestBase {
         caps: List<String> = FakeRuntime.ALL_CAPS,
         config: SessionConfig = testConfig(),
         mapper: SourceMapper = SourceMapper(),
+        wrap: (Connector) -> Connector = { it },
         beforeStart: (DebugSession) -> Unit = {}
     ): Welcome {
         if (!this::runtime.isInitialized) startRuntime(caps)
         if (runtime.vm(1) == null) runtime.addVm("GameLua")
-        newSession(config, mapper)
+        newSession(config, mapper, wrap = wrap)
         beforeStart(session)
         return session.start().await()
     }

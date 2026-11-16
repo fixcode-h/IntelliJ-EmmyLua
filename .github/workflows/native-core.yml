@@ -96,11 +96,16 @@ jobs:
         run: |
           $out = "out/${{ matrix.arch }}"
           New-Item -ItemType Directory -Force $out | Out-Null
-          Get-ChildItem build/native-${{ matrix.arch }} -Recurse -Include emmy_tool.exe,emmy_attach.dll,EasyHook.dll |
-            Where-Object { $_.FullName -match "Release" } | Copy-Item -Destination $out
+          # 连同 PDB 一起放进产物：发布时 PDB 单独打包，这里先确认每个都生成了
+          foreach ($name in "emmy_tool.exe", "emmy_attach.dll", "EasyHook.dll", "emmy_tool.pdb", "emmy_attach.pdb", "EasyHook.pdb") {
+            $file = Get-ChildItem build/native-${{ matrix.arch }} -Recurse -Filter $name | Where-Object { $_.FullName -match "Release" } | Select-Object -First 1
+            if (-not $file) { Write-Error "缺少 $name"; exit 1 }
+            Copy-Item $file.FullName -Destination $out
+          }
           foreach ($v in "51", "52", "53", "54") {
             New-Item -ItemType Directory -Force "$out/lua$v" | Out-Null
             Copy-Item build/core-${{ matrix.arch }}-$v/Release/emmy_debugger_core.dll "$out/lua$v/"
+            Copy-Item build/core-${{ matrix.arch }}-$v/Release/emmy_debugger_core.pdb "$out/lua$v/"
           }
           Get-ChildItem -Recurse $out | Select-Object FullName, Length
       - uses: actions/upload-artifact@v4

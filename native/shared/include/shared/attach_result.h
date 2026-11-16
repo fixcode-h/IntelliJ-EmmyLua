@@ -13,6 +13,9 @@ enum Result : uint32_t {
 	kLuaApiMissing = 4,  // 核心要用的 lua_* 在模块里找不到
 	kListenFailed = 5,   // 端口被占用等
 	kHookFailed = 6,     // 一个 Lua 入口都没挂上
+	// 还没有 Lua 模块（例如 UE 编辑器里 Game 还没启动）：emmy_attach 留在进程里，后台每秒找一次，
+	// 找到后自动挂钩并开始监听端口。emmy_tool 把它当成功，输出 waiting:true，IDE 显示「等待 Lua 加载」并持续连端口。
+	kWaitingForLua = 7,
 };
 
 inline const char* ResultMessage(uint32_t code) {
@@ -23,6 +26,7 @@ inline const char* ResultMessage(uint32_t code) {
 	case kCoreLoadFailed: return "加载调试核心 emmy_debugger_core.dll 失败：检查插件目录下 x86/x64 的 lua5X 子目录是否完整";
 	case kLuaApiMissing: return "目标进程的 Lua 模块缺少调试需要的函数（可能被裁剪或改名）";
 	case kListenFailed: return "调试端口监听失败（可能被占用），请重启目标进程后再附加";
+	case kWaitingForLua: return "目标进程还没有加载 Lua，调试器已就位，Lua 加载后自动连上";
 	case kHookFailed: return "没能挂上任何 Lua 入口函数（lua_pcall / lua_pcallk / lua_resume）";
 	default: return "附加初始化失败";
 	}

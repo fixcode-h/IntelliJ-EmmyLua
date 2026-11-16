@@ -12,6 +12,10 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.fixcode.intellij.lua.debug.engine.transport.Connector
+import com.fixcode.intellij.lua.debug.engine.transport.MessageConnection
+import com.fixcode.intellij.lua.debug.engine.transport.TargetGoneException
+import java.util.concurrent.atomic.AtomicInteger
 
 /** 断线重连（真机 App 切后台、Wi-Fi 切换必需）。 */
 class ReconnectBehaviorTest : BehaviorTestBase() {
@@ -63,6 +67,53 @@ class ReconnectBehaviorTest : BehaviorTestBase() {
         runtime.ignorePings = true
         events.await<DebugEvent.Terminated>(timeoutMillis = 3_000)
         assertEquals(SessionState.TERMINATED, session.state)
+    }
+
+    /** 模拟本机附加：进程是否存活可控，进程不在时建连报 TargetGoneException。 */
+    private class LocalTarget(private val inner: Connector) : Connector {
+        @Volatile var alive = true
+        val connects = AtomicInteger()
+
+        override fun connect(): MessageConnection {
+            connects.incrementAndGet()
+            if (!alive) throw TargetGoneException("进程 42 已退出，调试结束")
+            return inner.connect()
+        }
+
+        override fun isTargetAlive(): Boolean = alive
+    }
+
+    @Test
+    fun `进程退出后不再重连 直接结束`() {
+        lateinit var target: LocalTarget
+        connect(wrap = { LocalTarget(it).also { t -> target = t } })
+        target.alive = false
+        runtime.dropClient()
+        val terminated = events.await<DebugEvent.Terminated>()
+        assertTrue(terminated.reason, terminated.reason.contains("已退出"))
+        assertEquals(SessionState.TERMINATED, session.state)
+        // 只试了一次就停，没有按重连次数反复建连
+        assertEquals(2, target.connects.get())
+    }
+
+    @Test
+    fun `心跳没回应但进程还在时保持连接`() {
+        lateinit var target: LocalTarget
+        connect(
+            config = testConfig().copy(heartbeatIntervalMillis = 100, heartbeatMaxMisses = 2),
+            wrap = { LocalTarget(it).also { t -> target = t } }
+        )
+        runtime.ignorePings = true
+        Thread.sleep(1_200)
+        assertEquals(SessionState.RUNNING, session.state)
+        assertEquals(1, runtime.connections)
+        assertTrue(events.all().none { it is DebugEvent.Disconnected })
+
+        // 进程退出后下一轮心跳超时就结束会话，不重连
+        target.alive = false
+        val terminated = events.await<DebugEvent.Terminated>(timeoutMillis = 3_000)
+        assertTrue(terminated.reason, terminated.reason.contains("目标进程已退出"))
+        assertEquals(1, runtime.connections)
     }
 
     @Test

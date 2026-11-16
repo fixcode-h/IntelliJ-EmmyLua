@@ -54,10 +54,27 @@ jobs:
             Copy-Item build/core-${{ matrix.arch }}-$v/Release/emmy_debugger_core.dll "$out/lua$v/"
           }
           Get-ChildItem -Recurse $out | Select-Object FullName, Length
+          # PDB 不进插件包（太大），按和 DLL 相同的目录结构单独上传到 Release
+          $pdb = "symbols/${{ matrix.arch }}"
+          New-Item -ItemType Directory -Force $pdb | Out-Null
+          foreach ($name in "emmy_tool.pdb", "emmy_attach.pdb", "EasyHook.pdb") {
+            $file = Get-ChildItem build/native-${{ matrix.arch }} -Recurse -Filter $name | Where-Object { $_.FullName -match "Release" } | Select-Object -First 1
+            if (-not $file) { Write-Error "缺少 $name"; exit 1 }
+            Copy-Item $file.FullName -Destination $pdb
+          }
+          foreach ($v in "51", "52", "53", "54") {
+            New-Item -ItemType Directory -Force "$pdb/lua$v" | Out-Null
+            Copy-Item build/core-${{ matrix.arch }}-$v/Release/emmy_debugger_core.pdb "$pdb/lua$v/"
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: release-windows-${{ matrix.arch }}
           path: out/${{ matrix.arch }}
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: symbols-windows-${{ matrix.arch }}
+          path: symbols/${{ matrix.arch }}
           if-no-files-found: error
 
   android-agent:
@@ -166,6 +183,20 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash .github/scripts/fetch-emmylua-ls.sh "" build/emmylua-ls
 
+      # Windows 调试符号：x64 / x86 各一个目录，和插件里 debugger/emmy/windows/<arch> 的结构一致
+      - name: Download Windows symbols
+        uses: actions/download-artifact@v4
+        with:
+          pattern: symbols-windows-*
+          path: ${{ runner.temp }}/symbols
+      - name: Pack Windows symbols
+        run: |
+          set -e
+          mkdir -p build/symbols
+          cd "${{ runner.temp }}/symbols"
+          for arch in x64 x86; do mv "symbols-windows-$arch" "$arch"; done
+          zip -r "$GITHUB_WORKSPACE/build/symbols/emmylua-windows-pdb-v${{ env.NEW_VERSION }}.zip" x64 x86
+
       # 第六步：执行 Gradle 打包命令
       # --- 核心修正点：在这里通过 -P 参数将版本号传递给 Gradle ----
       - name: Build with Gradle
@@ -197,7 +228,9 @@ jobs:
           tag_name: v${{ env.NEW_VERSION }}
           name: Auto Build - v${{ env.NEW_VERSION }}
           prerelease: false
-          files: build/distributions/*.zip
+          files: |
+            build/distributions/*.zip
+            build/symbols/*.zip
 
       # 第八步：更新版本跟踪文件并提交回仓库
       - name: Update and Commit Version Tracking File

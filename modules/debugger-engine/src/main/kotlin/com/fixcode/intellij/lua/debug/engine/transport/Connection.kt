@@ -42,7 +42,20 @@ interface MessageConnection : AutoCloseable {
 fun interface Connector {
     @Throws(IOException::class)
     fun connect(): MessageConnection
+
+    /**
+     * 调试目标（游戏进程）是否还活着：true / false 是确定的结论，null 表示这种目标查不了（手动地址、真机）。
+     * 心跳没回应时引擎靠它区分「进程没了」和「进程还在、只是不响应」（被 VS 等调试器暂停、卡在长帧里）。
+     * 会阻塞，引擎在 IO 线程调用。
+     */
+    fun isTargetAlive(): Boolean? = null
 }
+
+/**
+ * 调试目标已经不在了（进程退出、被关闭），重连没有意义：引擎收到后直接结束会话，不再重试。
+ * [message] 原样显示给用户。
+ */
+class TargetGoneException(message: String) : IOException(message)
 
 class TcpConnector(
     private val host: String,
