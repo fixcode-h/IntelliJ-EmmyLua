@@ -1,0 +1,189 @@
+package com.tang.intellij.lua.debug.engine.e2e
+
+import com.tang.intellij.lua.debug.engine.BreakpointOrigin
+import com.tang.intellij.lua.debug.engine.BreakpointRequest
+import com.tang.intellij.lua.debug.engine.BreakpointVerification
+import com.tang.intellij.lua.debug.engine.DebugEvent
+import com.tang.intellij.lua.debug.engine.DebugSession
+import com.tang.intellij.lua.debug.engine.MappingRule
+import com.tang.intellij.lua.debug.engine.PauseInfo
+import com.tang.intellij.lua.debug.engine.ReconnectPolicy
+import com.tang.intellij.lua.debug.engine.SessionConfig
+import com.tang.intellij.lua.debug.engine.SessionState
+import com.tang.intellij.lua.debug.engine.SourceMapper
+import com.tang.intellij.lua.debug.engine.fake.EventRecorder
+import com.tang.intellij.lua.debug.engine.transport.TcpConnector
+import com.tang.intellij.lua.debug.protocol.Capabilities
+import com.tang.intellij.lua.debug.protocol.EvalModes
+import com.tang.intellij.lua.debug.protocol.PauseReasons
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
+import org.junit.Before
+import org.junit.Test
+import java.io.File
+import java.net.ServerSocket
+import java.nio.file.Files
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.TimeUnit
+
+/**
+ * 对着真的原生核心（native/emmy_debugger_core）跑引擎：协议两端各自的单测都过了，不代表互相能对上。
+ *
+ * 需要先编出宿主程序，再用环境变量指给 Gradle：
+ * ```
+ * cmake -S native/emmy_debugger_core -B build/core && cmake --build build/core --target emmy_core_ide_host
+ * EMMY_CORE_HOST=$PWD/build/core/emmy_core_ide_host ./gradlew :modules:debugger-engine:test
+ * ```
+ * 没设置时整组跳过。
+ */
+class NativeRuntimeE2eTest {
+    private lateinit var host: Process
+    private lateinit var root: File
+    private lateinit var script: File
+    private var port = 0
+    private val sessions = ArrayList<DebugSession>()
+
+    @Before
+    fun startHost() {
+        val binary = System.getProperty("emmy.core.host")?.let(::File)
+        assumeTrue("没有设置 EMMY_CORE_HOST，跳过真 runtime 用例", binary != null && binary.canExecute())
+        root = Files.createTempDirectory("emmy-e2e").toFile()
+        script = File(root, "game/main.lua").apply {
+            parentFile.mkdirs()
+            writeText(SCRIPT)
+        }
+        port = ServerSocket(0).use { it.localPort }
+        host = ProcessBuilder(binary!!.path, port.toString(), script.path, "@game/main.lua")
+            .redirectError(ProcessBuilder.Redirect.INHERIT)
+            .start()
+        val ready = CompletableFuture.supplyAsync { host.inputStream.bufferedReader().readLine() }.get(10, TimeUnit.SECONDS)
+        assertEquals("READY", ready)
+    }
+
+    @After
+    fun stopHost() {
+        sessions.forEach { it.close() }
+        if (this::host.isInitialized) {
+            host.outputStream.close()
+            if (!host.waitFor(5, TimeUnit.SECONDS)) host.destroyForcibly()
+        }
+        if (this::root.isInitialized) root.deleteRecursively()
+    }
+
+    private fun session(): Pair<DebugSession, EventRecorder> {
+        val config = SessionConfig(
+            name = "e2e", requestTimeoutMillis = 5_000, handshakeTimeoutMillis = 5_000,
+            heartbeatIntervalMillis = 0, reconnect = ReconnectPolicy.NONE
+        )
+        val mapper = SourceMapper(listOf(MappingRule("game", File(root, "game").path)))
+        val session = DebugSession(config, TcpConnector("127.0.0.1", port), mapper)
+        sessions += session
+        val events = EventRecorder(session)
+        session.start().get(10, TimeUnit.SECONDS)
+        return session to events
+    }
+
+    private fun <T> CompletableFuture<T>.await(): T = get(10, TimeUnit.SECONDS)
+
+    private fun EventRecorder.pause(): PauseInfo = await<DebugEvent.Paused>(10_000).pause
+
+    @Test
+    fun `握手后看到宿主的 VM`() {
+        val (session, _) = session()
+        assertEquals(SessionState.RUNNING, session.state)
+        assertEquals(listOf("GameVM"), session.vms().map { it.name })
+    }
+
+    @Test
+    fun `断点验证 命中 看栈和变量 单步 继续`() {
+        val (session, events) = session()
+        val id = session.addBreakpoint(BreakpointRequest(script.path, LINE_LOCAL_R)).await()
+        session.syncBreakpoints().await()
+
+        val pause = events.pause()
+        assertEquals(PauseReasons.BREAKPOINT, pause.reason)
+        assertEquals(LINE_LOCAL_R, pause.top!!.line)
+        assertEquals(BreakpointVerification.VERIFIED, session.breakpoints().single { it.id == id }.verification)
+
+        val frames = session.stackTrace(pause).await().frames
+        assertEquals("game/main.lua", frames.first().localPath!!.substringAfter(root.path.replace('\\', '/') + "/"))
+        val locals = session.scopes(frames.first()).await().single { it.name == "locals" }
+        val vars = session.variables(locals).await().variables.associateBy { it.variable.name }
+        assertTrue(vars.keys.toString(), "i" in vars && "t" in vars)
+        val t = session.variables(vars.getValue("t").children()!!).await().variables.associateBy { it.variable.name }
+        assertEquals("\"x\"", t.getValue("name").variable.value)
+
+        if (session.hasCapability(Capabilities.VALUE_PATH)) {
+            assertEquals("3", session.evaluate(pause, "t.list[3]", mode = EvalModes.VALUE_PATH).await().value)
+        }
+
+        session.removeBreakpoint(id).await()
+        session.stepInto(pause.vmId).await()
+        val stepped = events.pause()
+        assertEquals(PauseReasons.STEP, stepped.reason)
+        assertEquals(LINE_ADD_BODY, stepped.top!!.line)
+
+        session.resume(stepped.vmId).await()
+        events.await<DebugEvent.Resumed>()
+    }
+
+    @Test
+    fun `条件断点只在条件成立时停`() {
+        val (session, events) = session()
+        assumeTrue(session.hasCapability(Capabilities.CONDITION))
+        session.addBreakpoint(BreakpointRequest(script.path, LINE_LOCAL_R, condition = "i % 7 == 0")).await()
+        val pause = events.pause()
+        val frame = session.stackTrace(pause).await().frames.first()
+        val locals = session.scopes(frame).await().single { it.name == "locals" }
+        val i = session.variables(locals).await().variables.single { it.variable.name == "i" }.variable.value.toLong()
+        assertEquals(0, i % 7)
+    }
+
+    @Test
+    fun `Probe 断点不停 记录采集值`() {
+        val (session, events) = session()
+        assumeTrue(session.hasCapability(Capabilities.CAPTURE))
+        session.addBreakpoint(
+            BreakpointRequest(script.path, LINE_LOCAL_R, capture = listOf("i"), autoContinue = true, origin = BreakpointOrigin.AGENT)
+        ).await()
+        val hit = events.await<DebugEvent.BreakpointHit>(10_000).hit
+        assertEquals("i", hit.captures.single().expression)
+        events.assertNone<DebugEvent.Paused>(300)
+    }
+
+    @Test
+    fun `断开后游戏继续运行 可以重新连上`() {
+        val (first, events) = session()
+        first.addBreakpoint(BreakpointRequest(script.path, LINE_LOCAL_R)).await()
+        events.pause()
+        first.stop().await()
+
+        // 断开时 runtime 恢复所有 VM 并清空断点：新会话不会立刻停在旧断点上
+        val (second, secondEvents) = session()
+        assertEquals(SessionState.RUNNING, second.state)
+        secondEvents.assertNone<DebugEvent.Paused>(300)
+    }
+
+    private companion object {
+        const val LINE_ADD_BODY = 4
+        const val LINE_LOCAL_R = 9
+
+        val SCRIPT = """
+            local M = {}
+            local counter = 0
+            function M.add(a, b)
+              local sum = a + b
+              return sum
+            end
+            function M.tick(i)
+              local t = { name = "x", list = {1, 2, 3} }
+              local r = M.add(i, 1)
+              counter = counter + r
+              return r
+            end
+            return M
+        """.trimIndent() + "\n"
+    }
+}

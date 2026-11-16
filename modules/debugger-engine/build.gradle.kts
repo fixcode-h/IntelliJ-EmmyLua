@@ -40,4 +40,6 @@ java {
 tasks.test {
     // 行为用例走本机回环 TCP，单个用例有超时保护；并行跑互不影响
     maxParallelForks = (Runtime.getRuntime().availableProcessors() / 2).coerceAtLeast(1)
+    // 真 runtime 端到端用例：设置了 EMMY_CORE_HOST（native/emmy_debugger_core 编出的 emmy_core_ide_host）才跑，否则跳过
+    System.getenv("EMMY_CORE_HOST")?.let { systemProperty("emmy.core.host", it) }
 }
