@@ -175,6 +175,15 @@ static void TestCapture() {
     CHECK(backend.replacements.size() == 1);
     CHECK(capture.Describe() == "lua_pcallk,lua_resume,lua_close,lua_newstate");
 
+    // Arm 之前（核心还没解析 Lua API）到达的回调一律忽略
+    backend.Fire(reinterpret_cast<void*>(0x1000), reinterpret_cast<lua_State*>(0x900));
+    CHECK(g_coreCalls.empty());
+    // 被替换的 lua_newstate 交给核心的是 trampoline，核心自己的临时 state 不会被当成游戏 VM
+    *backend.replacements[0].original = reinterpret_cast<void*>(FakeOrigNewState);
+    CHECK(capture.OriginalFor("lua_newstate") == reinterpret_cast<void*>(FakeOrigNewState));
+    CHECK(capture.OriginalFor("lua_gettop") == nullptr);
+    capture.Arm();
+
     auto* L1 = reinterpret_cast<lua_State*>(0x100);
     auto* L2 = reinterpret_cast<lua_State*>(0x200);
     backend.Fire(reinterpret_cast<void*>(0x1000), L1);
@@ -197,7 +206,6 @@ static void TestCapture() {
     CHECK(g_coreCalls.size() == 2);
 
     // lua_newstate 替身：调原函数并登记新 VM
-    *backend.replacements[0].original = reinterpret_cast<void*>(FakeOrigNewState);
     using NewState = lua_State* (*)(void*, void*);
     lua_State* created = reinterpret_cast<NewState>(backend.replacements[0].replacement)(nullptr, nullptr);
     CHECK(created == reinterpret_cast<lua_State*>(0x5000));
@@ -207,6 +215,22 @@ static void TestCapture() {
     backend.Fire(reinterpret_cast<void*>(0x3000), L1);
     CHECK(g_coreCalls.back().find("unreg") == 0);
     CHECK(capture.KnownVmCount() == 2);
+}
+
+static uint64_t FailRegister(lua_State*, const char*) { return 0; }
+static const char* FakeLastError() { return "找不到 Lua 函数：lua_setlocal"; }
+
+static void TestRegisterFailureIsReported() {
+    FakeBackend backend;
+    CoreApi api = DefaultCoreApi();
+    api.registerVm = FailRegister;
+    api.lastError = FakeLastError;
+    LuaCapture capture(backend, api);
+    std::string err;
+    CHECK(capture.Install({{"lua_pcallk", 0x1000}}, false, err));
+    capture.Arm();
+    backend.Fire(reinterpret_cast<void*>(0x1000), reinterpret_cast<lua_State*>(0x100));
+    CHECK(capture.LastError().find("lua_setlocal") != std::string::npos);
 }
 
 static void TestCaptureNeedsEntry() {
@@ -248,6 +272,7 @@ int main() {
     TestFindModule();
     TestCapture();
     TestCaptureNeedsEntry();
+    TestRegisterFailureIsReported();
     TestStatusFile();
     TestUnavailableBackend();
     if (g_failures == 0) std::printf("agent_host_test: all passed\n");

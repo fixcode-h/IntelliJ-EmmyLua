@@ -19,6 +19,8 @@ class TestClient {
 public:
 	~TestClient();
 	bool Connect(const std::string& host, int port, int timeoutMs = 3000);
+	// Linux / Android：连 Unix 抽象 socket（name 不含前导 \0），Android 真机附加的 agent 就监听这种 socket
+	bool ConnectAbstract(const std::string& name, int timeoutMs = 3000);
 	// 发请求并等回复；超时返回 null
 	json Request(const std::string& command, json args = json::object(), int timeoutMs = 5000);
 	// 等某个事件（跳过不满足条件的）；超时返回 null

@@ -23,6 +23,7 @@ struct CoreApi {
     uint64_t (*registerVm)(lua_State* L, const char* discovery);
     void (*unregisterVm)(lua_State* L);
     int (*waitForClient)(int timeoutMs); // 可为空
+    const char* (*lastError)();         // 可为空
 };
 
 CoreApi DefaultCoreApi();
@@ -36,6 +37,13 @@ public:
     // functions：函数名 → 运行时地址。至少要有 lua_pcallk / lua_pcall / lua_resume 之一。
     bool Install(const std::map<std::string, uintptr_t>& functions, bool waitForIde, std::string& err);
 
+    // Install 之后、核心解析完 Lua API 之后再调用：之前到达的回调直接忽略，避免核心在 API 未就绪时登记 VM。
+    void Arm();
+
+    // 被 Replace 的函数返回调用原函数的入口（trampoline），否则返回 nullptr。
+    // 核心内部用 lua_newstate 建临时 state（语法检查）时走 trampoline，不会被当成游戏 VM。
+    void* OriginalFor(const std::string& name) const;
+
     // 由 worker 线程周期调用：捕获窗口结束后撤掉临时 intercept。
     void Tick(Clock::time_point now = Clock::now());
 
@@ -47,6 +55,8 @@ public:
     bool CaptureActive() const { return captureActive_.load(); }
     size_t KnownVmCount();
     std::string Describe();
+    // 最近一次登记 VM 失败的原因（核心 Emmy_LastError），没有则为空
+    std::string LastError();
 
     // 抓到第一个 L 后保留 intercept 的时间。
     static constexpr std::chrono::milliseconds kCaptureWindow{3000};
@@ -64,9 +74,11 @@ private:
     std::vector<void*> persistentHandles_;
     std::vector<std::string> hookedNames_;
     std::atomic<bool> captureActive_{false};
+    std::atomic<bool> armed_{false};
     bool firstCaptured_ = false;
     bool waitedForIde_ = false;
     Clock::time_point firstCaptureAt_;
+    std::string lastError_;
 };
 
 } // namespace emmy_agent

@@ -51,6 +51,7 @@ CoreApi DefaultCoreApi() {
     api.registerVm = RegisterVmWrapper;
     api.unregisterVm = UnregisterVmWrapper;
     api.waitForClient = Emmy_WaitForClient; // 弱符号，可能为空
+    api.lastError = Emmy_LastError;          // 弱符号，可能为空
     return api;
 }
 
@@ -88,6 +89,7 @@ bool LuaCapture::Install(const std::map<std::string, uintptr_t>& functions, bool
                               : "无法 hook 抓取入口（" + lastErr + "）";
         return false;
     }
+    // 先不开始抓：等 Arm()
     captureActive_ = true;
 
     // 常驻：VM 生命周期。失败只告警，不影响首次附加。
@@ -119,14 +121,28 @@ bool LuaCapture::Install(const std::map<std::string, uintptr_t>& functions, bool
     return true;
 }
 
+void LuaCapture::Arm() { armed_ = true; }
+
+void* LuaCapture::OriginalFor(const std::string& name) const {
+    if (name == "lua_newstate") return reinterpret_cast<void*>(g_origNewState);
+    if (name == "luaL_newstate") return reinterpret_cast<void*>(g_origLNewState);
+    return nullptr;
+}
+
 void LuaCapture::RegisterLocked(lua_State* L, const char* discovery) {
     if (!known_.insert(L).second) return;
     uint64_t vmId = core_.registerVm(L, discovery);
+    if (vmId == 0) {
+        const char* e = core_.lastError != nullptr ? core_.lastError() : nullptr;
+        lastError_ = std::string("登记 VM 失败：") + (e != nullptr && e[0] != '\0' ? e : "未知原因");
+        AGENT_LOGE("%s", lastError_.c_str());
+        return;
+    }
     AGENT_LOGI("登记 VM %p（%s）→ vmId %llu", static_cast<void*>(L), discovery, static_cast<unsigned long long>(vmId));
 }
 
 void LuaCapture::OnCaptureEntry(lua_State* L, const char* via) {
-    if (L == nullptr || !captureActive_.load(std::memory_order_relaxed)) return;
+    if (L == nullptr || !armed_.load(std::memory_order_acquire) || !captureActive_.load(std::memory_order_relaxed)) return;
     bool shouldWait = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -149,6 +165,7 @@ void LuaCapture::OnCaptureEntry(lua_State* L, const char* via) {
 }
 
 void LuaCapture::OnNewState(lua_State* L, const char* via) {
+    if (!armed_.load(std::memory_order_acquire)) return;
     std::lock_guard<std::mutex> lock(mutex_);
     RegisterLocked(L, via);
 }
@@ -179,6 +196,11 @@ void LuaCapture::Tick(Clock::time_point now) {
 size_t LuaCapture::KnownVmCount() {
     std::lock_guard<std::mutex> lock(mutex_);
     return known_.size();
+}
+
+std::string LuaCapture::LastError() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return lastError_;
 }
 
 std::string LuaCapture::Describe() {

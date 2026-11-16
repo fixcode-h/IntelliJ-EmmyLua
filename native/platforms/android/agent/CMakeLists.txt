@@ -26,7 +26,8 @@ add_library(emmylua_agent_common STATIC
         ${AGENT_SRC}/agent_config.cpp
         ${AGENT_SRC}/module_info.cpp
         ${AGENT_SRC}/status_file.cpp
-        ${AGENT_SRC}/lua_capture.cpp)
+        ${AGENT_SRC}/lua_capture.cpp
+        ${AGENT_SRC}/agent_runner.cpp)
 target_include_directories(emmylua_agent_common PUBLIC ${AGENT_SRC})
 target_compile_definitions(emmylua_agent_common PUBLIC EMMY_AGENT_VERSION="${EMMY_AGENT_VERSION}")
 if(NOT MSVC)
@@ -120,4 +121,39 @@ elseif(EMMY_AGENT_BUILD_TESTS)
             FIXTURE_PATH="$<TARGET_FILE:agent_test_fixture>")
     add_dependencies(agent_host_test agent_test_fixture)
     add_test(NAME agent_host_test COMMAND agent_host_test)
+
+    # ---- 端到端：真 Lua 5.4 + agent 主流程 + 真调试核心（dynamic 模式）+ 测试客户端走协议 v3 ----
+    set(EMMY_CORE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../emmy_debugger_core)
+    if(EXISTS ${EMMY_CORE_DIR}/CMakeLists.txt)
+        set(EMMY_CORE_LUA_MODE dynamic CACHE STRING "" FORCE)
+        set(EMMY_CORE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+        set(EMMY_CORE_BUILD_BENCH OFF CACHE BOOL "" FORCE)
+        add_subdirectory(${EMMY_CORE_DIR} ${CMAKE_CURRENT_BINARY_DIR}/emmy_debugger_core)
+        get_filename_component(EMMY_NATIVE_DIR ${EMMY_CORE_DIR}/.. ABSOLUTE)
+        set(E2E_LUA_DIR ${EMMY_NATIVE_DIR}/third-party/lua-5.4.6/src)
+
+        # 「游戏」：Lua 静态编进一个 so 且符号全部隐藏，和裁剪过导出表的 libUnreal.so 一样 dlsym 找不到
+        file(GLOB E2E_LUA_SRC ${E2E_LUA_DIR}/*.c)
+        list(FILTER E2E_LUA_SRC EXCLUDE REGEX ".*/(lua|luac|onelua)\\.c$")
+        add_library(agent_e2e_fakeunreal SHARED ${E2E_LUA_SRC})
+        target_compile_definitions(agent_e2e_fakeunreal PRIVATE LUA_USE_LINUX)
+        target_compile_options(agent_e2e_fakeunreal PRIVATE -fvisibility=hidden -w)
+        target_link_options(agent_e2e_fakeunreal PRIVATE -Wl,--build-id=sha1)
+        target_link_libraries(agent_e2e_fakeunreal PRIVATE m ${CMAKE_DL_LIBS})
+        set_target_properties(agent_e2e_fakeunreal PROPERTIES OUTPUT_NAME fakeunreal)
+
+        # agent 公共部分要用核心的正式头文件重新编一份
+        add_executable(agent_core_e2e_test tests/agent_core_e2e_test.cpp
+                ${AGENT_SRC}/agent_config.cpp ${AGENT_SRC}/module_info.cpp ${AGENT_SRC}/status_file.cpp
+                ${AGENT_SRC}/lua_capture.cpp ${AGENT_SRC}/agent_runner.cpp ${AGENT_SRC}/hook_unavailable.cpp
+                ${EMMY_CORE_DIR}/tests/test_client.cpp)
+        target_include_directories(agent_core_e2e_test PRIVATE ${AGENT_SRC} ${EMMY_CORE_DIR}/src ${EMMY_CORE_DIR}/tests
+                ${EMMY_NATIVE_DIR}/third-party/nlohmann/include)
+        target_compile_definitions(agent_core_e2e_test PRIVATE EMMY_AGENT_HAS_CORE_HEADER
+                EMMY_AGENT_VERSION="${EMMY_AGENT_VERSION}"
+                FAKE_UNREAL_PATH="$<TARGET_FILE:agent_e2e_fakeunreal>")
+        target_link_libraries(agent_core_e2e_test PRIVATE emmy_debugger_core ${CMAKE_DL_LIBS} pthread)
+        add_dependencies(agent_core_e2e_test agent_e2e_fakeunreal)
+        add_test(NAME agent_core_e2e_test COMMAND agent_core_e2e_test)
+    endif()
 endif()

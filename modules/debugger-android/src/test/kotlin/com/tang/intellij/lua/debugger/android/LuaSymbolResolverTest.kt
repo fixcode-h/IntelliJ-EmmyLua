@@ -32,24 +32,26 @@ class LuaSymbolResolverTest {
     @Test
     fun readsArm64BuildIdAndOffsets() {
         val table = LuaSymbolResolver(null).resolve(fixture("fake_lua54_arm64.so"))
-        assertEquals("60e566a71d04c16832f66552a95c98d475075427", table.buildId)
+        assertEquals("80f8b0d491d008719b432c77aa605ae035341cd5", table.buildId)
         assertEquals("arm64-v8a", table.abi)
-        assertEquals(0x25acL, table.functions["lua_sethook"])
+        assertEquals(0x2dfcL, table.functions["lua_sethook"])
         assertEquals(DetectedLuaVersion.LUA_54, table.luaVersion)
-        assertTrue(table.usable)
-        // 夹具故意没有 luaL_newstate，模拟被 --gc-sections 裁掉
-        assertEquals(listOf("luaL_newstate"), table.missingRequired)
-        assertTrue(table.describe().contains("luaL_newstate"))
+        assertTrue(table.describe(), table.usable)
+        assertTrue(table.missingRequired.isEmpty())
+        // luaL_newstate 是 hook 点，要带上；其他 luaL_* 核心自带，不交给 agent
+        assertTrue(table.functions.containsKey("luaL_newstate"))
+        assertFalse(table.functions.containsKey("luaL_checkinteger"))
+        assertFalse(table.functions.containsKey("luaE_warning"))
     }
 
     @Test
     fun keepsThumbBitOnArmv7() {
         val table = LuaSymbolResolver(null).resolve(fixture("fake_lua54_armv7.so"))
         assertEquals("armeabi-v7a", table.abi)
-        assertEquals("a83800963c5fea7c44796ba2409ede4eefa1fc95", table.buildId)
+        assertEquals("bdd6778fb4b3e6108663e2fc525997d7525aca04", table.buildId)
         // 同一个函数同时出现在 .dynsym 和 .symtab，不能算成冲突
         assertTrue(table.conflicts.isEmpty())
-        assertEquals(0x1d21L, table.functions["lua_sethook"])
+        assertEquals(0x21f1L, table.functions["lua_sethook"])
     }
 
     @Test
@@ -61,14 +63,15 @@ class LuaSymbolResolverTest {
             assertFalse("夹具用 -fvisibility=hidden 编译，lua_sethook 不该导出", inDynsym)
         }
         val table = LuaSymbolResolver(null).resolve(f)
-        assertEquals(0x12f1L, table.functions["lua_sethook"])
-        assertFalse(table.functions.containsKey("lua_gettop_wrapper"))
+        assertEquals(0x14e9L, table.functions["lua_sethook"])
+        // 不在 lua.h 里的 lua_* 也会带上：核心按名字只取自己要的，多给无害
+        assertTrue(table.functions.containsKey("lua_gettop_wrapper"))
     }
 
     @Test
     fun demanglesCppBuild() {
         val table = LuaSymbolResolver(null).resolve(fixture("fake_lua54_cpp_x64.so"))
-        assertEquals(0x12f1L, table.functions["lua_sethook"])
+        assertEquals(0x14e9L, table.functions["lua_sethook"])
         assertTrue(table.usable)
         assertEquals(DetectedLuaVersion.LUA_54, table.luaVersion)
     }
@@ -76,7 +79,9 @@ class LuaSymbolResolverTest {
     @Test
     fun canonicalNames() {
         assertEquals("lua_gettop", LuaApiSymbols.canonicalName("_Z10lua_gettopP9lua_State"))
-        assertNull(LuaApiSymbols.canonicalName("_Z18lua_gettop_wrapperP9lua_State"))
+        assertEquals("lua_gettop_wrapper", LuaApiSymbols.canonicalName("_Z18lua_gettop_wrapperP9lua_State"))
+        assertNull(LuaApiSymbols.canonicalName("_Z17luaL_checkintegerP9lua_Statei"))
+        assertNull(LuaApiSymbols.canonicalName("luaH_get"))
         assertNull(LuaApiSymbols.canonicalName("_Z999lua"))
         assertEquals("lua_pcallk", LuaApiSymbols.canonicalName("lua_pcallk"))
     }
@@ -127,23 +132,33 @@ class LuaSymbolResolverTest {
         val resolver = LuaSymbolResolver(null)
         val all = resolver.findCandidates(listOf(root))
         assertEquals(1, all.size) // 裁剪过的不算候选
-        assertEquals(1, resolver.findCandidates(listOf(root), expectedBuildId = "60e566a71d04c16832f66552a95c98d475075427").size)
+        assertEquals(1, resolver.findCandidates(listOf(root), expectedBuildId = "80f8b0d491d008719b432c77aa605ae035341cd5").size)
         assertEquals(0, resolver.findCandidates(listOf(root), expectedBuildId = "deadbeef").size)
     }
 
-    /** Kotlin 侧清单必须和原生 lua_api_loader.cpp 的 SetupLuaAPI 一致，否则 agent 会缺函数。 */
+    /** Kotlin 侧必需清单必须和调试核心 lua_dyn.c 的 kRequired（5.4 部分）一致，否则附加到一半才发现缺函数。 */
     @Test
-    fun symbolListMatchesNativeLoader() {
+    fun requiredListMatchesCore() {
         val root = System.getProperty("emmylua.repoRoot")?.let(::File) ?: File("../..").canonicalFile
-        val loader = File(root, "native/emmy_debugger/src/api/lua_api_loader.cpp")
-        assumeTrue("找不到 $loader，跳过", loader.isFile)
-        val text = loader.readText()
-        val setup = text.substring(text.indexOf("SetupLuaAPI()"))
-        val required = Regex("LOAD_LUA_API\\((\\w+)\\)").findAll(setup).map { it.groupValues[1] }.toSet()
-        val optional = Regex("LOAD_LUA_API_E\\((\\w+)\\)").findAll(setup).map { it.groupValues[1] }.toSet() +
-            Regex("LoadAPI\\(\"(\\w+)\"\\)").findAll(setup).map { it.groupValues[1] }.toSet()
-        assertEquals(required, LuaApiSymbols.required.toSet())
-        val missing = optional - LuaApiSymbols.optional.toSet()
-        assertTrue("Kotlin 清单缺少：$missing", missing.isEmpty())
+        val dyn = File(root, "native/emmy_debugger_core/src/lua_dyn.c")
+        val luaH = File(root, "native/third-party/lua-5.4.6/src/lua.h")
+        assumeTrue("找不到 $dyn，跳过", dyn.isFile && luaH.isFile)
+        val api = Regex("LUA_API[^;]*\\((lua_[A-Za-z0-9_]+)\\)\\s*\\(").findAll(luaH.readText()).map { it.groupValues[1] }.toSet()
+        val text = dyn.readText()
+        val block = text.substring(text.indexOf("kRequired[] = {"), text.indexOf("};", text.indexOf("kRequired[] = {")))
+        val required = Regex("\"(lua_\\w+)\"").findAll(block).map { it.groupValues[1] }.filter { it in api }.toSet()
+        assertEquals(required, LuaApiSymbols.required54.toSet())
+        assertTrue(LuaApiSymbols.critical.all { it in api })
+    }
+
+    @Test
+    fun unsupportedVersionAndMissingFunctionsAreNotUsable() {
+        val base = LuaSymbolResolver(null).resolve(fixture("fake_lua54_arm64.so"))
+        val jit = base.copy(luaVersion = DetectedLuaVersion.LUAJIT)
+        assertFalse(jit.usable)
+        assertTrue(jit.describe().contains("5.4"))
+        val trimmed = base.copy(missingRequired = listOf("lua_setlocal"))
+        assertFalse(trimmed.usable)
+        assertTrue(trimmed.describe().contains("lua_setlocal"))
     }
 }

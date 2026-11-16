@@ -27,4 +27,6 @@ void Emmy_SetProcessInfo(const char* packageName, const char* buildId);
 extern "C" {
 // 可选：阻塞到 IDE 连上并完成握手，超时返回非 0。核心没有提供时（弱符号为空）agent 不等待。
 int Emmy_WaitForClient(int timeoutMs) __attribute__((weak));
+// 可选：最近一次失败的原因（例如 Emmy_RegisterLuaVm 返回 0 时缺了哪些 Lua 函数）。
+const char* Emmy_LastError(void) __attribute__((weak));
 }
