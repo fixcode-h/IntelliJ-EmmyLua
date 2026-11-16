@@ -71,7 +71,8 @@ class PauseSnapshotStoreTest {
         val expected = if (System.getProperty("os.name").startsWith("Windows", ignoreCase = true)) {
             "c:/project/script.lua"
         } else {
-            "C:/Project/SCRIPT.lua"
+            // 盘符始终规范为小写（带盘符的一定是 Windows 路径）；其余部分在非 Windows 上保留大小写
+            "c:/Project/SCRIPT.lua"
         }
         assertEquals(expected, SourceIdentity.normalizePath("C:\\Project\\sub\\..\\SCRIPT.lua"))
         val missing = SourceIdentity.fromPath("C:\\does-not-exist\\script.lua")

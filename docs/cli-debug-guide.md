@@ -98,7 +98,7 @@ CLI 返回 0 表示请求成功；2 表示参数错误，3 表示 Gateway/实例
 Windows 下可以用仓库内的真实 Lua 5.4 宿主替代 UE 做 Attach 回归。宿主只加载 `lua54.dll`，不会预加载 Emmy；调试器必须走生产 `emmy_tool attach` 注入路径。
 
 ```powershell
-cmake -S EmmyLuaDebugger -B build/native-attach -G Ninja `
+cmake -S native -B build/native-attach -G Ninja `
   -DEMMY_USE_LUA_SOURCE=ON -DEMMY_VM_REGISTRY_TEST=ON -DEMMY_LUA_VERSION=54 `
   -DCMAKE_BUILD_TYPE=Debug
 cmake --build build/native-attach --target emmy_attach_lua_fixture --parallel 4

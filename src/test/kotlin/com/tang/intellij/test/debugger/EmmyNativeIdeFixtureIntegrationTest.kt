@@ -38,7 +38,7 @@ class EmmyNativeIdeFixtureIntegrationTest : LuaTestBase() {
         val fixture = System.getenv("EMMY_IDE_FIXTURE_EXE")?.takeIf { it.isNotBlank() }
             ?: System.getProperty("emmy.fixture.exe")?.takeIf { it.isNotBlank() }
         requireNotNull(fixture) { "set EMMY_IDE_FIXTURE_EXE or emmy.fixture.exe" }
-        val template = File("EmmyLuaDebugger/tests/fixtures/cli_runtime.lua").absoluteFile
+        val template = File("native/tests/fixtures/cli_runtime.lua").absoluteFile
         assertTrue("fixture source missing: $template", template.isFile)
         val source = File(project.basePath!!, "cli_runtime.lua")
         // Light platform projects may be reused after another test removes
