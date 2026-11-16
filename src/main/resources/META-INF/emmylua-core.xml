@@ -16,6 +16,11 @@
         <lang.braceMatcher language="Lua" implementationClass="com.fixcode.intellij.lua.editor.LuaBraceMatcher"/>
         <lang.quoteHandler language="Lua" implementationClass="com.fixcode.intellij.lua.editor.LuaQuoteHandler"/>
 
+        <!-- 编辑小功能：都只靠词法器（editor/LuaBlocks），不建语法树 -->
+        <lineIndentProvider implementation="com.fixcode.intellij.lua.editor.LuaLineIndentProvider"/>
+        <enterHandlerDelegate implementation="com.fixcode.intellij.lua.editor.LuaEnterHandler"/>
+        <typedHandler implementation="com.fixcode.intellij.lua.editor.LuaTypedHandler"/>
+
         <!-- LSP4IJ 对自定义语言要显式绑定的几项（其余功能对任意语言自动生效） -->
         <lang.foldingBuilder language="Lua" order="first"
                              implementationClass="com.redhat.devtools.lsp4ij.features.foldingRange.LSPFoldingRangeBuilder"/>
