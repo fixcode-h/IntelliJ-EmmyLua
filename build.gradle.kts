@@ -31,15 +31,6 @@ val buildDataList = listOf(
         untilBuild = "",
         targetCompatibilityLevel = JavaVersion.VERSION_21,
         jvmTarget = "21"
-    ),
-    BuildData(
-        ideaSDKShortVersion = "251",
-        ideaSDKVersion = "251.23774.435",
-        ideaMainVersion = "2025.1",
-        sinceBuild = "251",
-        untilBuild = "251.*",
-        targetCompatibilityLevel = JavaVersion.VERSION_17,
-        jvmTarget = "17"
     )
 )
 
@@ -121,15 +112,17 @@ project(":") {
         pluginConfiguration {
             ideaVersion {
                 sinceBuild = buildVersionData.sinceBuild
-                if (buildVersionData.untilBuild.isNotBlank()) {
-                    untilBuild = buildVersionData.untilBuild
-                }
+                // 不设上限：2025.2 之后的版本都能装（CI 的 verifyPlugin 逐个版本校验 API 兼容）
+                untilBuild = provider { buildVersionData.untilBuild.ifBlank { null } }
             }
         }
 
         pluginVerification {
             ides {
-                create("IC", buildVersionData.ideaMainVersion)
+                // 默认只校验编译用的版本；CI 用 -PverifyIdes=2025.3,2026.1,... 再加上之后的版本
+                val extra = providers.gradleProperty("verifyIdes").orNull
+                    ?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }.orEmpty()
+                (listOf(buildVersionData.ideaMainVersion) + extra).distinct().forEach { create("IC", it) }
             }
         }
     }

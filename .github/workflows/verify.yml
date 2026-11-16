@@ -15,7 +15,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        idea-version: ["251", "252"]
+        # 只编 2025.2 一个包（不设 until-build）；verifyPlugin 再对之后的每个大版本校验 API 兼容
+        idea-version: ["252"]
 
     steps:
       - uses: actions/checkout@v4
@@ -24,6 +25,8 @@ jobs:
           distribution: temurin
           java-version: "21"
       - uses: gradle/actions/setup-gradle@v4
+      - name: Check doc links
+        run: python3 .github/scripts/check-doc-links.py
       - name: Build native core host for engine end-to-end tests
         run: |
           cmake -S native/emmy_debugger_core -B build/core -DCMAKE_BUILD_TYPE=Release
@@ -37,7 +40,7 @@ jobs:
         env:
           # 新引擎对着真的原生核心跑端到端用例（NativeRuntimeE2eTest）
           EMMY_CORE_HOST: ${{ github.workspace }}/build/core/emmy_core_ide_host
-        run: ./gradlew --no-daemon -DIDEA_VER=${{ matrix.idea-version }} test buildPlugin verifyPlugin
+        run: ./gradlew --no-daemon -DIDEA_VER=${{ matrix.idea-version }} -PverifyIdes=2025.3,2026.1,2026.2,2026.3 test buildPlugin verifyPlugin
       - name: Preserve JVM and plugin verification reports
         uses: actions/upload-artifact@v4
         if: always()
