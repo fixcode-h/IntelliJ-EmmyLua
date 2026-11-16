@@ -3,8 +3,6 @@
 # EmmyLua for IntelliJ IDEA
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![JetBrains Plugin](https://img.shields.io/jetbrains/plugin/v/9768-emmylua.svg)](https://plugins.jetbrains.com/plugin/9768-emmylua)
-[![Downloads](https://img.shields.io/jetbrains/plugin/d/9768-emmylua.svg)](https://plugins.jetbrains.com/plugin/9768-emmylua)
 
 EmmyLua 是一个功能强大的 Lua 语言支持插件，专为 IntelliJ IDEA 系列 IDE 设计。在原有 EmmyLua 功能基础上，本版本特别增加了 **LuaPanda 调试模式**，为 Lua 开发者提供更完整的开发体验。
 
@@ -270,7 +268,7 @@ end
 
 遇到问题？请通过以下方式反馈：
 
-1. **GitHub Issues**：[提交问题](https://github.com/tangzx/IntelliJ-EmmyLua/issues)
+1. **GitHub Issues**：[提交问题](https://github.com/fixcode-h/IntelliJ-EmmyLua/issues)
 2. **功能请求**：使用 "enhancement" 标签
 3. **Bug 报告**：使用 "bug" 标签，并提供详细的复现步骤
 
@@ -287,24 +285,21 @@ end
 
 ## 🙏 致谢
 
-- 感谢所有 [贡献者](https://github.com/tangzx/IntelliJ-EmmyLua/graphs/contributors) 的努力
+- 本项目最初基于 [@tangzx](https://github.com/tangzx) 的 EmmyLua 插件和 EmmyLua 团队的 EmmyLuaDebugger 开发，现独立维护；原作者版权声明按 Apache License 2.0 保留在源码和 [LICENSE](LICENSE.txt) 中
 - 感谢 JetBrains 提供的优秀 IDE 平台
 - 感谢 Lua 社区的支持和反馈
 - 特别感谢 LuaPanda 项目的集成支持
 
 ## 📞 联系方式
 
-- **作者：** [**@tangzx** 阿唐](https://github.com/tangzx)
-- **邮箱：** love.tangzx@qq.com
-- **问题反馈：** [GitHub Issues](https://github.com/tangzx/IntelliJ-EmmyLua/issues)
-- **讨论交流：** [GitHub Discussions](https://github.com/tangzx/IntelliJ-EmmyLua/discussions)
+- **仓库：** [github.com/fixcode-h/IntelliJ-EmmyLua](https://github.com/fixcode-h/IntelliJ-EmmyLua)
+- **问题反馈：** [GitHub Issues](https://github.com/fixcode-h/IntelliJ-EmmyLua/issues)
 
 ## 🌟 支持项目
 
 如果这个插件对您有帮助，请考虑：
 
 - 给我们一个 ⭐ **Star**
-- 在 [JetBrains 插件市场](https://plugins.jetbrains.com/plugin/9768-emmylua) 留下评价
 - 分享给其他 Lua 开发者
 - 参与项目贡献
 

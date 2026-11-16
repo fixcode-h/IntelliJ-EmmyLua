@@ -1,6 +1,6 @@
 [TOC]
 
-# 如何利用超强[EmmyLuaDebugger](https://github.com/EmmyLua/EmmyLuaDebugger)实现全平台调试[Lua](https://www.lua.org/)代码?
+# 如何利用超强[EmmyLuaDebugger](../README.md)实现全平台调试[Lua](https://www.lua.org/)代码?
 
 这里给出UE4.26+lua大致的一种解决方案，具体有类似需要再实操一下。
 

@@ -2,7 +2,6 @@
 
 # 🚀 EmmyLua Debugger
 
-[![Build Status](https://img.shields.io/badge/build-passing-brightgreen?style=flat-square)](https://github.com/EmmyLua/EmmyLuaDebugger)
 [![Lua Version](https://img.shields.io/badge/lua-5.1%20%7C%205.2%20%7C%205.3%20%7C%205.4%20%7C%20LuaJIT-orange?style=flat-square)](#lua-support)
 
 **High-performance cross-platform Lua debugger with full debugging features including breakpoints, variable watch, stack trace, and more.**
@@ -41,8 +40,8 @@
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/EmmyLua/EmmyLuaDebugger.git
-cd EmmyLuaDebugger
+git clone https://github.com/fixcode-h/IntelliJ-EmmyLua.git
+cd IntelliJ-EmmyLua/native
 ```
 
 ### 2. Build the Project
@@ -120,11 +119,10 @@ cmake .. -DEMMY_USE_LUA_SOURCE=ON
 
 3. Clone and build the project:
     ```bash
-    git clone --recursive https://github.com/EmmyLua/EmmyLuaDebugger.git
-    cd EmmyLuaDebugger
-    mkdir build && cd build
-    cmake ..
-    cmake --build .
+    git clone https://github.com/fixcode-h/IntelliJ-EmmyLua.git
+    cd IntelliJ-EmmyLua
+    cmake -S native -B build/native
+    cmake --build build/native
     ```
 
 ## 🙏 Acknowledgements
@@ -135,14 +133,13 @@ cmake .. -DEMMY_USE_LUA_SOURCE=ON
 
 ## 📞 Support & Contact
 
-- 🐛 [Report Issues](https://github.com/EmmyLua/EmmyLuaDebugger/issues)
-- 💬 [Discussion](https://github.com/EmmyLua/EmmyLuaDebugger/discussions)
+- 🐛 [Report Issues](https://github.com/fixcode-h/IntelliJ-EmmyLua/issues)
 ---
 
 <div align="center">
 
 **⭐ If you find this project helpful, please give us a Star! ⭐**
 
-Made with ❤️ by [EmmyLua Team](https://github.com/EmmyLua)
+Originally based on EmmyLuaDebugger by the EmmyLua team; now maintained as part of [IntelliJ-EmmyLua](https://github.com/fixcode-h/IntelliJ-EmmyLua).
 
 </div>
