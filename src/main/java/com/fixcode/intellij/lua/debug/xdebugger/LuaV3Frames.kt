@@ -1,7 +1,14 @@
 package com.fixcode.intellij.lua.debug.xdebugger
 
 import com.intellij.icons.AllIcons
+import com.intellij.openapi.application.runReadAction
+import com.intellij.openapi.fileEditor.FileDocumentManager
+import com.intellij.openapi.project.ProjectLocator
+import com.intellij.openapi.project.guessProjectDir
+import com.intellij.openapi.util.TextRange
 import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.openapi.vfs.VfsUtilCore
+import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.ui.ColoredTextContainer
 import com.intellij.ui.SimpleTextAttributes
 import com.intellij.xdebugger.XDebuggerUtil
@@ -129,10 +136,12 @@ class LuaV3StackFrame(private val engine: DebugSession, val handle: FrameHandle)
 
     override fun customizePresentation(component: ColoredTextContainer) {
         val frame = handle.frame
-        component.append(frame.name, SimpleTextAttributes.REGULAR_ATTRIBUTES)
+        val file = position?.file
+        val name = LuaFrameName.display(frame.name, frame.lineDefined) { line -> file?.let { lineText(it, line) } }
+        component.append(name, SimpleTextAttributes.REGULAR_ATTRIBUTES)
         val location = when {
             !frame.hasSource -> "[C]"
-            else -> "${frame.chunkName.removePrefix("@")}:${frame.line}"
+            else -> "${file?.let { projectRelative(it) } ?: frame.chunkName.removePrefix("@")}:${frame.line}"
         }
         component.append("  $location", if (position == null) SimpleTextAttributes.GRAYED_ATTRIBUTES else SimpleTextAttributes.GRAY_ATTRIBUTES)
         component.setIcon(AllIcons.Debugger.Frame)
@@ -161,3 +170,17 @@ class LuaV3StackFrame(private val engine: DebugSession, val handle: FrameHandle)
 
 /** [LuaV3StackFrame.getEqualityObject]：平台按它保存 / 恢复变量树状态，并对比新旧值标出变化（variable-view.md 16）。 */
 private data class FrameIdentity(val vmId: Long, val threadId: String?, val chunkName: String, val lineDefined: Int, val name: String)
+
+/** 文件第 [line] 行（从 1 开始）的文本，读不到返回 null。 */
+private fun lineText(file: VirtualFile, line: Int): String? = runReadAction {
+    val doc = FileDocumentManager.getInstance().getDocument(file) ?: return@runReadAction null
+    if (line < 1 || line > doc.lineCount) return@runReadAction null
+    doc.getText(TextRange(doc.getLineStartOffset(line - 1), doc.getLineEndOffset(line - 1)))
+}
+
+/** 调用栈里显示相对项目目录的路径；不在项目里的文件照旧显示完整路径。 */
+private fun projectRelative(file: VirtualFile): String? {
+    val project = ProjectLocator.getInstance().guessProjectForFile(file) ?: return null
+    val base = project.guessProjectDir() ?: return null
+    return VfsUtilCore.getRelativePath(file, base, '/')
+}
