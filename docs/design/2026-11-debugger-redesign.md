@@ -2,14 +2,16 @@
 
 > 日期：2026-11-16
 > 状态：草案，待评审（本轮只出设计，不改代码）
-> 范围：IntelliJ-EmmyLua 插件的调试部分、`EmmyLuaDebugger` 原生端（将并入本仓库 `native/`）、与 `UEKit` 的集成
+> 范围：IntelliJ-EmmyLua 插件的调试部分、`EmmyLuaDebugger` 原生端（将并入本仓库 `native/`）；真机调试首期只支持 Android
 > 已确认的前提：
 > 1. 语言支持（补全、跳转、检查、格式化等）保留，只精简调试部分。
-> 2. 调试只保留两种场景：**附加调试**（本机进程）和**真机调试**（Android / iOS / 其他设备上的游戏）。
+> 2. 调试只保留两种场景：**附加调试**（本机进程）和**真机调试**（首期只做 Android 设备上的游戏）。
 > 3. 现有 `emmy-debug` CLI 删除，改为 **MCP Server** 给 Agent 用。
 > 4. 不需要兼容旧架构；有更高性能的新架构就直接换。
 > 5. MCP 支持一键写入当前项目的版本管理根目录；没装时弹窗提示是否安装。
 > 6. EmmyLuaDebugger 并入本仓库，不再作为子模块，也不迁到 UEKit。
+> 7. 游戏包里不能加入任何调试代码或插件；真机调试走运行时注入，首期只支持 Android。
+> 8. 改动大的部分可以重写；评估结论见 [12.1](#121-重写还是重构评估结论)。
 
 ---
 
@@ -44,12 +46,12 @@
 | 协议 | v1（两行文本）+ v2 Envelope 并存 | **v3**：长度前缀帧、请求/响应带 id、能力协商、按需拉取变量，不再兼容 v1/v2 |
 | 原生热路径 | 每行加锁 + 复制 set + 常开 LINE/CALL/RET 钩子 | 无锁不可变断点索引 + 按函数开关行钩子；无断点时近乎零开销 |
 | Agent 接入 | 独立 `emmy-debug` CLI + 授权/租约 | IDE 内置 **MCP Server**（127.0.0.1 HTTP），一键写入项目 `.mcp.json` 等配置 |
-| 真机 | 只有文档说"可以自己编进去" | 正式支持 Android（adb forward/reverse）、iOS（usbmux）、局域网发现；UE 项目走 UEKit 新插件 |
+| 真机 | 只有文档说"可以自己编进去" | **真机附加**：Android 运行时注入（`attach-agent` + 本地符号），包体零改动；iOS 首期不支持；内嵌模式作为可选项 |
 | 原生库 | 子模块 + 二进制提交在 `src/main/resources/debugger`（约 11 MB） | 源码并入 `native/`，同一次 CI 编译后打进插件包 |
 
 **功能不缩水、性能有量化目标。** 逐项对照见 [2.5](#25-功能完整性改造后不缩水)：除命名管道和纯 Lua 调试器两项（给出理由和兜底），现有能力全部保留，并新增修改变量、出错即停、协程视图、Agent 附加/连设备等。性能目标与验收方法见 [5.3](#53-性能目标与验收)：不下断点时游戏侧开销目标 ≤ 1.05 倍，USB 下命中断点到显示变量 ≤ 100 ms。
 
-**EmmyLuaDebugger 结论：必须保留，必须重构（性能和移动端），并入本仓库 `native/` 目录（已确认）。** 它是引擎无关的调试 runtime（附加注入、5 个 Lua 版本、非 UE 宿主都靠它）；并入后协议两端可以在一个 PR 里同时改。UE 项目的真机调试**不新增插件、不改打包**：复用已随开发包进到设备上的 UELink，在里面加一个 Lua 调试通道，引用 `native/` 拆出的无依赖调试核心。详见[第 8 节](#8-emmyluadebugger-是否保留迁移到哪里)。
+**EmmyLuaDebugger 结论：必须保留，必须重构（性能和移动端），并入本仓库 `native/` 目录（已确认）。** 它是引擎无关的调试 runtime（附加注入、5 个 Lua 版本、非 UE 宿主都靠它）；并入后协议两端可以在一个 PR 里同时改。真机调试**不往游戏包里加任何东西**：Android 用系统的 `attach-agent` 在运行时把调试 agent 注入可调试的开发包进程，配合本地未裁剪的 `libUnreal.so` 符号定位 Lua 函数，和 PC 附加一样做到零改动；iOS 在不改包的前提下没有可靠方案，首期不支持（已确认）。详见[第 8 节](#8-emmyluadebugger-是否保留迁移到哪里)。
 
 ---
 
@@ -155,8 +157,8 @@
 | runtime 连 IDE（TCP） | Emmy NEW `tcp-server` | ✅ 并入"设备/远程调试"（连接方向选项） |
 | 命名管道 | Emmy NEW `pipe-*` | ⚠️ 删除：只能本机用，TCP 回环完全覆盖，且多一个原生依赖 |
 | 纯 Lua 调试器（无需原生编译） | LuaPanda | ⚠️ 删除。代价：宿主**无法编译原生库**时就没法调试。缓解：这种情况很少（Unity/UE/自研引擎都能链接 C 库）；若确有需要，P7 之后可以用 Lua 写一个实现 v3 子集的 runtime 兜底，复用同一套 IDE 和 MCP |
-| Android / iOS 真机 | 无正式支持 | 🆕 |
-| UE 进程免注入直连 | 无 | 🆕 经 UELink 调试通道 + 名片 |
+| Android 真机附加（包体零改动） | 无 | 🆕 见 7.2 |
+| iOS 真机 | 无 | ⚠️ 首期不支持（不改包无可靠方案），见 7.3 |
 
 **Agent 能力（CLI → MCP）**
 
@@ -190,7 +192,7 @@ flowchart TB
         ENG["debugger-engine<br/>会话 · VM · 断点 · 执行控制 · 变量 · 求值<br/>纯 Kotlin，无 IntelliJ 依赖"]
         TGT["目标适配<br/>AttachTarget · DeviceTarget"]
         PROTO["debugger-protocol v3"]
-        TR["debugger-transport<br/>TCP · adb 转发 · usbmux · 局域网发现"]
+        TR["debugger-transport<br/>TCP · adb 转发 · localabstract · 局域网发现"]
         UI --> SM
         MCP --> SM
         SM --> ENG
@@ -365,20 +367,20 @@ FindBreakPoint(ar)       → manager->GetLineSet()：breakpointsMtx 加锁 + 复
 | 长度前缀帧 + CBOR + 按需拉取 | 少传、少扫描、少解析；Wi-Fi 下最明显 |
 | runtime 侧执行条件 / 日志断点 | 不再每次命中都往返 IDE |
 
-**验收方式**：`bench_hook` 和 IDE 侧的假 runtime 延迟测试进 CI，任一指标比基线退步超过 10% 直接失败；真机数字在 P5 结束时用 Android 中端机和 iPhone 各测一轮写进验证文档。
+**验收方式**：`bench_hook` 和 IDE 侧的假 runtime 延迟测试进 CI，任一指标比基线退步超过 10% 直接失败；真机数字在 P5 结束时用 Android 中端机和低端机各测一轮写进验证文档。
 
 ### 5.4 其他原生端改动
 
 | 项 | 改动 |
 | --- | --- |
-| 核心拆分 | 拆出 `emmy_debugger_core`：钩子状态机、断点索引、变量读取、受限求值、协议编解码，不含网络 / 线程 / 注入，宿主通过小接口提供 IO；`emmy_core`、附加注入、UELink 都基于它 |
+| 核心拆分 | 拆出 `emmy_debugger_core`：钩子状态机、断点索引、变量读取、受限求值、协议编解码，不含网络 / 线程 / 注入，宿主通过小接口提供 IO；`emmy_core`、PC 附加、Android 真机附加都基于它 |
 | C++ 标准 | C++11 → C++17（`std::optional`、`string_view`、`shared_mutex`、结构化绑定），清理手写锁宏 |
 | 协议 | 实现 v3；删除 v1 消息、v2 Envelope、管道传输（`pipeline_*_transporter.cpp`） |
 | `EmmyFacade` | 1327 行单例拆成 `Session`（连接 + 协议）、`VmHub`（VM 注册）、`HookDispatcher`；单例只留 C ABI 入口 |
 | 网络 | 保留 libuv（各平台都能编，已经在用）；网络线程只收发帧，解析后投递到每 VM 的命令队列 |
-| 钩子共存 | 新增 `HookMux`：一个 `lua_State` 只能挂一个钩子，提供 C ABI `Emmy_HookMux_Register(callback, mask)` 让宿主其他工具（如 UELink 的快照点 / 采样）共享，代替各自"记住上一个钩子再转发"的做法 |
-| 平台 | 新增 Android（NDK, arm64-v8a / armeabi-v7a / x86_64）、iOS（静态库 / xcframework）、Linux arm64 构建 |
-| 产物 | 本仓库 CI 编译各平台 runtime，PC 端二进制直接打进插件包；Android/iOS/Unity 包作为 Release 附件 `emmy-runtime-<ver>-<platform>.zip` + `SHA256SUMS` 发布；仓库不再提交二进制 |
+| 钩子共存 | 新增 `HookMux`：一个 `lua_State` 只能挂一个钩子，提供 C ABI `Emmy_HookMux_Register(callback, mask)` 让宿主其他工具（如项目自带的性能统计、UELink 的快照点 / 采样）共享，代替各自"记住上一个钩子再转发"的做法 |
+| 平台 | 新增 Android（NDK, arm64-v8a / armeabi-v7a / x86_64）（runtime 与真机附加 agent）、Linux arm64 构建；iOS 暂不做 |
+| 产物 | 本仓库 CI 编译各平台 runtime，PC 端二进制直接打进插件包；Android agent / Unity 包作为 Release 附件 `emmy-runtime-<ver>-<platform>.zip` + `SHA256SUMS` 发布；仓库不再提交二进制 |
 | 安全 | 局域网监听强制 token（配对码）；`EMMY_DEBUG_ENABLED` 编译宏，发布包不编入 |
 
 ---
@@ -404,7 +406,7 @@ FindBreakPoint(ar)       → manager->GetLineSet()：breakpointsMtx 加锁 + 复
 | 只读 | 列会话、栈、变量、断点、输出、`wait_for_pause` | 允许 |
 | 控制 | 下/删断点、继续、单步、暂停、运行到行、Probe | 每个调试会话**第一次**控制时 IDE 弹通知「Agent 请求控制调试会话 X：允许 / 本次会话总是允许 / 拒绝」 |
 | 任意求值 | `evaluate` 的 `mode=lua`（执行任意 Lua） | 关闭；设置里单独打开 |
-| 启动/附加 | `attach_process`、`connect_device` | 每次在 IDE 里弹确认 |
+| 启动/附加 | `attach_process`、`attach_device` | 每次在 IDE 里弹确认 |
 
 - 原 CLI 的 VALUE_PATH 受限求值作为 `evaluate` 的默认模式保留。
 - 原"租约"去掉：引擎单线程处理所有命令，UI 和 Agent 不会冲突；UI 操作优先，Agent 正在 `wait_for_pause` 时用户手动继续，Agent 会收到 `resumed (by user)`。
@@ -421,7 +423,7 @@ FindBreakPoint(ar)       → manager->GetLineSet()：breakpointsMtx 加锁 + 复
 | `lua_debug_list_sessions` | — | 会话列表：id、类型（attach/device）、目标、状态、VM 数、是否暂停 |
 | `lua_debug_list_targets` | `kind?: process\|device` | 可附加的本机进程（自动识别加载了 Lua 的进程）和已发现的设备 |
 | `lua_debug_attach_process` | `pid` 或 `name`, `config?` | 新会话 id（需用户确认） |
-| `lua_debug_connect_device` | `deviceId` 或 `host+port`, `config?` | 新会话 id（需用户确认） |
+| `lua_debug_attach_device` | `deviceId`, `package` 或 `pid`, `config?` | Android 真机附加，新会话 id（需用户确认） |
 | `lua_debug_stop_session` | `sessionId` | — |
 | `lua_debug_list_vms` | `sessionId` | VM 列表：vmId、显示名、状态、sourceEpoch |
 
@@ -525,50 +527,96 @@ FindBreakPoint(ar)       → manager->GetLineSet()：breakpointsMtx 加锁 + 复
 
 ## 7. 真机调试
 
-### 7.1 原理
+**约束（已与用户确认）：游戏包里不能加入任何调试代码或插件。** 所以真机调试的主方案是"真机附加"：和 PC 上的附加调试一样，在运行时把调试 runtime 注入到已经在跑的游戏进程里。往包里编 runtime 的"内嵌模式"只作为给自愿集成的项目（Unity、自研引擎）的可选项。
 
-真机上没法注入，所以 runtime **编进游戏**（开发包），游戏启动后 runtime 监听端口或主动连 IDE；IDE 通过 USB 转发或局域网连上去。连上后和附加调试走同一套 v3 协议和引擎。
+### 7.1 两种模式
+
+| | 真机附加（主方案） | 内嵌 runtime（可选） |
+| --- | --- | --- |
+| 包体改动 | **无** | 要把 runtime 编进包 |
+| 前提 | Android：开发包可调试（`android:debuggable=true`，UE 的 Development 包默认如此）；本地有对应构建的**未裁剪** `libUnreal.so`（UE 打包时保留在 `Binaries/Android` / `Intermediate` 下） | 项目愿意集成 |
+| Android | ✅ | ✅ |
+| iOS | ❌ 首期不支持，见 7.3 | 以后再说 |
+| 机制 | 系统调试接口加载 agent → 内联 hook 抓 `lua_State` → `lua_sethook` | 宿主主动调用 `Emmy_RegisterLuaVm` |
+
+两种模式连上后都走同一套 v3 协议、同一个 IDE 引擎和 MCP。
+
+### 7.2 Android 真机附加（零包体改动）
 
 ```mermaid
 sequenceDiagram
     participant IDE
-    participant Fwd as adb / usbmux
-    participant App as 设备上的游戏 + emmy runtime
-    App->>App: 启动，Emmy_StartServer(0.0.0.0:9966 或 127.0.0.1:9966)
-    App-->>IDE: (局域网) UDP 广播名片
-    IDE->>Fwd: adb forward tcp:L tcp:9966 / usbmux connect
-    IDE->>App: hello{protocol:3, token}
-    App-->>IDE: welcome{caps, platform, luaVersion}
-    App-->>IDE: vmAdded(...)
-    IDE->>App: setBreakpoints(...)
+    participant ADB as adb
+    participant App as 游戏进程 (debuggable)
+    participant Agent as emmy agent .so
+    IDE->>IDE: 读本地未裁剪 libUnreal.so：校验 Build ID，解析 lua_* 符号偏移
+    IDE->>ADB: push libemmy_agent.so（按 ABI 选 arm64 / armv7）
+    IDE->>ADB: cmd activity attach-agent <pid> libemmy_agent.so=<参数>
+    ADB->>App: ART 加载 agent（JVMTI Agent_OnAttach）
+    App->>Agent: Agent_OnAttach(参数: 符号偏移表、socket 名、token)
+    Agent->>Agent: /proc/self/maps 找 libUnreal.so 基址 → 计算 lua_* 函数地址
+    Agent->>Agent: 内联 hook lua_pcall / lua_resume，抓到 lua_State 后 lua_sethook，随即撤掉内联 hook
+    Agent->>Agent: 监听 localabstract:emmy-<pid>
+    IDE->>ADB: adb forward tcp:L localabstract:emmy-<pid>
+    IDE->>Agent: hello{protocol:3, token}
 ```
 
-### 7.2 连接方式
+**1. 加载 agent：`attach-agent`**
+- Android 9（API 28）起，对可调试应用可以用 `adb shell cmd activity attach-agent <进程> <agent.so>` 在运行中加载一个 JVMTI agent。Android Studio 的 Apply Changes、内存分析器用的就是这条路。系统会把 agent 拷进应用私有目录再加载，不需要 root，也不需要改包。
+- 想"启动即停"时，用 `am start -n <activity> --attach-agent <agent.so>`，在应用启动时就加载。
+- Android 8 及以下没有 `attach-agent`：退回到 Android Studio 原生调试同样的方式，`run-as` 把一个小注入器拷进应用目录，用 `ptrace` 注入 `dlopen`（lldb-server 正是这样附加可调试应用的）。
+- 非可调试包（正式签名）：只能在已 root 的设备上用 `ptrace` 注入，作为高级选项，不作为默认流程。
+
+**2. 找到 Lua 函数：用本地未裁剪的 so 的符号**
+- UE 把 Lua（UnLua 的定制 lua-5.4.3）静态链接进 `libUnreal.so`，设备上的 so 是裁剪过的，`dlsym` 找不到 `lua_*`。
+- IDE 读本地同一次构建的未裁剪 `libUnreal.so`（ELF 符号表），得到约 40 个 `lua_*` / `luaL_*` 函数的偏移，连同 GNU Build ID 一起传给 agent。agent 校验设备上 so 的 Build ID 一致后，用 `/proc/self/maps` 里的基址 + 偏移得到真实地址。Build ID 不一致直接报错："本地 so 和设备上的不是同一次构建"。
+- 现有 `lua_api_loader` 本来就是"运行时填函数指针表"的设计（PC 上用 `GetProcAddress`、Linux 上用 `dlsym`），这里只是多一个"符号偏移表"来源。`lua_Debug` 结构用 1024 字节的 `short_src` 兜底，能兼容 UnLua 的 `LUA_IDSIZE=256`；其余布局差异用已有的 `lua_abi_descriptor` 对账，后续可以从未裁剪 so 的 DWARF 里自动读出结构布局。
+- 没有未裁剪 so 时的兜底：按 Lua 版本内置的特征码扫描。特征码很脆弱，只当兜底，不作为默认。
+
+**3. 抓到 `lua_State` 并挂钩子**
+- 用内联 hook 库（Android 选 ShadowHook，MIT 协议，支持 arm64 / armv7）临时 hook `lua_pcallk` / `lua_resume`。第一次被调用时就在 Lua 所属线程上拿到 `lua_State`，调 `lua_sethook` 挂调试钩子，然后撤掉内联 hook。思路与 Windows 附加的 `emmy_hook` 相同。
+- 多 VM、PIE 式重建：保留对 `lua_newstate` / `lua_close` 的 hook，把 VM 生命周期报给 IDE（对应现有 `HOOK_FALLBACK` 的 VM 注册路径）。
+
+**4. 通信：不需要网络权限**
+- agent 监听 Unix 抽象 socket `localabstract:emmy-<pid>`，IDE 用 `adb forward tcp:<本地> localabstract:emmy-<pid>` 连过去。不依赖应用有 `INTERNET` 权限，也不在设备上开 TCP 端口。
+- 握手 token 由 IDE 生成，通过 `attach-agent` 的参数传给 agent。
+
+**5. 卸载**
+- 断开时撤掉 `lua_sethook`、停止监听；agent 代码留在进程里直到应用退出（JVMTI agent 无法卸载）。不影响游戏后续运行。
+
+### 7.3 iOS
+
+iOS 不允许加载未签名代码，**不改包的前提下没有可靠方案**：
+
+| 路线 | 可行性 |
+| --- | --- |
+| 开发签名包（带 `get-task-allow`）+ `debugserver` 附加，再用调试器在进程里 `dlopen` 一个用**同一开发团队证书签名**的 agent | 理论可行：开发包允许调试器附加，库校验只要求同一团队签名。需要实测 iOS 17+ 的 Developer Mode、`devicectl` 拷文件和库校验行为。列为**调研项**，不承诺 |
+| 越狱设备注入 | 技术上可行，不作为产品方案 |
+| 内嵌 runtime | 需要改包，与当前约束冲突；只给愿意集成的项目 |
+
+结论（已与用户确认）：**首期只支持 Android**，iOS 暂不支持，上表作为以后的备选方向保留。
+
+### 7.4 连接方式
 
 | 方式 | 适用 | 实现 |
 | --- | --- | --- |
-| Android USB（推荐） | Android | 插件调用 `adb`（路径自动找 `ANDROID_HOME` / PATH，可在设置里指定）：`adb devices -l` 列设备，`adb forward tcp:<本地> tcp:9966` 后连 `127.0.0.1:<本地>`。游戏只需监听 `127.0.0.1`，不暴露到网络 |
-| Android 反向 | 设备主动连 IDE | `adb reverse tcp:9966 tcp:9966`，游戏 `Emmy_Connect("127.0.0.1", 9966)`，适合"游戏启动就要停在第一行" |
-| iOS USB | iOS | 第一期调用 `iproxy`（libimobiledevice）做转发；第二期内置 usbmux 客户端（macOS 连 `/var/run/usbmuxd`，Windows 连 Apple Mobile Device Service 的 27015 端口），免装工具 |
-| 局域网 | 所有平台 | 游戏监听 `0.0.0.0:9966` 并每 2 秒 UDP 广播名片到 `9967`；IDE 列出发现的设备。**必须配对码**：游戏日志/屏幕显示 6 位码，首次连接输入，之后按设备记住 |
+| Android USB（默认） | 真机附加 / 内嵌 | 插件调用 `adb`（自动找 `ANDROID_HOME` / PATH，可在设置里指定）：`adb devices -l` 列设备，`adb shell pidof` / `ps` 列可调试进程，`adb forward` 建转发 |
+| Android Wi-Fi | 真机附加 / 内嵌 | `adb pair` / `adb connect` 无线调试后，流程与 USB 相同 |
+| iOS USB | 以后（首期不做） | `iproxy`（libimobiledevice）转发 |
+| 局域网直连 | 内嵌 | runtime 监听 `0.0.0.0` 并 UDP 广播名片；**必须配对码** |
 | 手动 | 兜底 | 填 `host:port` |
 
-设备名片（UDP，JSON）：`{app, version, platform, arch, deviceName, port, protocol: 3, pid, needsPairing}`。
-
-### 7.3 runtime 集成方式
+### 7.5 内嵌 runtime（可选，给自愿集成的项目）
 
 | 宿主 | 集成 |
 | --- | --- |
-| UE + UnLua（真机） | 复用 UELink（开发包里已有），加 Lua 调试通道，见 8.4 |
-| Unity（xLua / toLua / slua） | 提供 native plugin 包：Android `.so`、iOS 静态库；C# 一行 `EmmyDebug.Start(luaEnv.L, 9966)` |
-| 其他 C/C++ 引擎 | 链接 `emmy_debugger` 静态库，调用 C ABI：`Emmy_StartServer`、`Emmy_RegisterLuaVm`、`Emmy_RegisterLuaSource` |
+| Unity（xLua / toLua / slua） | native plugin：Android `.so`；C# 一行 `EmmyDebug.Start(luaEnv.L)` |
+| 其他 C/C++ 引擎 | 链接 `emmy_debugger_core` + 传输层，调用 C ABI：`Emmy_StartServer`、`Emmy_RegisterLuaVm`、`Emmy_RegisterLuaSource` |
 | 纯 Lua 环境（PC） | 现有 `emmy_core`：`require("emmy_core").tcpListen(...)` |
 
-**Lua 符号**：手游的 Lua 通常静态链接进主 so / 可执行文件，runtime 必须**和游戏用同一份 Lua**编译（UnLua 是定制的 lua-5.4.3，`LUA_IDSIZE=256`）。Android 上也可用 `dlsym(RTLD_DEFAULT)` 动态找符号（现有 `lua_api_loader`），iOS 不行，只能源码编入。
+App 进后台时连接可能被系统挂起，runtime 回前台时重建监听，IDE 自动重连并重发断点。
 
-**iOS 限制**：不能 `dlopen` 第三方库，只能静态链接；App 进后台时 socket 会被挂起，runtime 需要在回前台时重建监听，IDE 侧自动重连（沿用现有重连 + 断点重发）。
-
-### 7.4 源码映射
+### 7.6 源码映射
 
 真机上的 chunkName 和本机路径不一样（`@Content/Script/UI/BagPanel.lua`、`assets/lua/ui/bag.lua`、从 pak 加载的虚拟路径）。
 
@@ -577,7 +625,7 @@ sequenceDiagram
 3. **内容校验**：宿主注册了 `sha256` 时，与本地文件对比；不一致（热更新、未同步）时在编辑器顶部提示"设备上的代码和本地不一致，断点行号可能不准"。
 4. **字节码**：去掉调试信息的 luac 无法断点，握手后检测到时提示。
 
-### 7.5 弱网与性能
+### 7.7 弱网与性能
 
 - v3 按需取变量 + CBOR，暂停后首屏只传顶层帧。
 - 心跳 5 秒，3 次未回判定断开；Wi-Fi 切换、App 后台都走自动重连。
@@ -603,8 +651,8 @@ sequenceDiagram
 
 1. 热路径（按函数开关行钩子、无锁断点索引）——真机必需。
 2. 协议 v3 ——与插件同步切换。
-3. Android / iOS 构建与 CI 产物发布。
-4. `HookMux` 钩子共存——和 UELink 共存必需。
+3. Android 构建（含真机附加 agent）与 CI 产物发布。
+4. `HookMux` 钩子共存——注入到别人的进程里，必须和宿主已有的钩子共存。
 5. `EmmyFacade` 拆分、C++17 ——可放到后面。
 
 ### 8.3 迁移方式：并入 IntelliJ-EmmyLua（已确认）
@@ -632,7 +680,8 @@ IntelliJ-EmmyLua/
     shared/ tests/ cmake/ third-party/
     platforms/android/        🆕 NDK 构建脚本
     platforms/ios/            🆕 xcframework 构建脚本
-    emmy_debugger_core/       🆕 从 emmy_debugger 拆出的无 IO、无第三方依赖的调试核心，供 UELink 等宿主以源码引用（见 8.4）
+    emmy_debugger_core/       🆕 从 emmy_debugger 拆出的无 IO、无第三方依赖的调试核心（见 8.4）
+    platforms/android/agent/  🆕 Android 真机附加 agent（见 7.2）
   modules/ src/ ...           插件
 ```
 
@@ -645,46 +694,19 @@ IntelliJ-EmmyLua/
 5. 原 EmmyLuaDebugger 仓库：README 写明"已迁移到 IntelliJ-EmmyLua/native"，然后归档（只读）。外部若有人直接引用旧仓库，旧 tag 仍可用。
 6. 插件资源目录 `src/main/resources/debugger/emmy/**` 的二进制改为由同一次 CI 构建产出、打进插件包，不再提交到仓库。
 
-**和 UEKit 的关系**：UE 项目真机调试**不新增插件、不改打包流程**，复用已经随开发包进到设备上的 UELink，见 8.4。为此 `native/` 里把调试核心拆出一个无 IO、无第三方依赖的 `emmy_debugger_core`，UELink 以源码方式引用它。
+**和 UEKit 的关系**：真机调试**不依赖 UEKit / UELink**，也不往游戏包里加任何东西，走第 7 节的"真机附加"。UELink 若在 PC 编辑器里存在，可以作为可选增强：IDE 读它的名片发现编辑器 / PIE 进程（仍然用注入附加，不需要 UELink 改动）。
 
-### 8.4 UE 真机调试：复用 UELink，不新增插件
+### 8.4 原生端为真机附加新增的部分
 
-**为什么不单独做 `LuaDebug` 插件**：再加一个插件意味着每个项目都要改 `.uproject`、改打包配置、处理 libuv 等第三方库在 Android/iOS 上的 UBT 编译，落地成本高（已与用户确认不现实）。
+| 组件 | 位置 | 说明 |
+| --- | --- | --- |
+| `emmy_debugger_core` | `native/emmy_debugger_core/` | 从 `emmy_debugger` 拆出的纯逻辑：钩子状态机、断点索引、变量读取、受限求值、协议 v3 编解码；网络 / 线程 / 日志由宿主提供。PC 附加、Android 附加、内嵌模式共用 |
+| `emmy_agent_android` | `native/platforms/android/agent/` | JVMTI agent 入口（`Agent_OnAttach`）、参数解析、`/proc/self/maps` 基址计算、Build ID 校验、ShadowHook 内联 hook、`localabstract` socket 服务 |
+| 符号偏移提取 | 插件 Kotlin 侧 `DeviceSymbolResolver` | 读取本地未裁剪 ELF 的 `.symtab` / `.dynsym` 与 `.note.gnu.build-id`，生成偏移表；结果按 Build ID 缓存 |
+| 特征码兜底 | `native/platforms/android/agent/signatures/` | 按 Lua 版本维护的函数特征码，仅在没有未裁剪 so 时使用 |
+| `HookMux` | `emmy_debugger_core` | 进程里已有别的钩子（例如项目自带的性能统计）时共存，不覆盖 |
 
-**UELink 已经具备的条件**（`fixcode-h/UEKit` 现状）：
-
-| 条件 | 现状 |
-| --- | --- |
-| 随开发包进设备 | `UELinkCore` 是 Runtime 模块，只排除 Shipping，没有平台限制，Development / Test 包里本来就有 |
-| 能拿到 Lua VM | 已链接 UnLua 的 Lua（`SetupLua`），有 `StateFor()` 取 `lua_State` |
-| 已经在用调试钩子 | `lua.snap`（快照点）、`lua.profile`（采样）用 `lua_sethook` |
-| 只监听本机 | HTTP 绑定 `127.0.0.1`，真机上配合 `adb forward` / usbmux 正好安全 |
-
-**方案：在 UELink 里加一个"Lua 调试通道"**
-
-```text
-plugins/UELink/Source/UELinkCore/Private/
-  LuaDebug/
-    LuaDebugChannel.cpp     独立线程 + FSocket 监听 127.0.0.1:<端口>，收发协议 v3 帧
-    LuaDebugHost.cpp        把 UnLua 的 lua_State 注册给调试核心；PIE / 重建 Lua 环境时注销
-    ThirdParty/emmy_core/   从 IntelliJ-EmmyLua@tag 的 native/emmy_debugger_core 同步的源码（约 10 个文件）
-```
-
-- **不用 UE 的 HTTPServer 做调试通道**：断点会让游戏线程停住，而 UELink 的 HTTP 请求在游戏线程上处理，停住后就没人回包了（这也是 UELink 注释里说"不做断点"的原因）。调试通道用自己的线程收包；游戏线程停在断点里时，钩子循环从队列里取"查栈 / 取变量 / 继续"等命令，在 Lua 所属线程上执行。这正是 Emmy 现在暂停时的工作方式。
-- **`emmy_debugger_core`**：从 `native/emmy_debugger` 拆出纯逻辑部分（钩子状态机、断点索引、变量读取、受限求值、协议 v3 编解码），网络、线程、日志通过一个很小的接口由宿主提供。没有 libuv，没有 `emmy_hook` / EasyHook，UBT 直接编，iOS 也能用。PC 端的 `emmy_core` / 附加注入同样基于这个核心，两边行为一致。
-- **端口与发现**：调试端口写进 UELink 名片（新字段 `luaDebug`）。PC 上 IDE 扫 `<项目>/Saved/UELink/instances/*.json` 直接列出可调试的编辑器 / PIE / `-game` 进程，**不需要注入**；真机上 IDE 通过 `adb forward` / usbmux 转发到设备的 `127.0.0.1:<端口>`。
-- **开关**：默认不监听，需要 `-LuaDebug` 命令行或 `DefaultUELink.ini` 里 `bLuaDebug=True`；未连接时不挂任何钩子，零开销。
-- **钩子共存**：调试通道、`lua.snap`、`lua.profile` 在 UELink 内部共用一个钩子分发（`HookMux`），不再"记住上一个钩子再转发"。
-- **source hash**：在 UnLua 的加载回调里对实际交给 Lua 的字节算 SHA-256 并注册，真机热更新也能对上。
-- **与 Agent 面板的关系**：面板的 `ue_*` MCP 工具不变；Lua 断点调试的 MCP 由 IDE 插件提供（第 6 节）。
-
-**按项目情况的降级方案**
-
-| 情况 | 可用能力 |
-| --- | --- |
-| 包里有 UELink（推荐） | 完整断点调试：断点、单步、看变量、求值、出错即停 |
-| 包里有 UELink 但不能加调试通道代码 | 只能"不停游戏的快照点"：IDE / MCP 通过 UELink 已有的 `lua.snap` 在指定行采集局部变量和调用栈，相当于日志断点 + Probe，不能单步 |
-| 包里什么都不加 | Android 可调试包（`debuggable=true`）理论上可以用 `cmd activity attach-agent` 加载一个 JVMTI agent，再由它加载调试核心，配合本地未裁剪的 `libUnreal.so` 符号找到 Lua 函数地址，实现"真机附加"。iOS 无法做到。实现复杂、依赖符号文件，列为后续调研项，不进首期 |
+**IDE 侧真机附加流程（用户视角）**：选设备 → 列出可调试进程（自动标出 UE 游戏）→ 选进程 → 首次使用时指定本地未裁剪 `libUnreal.so`（自动在项目 `Binaries/Android`、`Intermediate/Android` 下查找并按 Build ID 匹配）→ 附加。之后同一构建不再询问。
 
 ---
 
@@ -747,31 +769,29 @@ plugins/UELink/Source/UELinkCore/Private/
 
 - 架构从 PE 头自动判断，删除"选择 x86/x64"选项。
 - 按模块是否加载 `lua*.dll` / 导出 `lua_*` 符号识别 Lua 进程；UE 进程类型识别作为一种"进程标签提供者"扩展，而不是写死在通用列表里。
-- 开启了 UELink 调试通道的 UE 进程直接显示"可直连（无需注入）"，选它走 TCP 直连。
 - 仍提供"Lua 附加"运行配置，给需要固定进程名、自动附加的场景用。
 
-### 10.3 连接设备
+### 10.3 真机附加（Android）
 
-新运行配置"Lua 设备调试"：
+新运行配置"Lua 真机附加"，也出现在 `Run > Attach to Process…` 的设备分组里：
 
 ```text
-┌ Lua 设备调试 ──────────────────────────────────────────────┐
-│ 设备    [▼ Pixel 8 (USB · adb)        ] [刷新]             │
-│          · Pixel 8 (USB · adb)                              │
-│          · iPhone 15 (USB · usbmux)                         │
-│          · MyGame @ 192.168.1.23 (局域网)                    │
-│          · 手动输入地址…                                     │
-│ 端口    [9966]   连接方向 (●) IDE 连设备  ( ) 设备连 IDE      │
-│ 配对码  [······]（仅局域网）                                  │
+┌ Lua 真机附加 ──────────────────────────────────────────────┐
+│ 设备    [▼ Pixel 8 (USB · adb · Android 14)  ] [刷新]       │
+│ 进程    [▼ com.studio.mygame  pid 12345  可调试 · UE 游戏 ] │
+│         [ ] 启动应用并在第一行暂停（am start --attach-agent）│
+│ 符号    [自动] $PROJECT_DIR$/Binaries/Android/libUnreal.so  │
+│         ✓ Build ID 与设备一致 · 找到 41 个 lua_* 函数        │
 │ ▸ 源码映射                                                   │
 │   设备路径前缀            本地目录                            │
 │   Content/Script/         $PROJECT_DIR$/Content/Script/  [+][-] │
-│   [ ] 自动学习未映射的文件                                     │
-│ [测试连接]  ✓ 已连接 · Lua 5.4 · runtime 3.0.0 · 2 个 VM       │
+│   [✓] 自动学习未映射的文件                                     │
+│ ▸ 高级：手动地址（内嵌 runtime / 局域网）                      │
+│ [检查环境]  ✓ adb 可用 · 设备已授权 · Android 14 支持 attach-agent │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-"测试连接"会真正建转发、握手、断开，把失败原因说清楚（adb 未找到 / 设备未授权 / 端口未监听 / 协议版本不符）。
+"检查环境"逐项检查并说清失败原因：adb 未找到、设备未授权、应用不可调试（提示需要 Development 包）、Android 版本低于 9（改走 ptrace 方式）、本地 so 的 Build ID 与设备不一致（提示重新打包或指定正确的 so）。
 
 ### 10.4 调试窗口
 
@@ -796,7 +816,7 @@ MCP Server
   本项目安装状态: Claude Code ✓  Cursor ✗  VS Code ✗     [安装/更新…]
 设备
   adb 路径  [自动检测: C:/Android/sdk/platform-tools/adb.exe]
-  iproxy 路径 [未找到]  （iOS USB 调试需要，第二期内置后不再需要）
+  未裁剪 so 搜索目录 [$PROJECT_DIR$/Binaries/Android; $PROJECT_DIR$/Intermediate/Android]
 日志
   调试器日志级别 [运行时 ▼]
 ```
@@ -830,20 +850,50 @@ MCP Server
 
 ## 12. 实施计划
 
+### 12.1 重写还是重构（评估结论）
+
+用户提出：改动很大时可以考虑完全重写。逐块评估如下，结论是 **调试部分按"新建后切换"的方式重写，少数经过验证、与新架构无冲突的部件直接搬过来**。语言支持不在范围内，不动。
+
+| 部分 | 结论 | 理由 |
+| --- | --- | --- |
+| IDE 调试层（`debugger/` 包、`EmmyDebugProcessBase` 等） | **重写** | 协议换 v3、分层换成 engine + 适配层、CLI 删除、LuaPanda 删除，原代码几乎每一行都要改；在旧类上改比新写更乱 |
+| `debugger-core` 状态机 / 事件循环 / 请求注册 | **搬过来再扩展** | 与新架构一致，已有单测 |
+| `VmRegistry`、`PauseSnapshotStore`、`SourceIdentity` 的规则 | **按规则重写，测试用例全部迁移** | 数据结构要适配 v3，但"什么时候失效、怎么匹配"这些规则是踩坑换来的，用例原样保留 |
+| 协议模块（v1 / v2 / CLI / LuaPanda） | **删除，v3 新写** | 不兼容旧版，没有可复用的部分 |
+| 运行配置与 UI | **重写** | 换 Kotlin UI DSL v2 和声明式配置，旧的 Swing 表单和手写 JDOM 不保留 |
+| 原生调试核心（`emmy_debugger.cpp`、`emmy_facade.cpp`） | **重写为 `emmy_debugger_core`（C++17）** | 热路径、线程模型、协议都要换，2434 + 1327 行的两个大文件拆不干净 |
+| 原生 Lua ABI 加载（`lua_api_loader`、`lua_abi_descriptor`） | **保留** | 5 个 Lua 版本 + LuaJIT 的兼容层，重写没有收益；只加"符号偏移表"来源 |
+| 受限求值（`restricted_eval`） | **保留，接入新核心** | 安全边界已测过 |
+| Windows 注入（`emmy_hook`、`emmy_tool`、EasyHook） | **保留** | 刚修过握手阻塞和 PE 解析性能，稳定 |
+| 原生测试（`tests/`、fixture、harness） | **保留并改为测新核心** | 是重写后的回归基线 |
+| 语言支持 | **不动** | 已确认保留 |
+
+**怎么重写才不出事**
+
+1. **新代码放新模块**：`modules/debugger-protocol`、`debugger-engine`、`debugger-mcp`、`native/emmy_debugger_core` 从空目录开始写，旧代码先不删，两套并存但新的不注册到 plugin.xml。
+2. **先把旧行为变成测试**：把 Run to Position 顺序、暂停身份、断线后不卡死、PIE 重启失效、多 VM 路由等已修过的问题写成针对新引擎的用例（用 Kotlin 假 runtime 驱动），新实现必须先过这些用例。
+3. **一次性切换**：新链路通过全部用例和真机验收后，在一个 PR 里改 plugin.xml 指向新实现，同时删除旧的 `debugger/` 包、旧协议模块、CLI、LuaPanda。不做长期双轨。
+4. **原生端同理**：`emmy_debugger_core` 写完并通过 `tests/` 和 `bench_hook` 后，`emmy_core`、`emmy_hook` 改为基于新核心，再删旧的 `emmy_debugger.cpp` / `emmy_facade.cpp`。
+
+这样做的结果：阶段 P1（删减）不再需要单独做，删除动作合并到切换 PR 里；P3（引擎拆分）变成"新写引擎"。下表已按此调整。
+
+### 12.2 阶段
+
 每个阶段一个或几个 PR，每阶段结束都能发版。
 
 | 阶段 | 内容 | 涉及仓库 | 产出 |
 | --- | --- | --- | --- |
 | P0 清理 + 并仓 | 删除仓库垃圾（9.2）；EmmyLuaDebugger 以 subtree 并入 `native/`，删子模块；修复 CI 的 CMake 4.x 配置失败；README 更新 | 本仓库 | 无功能变化，CI 恢复绿色 |
-| P1 删减 | 删 LuaPanda、管道、CLI（9.1）；`EmmyDebugProcessBase` 去掉 CLI 相关代码 | 插件 | 只剩附加 + Emmy 远程，代码减约 40% |
-| P2 协议 v3 + 原生性能 | `native/` 实现 v3、热路径优化、`HookMux`、基准；Android/iOS 构建；CI 发布产物 | 本仓库 `native/` | runtime 3.0 |
-| P3 引擎拆分 | 新建 `debugger-protocol` / `debugger-engine`，拆上帝类，XDebugger 适配层 | 本仓库 | 对接 runtime 3.0（可与 P2 在同一系列 PR 中推进） |
+| P1 行为用例 | 把已修过的问题和现有调试行为写成针对新引擎的用例（Kotlin 假 runtime） | 本仓库 | 重写的验收基线 |
+| P2 新原生核心 | 新写 `native/emmy_debugger_core`（C++17）：协议 v3、新热路径、`HookMux`、基准；Android 构建；CI 发布产物 | 本仓库 `native/` | runtime 3.0 |
+| P3 新引擎 | 新写 `debugger-protocol` / `debugger-engine` / XDebugger 适配层，过 P1 用例 | 本仓库 | 对接 runtime 3.0（可与 P2 并行） |
 | P4 MCP | `debugger-mcp` 模块、HTTP 宿主、权限确认、Agent 页、安装器与未安装提示 | 插件 | Agent 可调试 |
-| P5 真机 | 设备运行配置、adb / iproxy / 局域网发现、源码映射 UI | 插件 | Android / iOS 可用 |
-| P6 UE 集成 | `native/emmy_debugger_core` 拆分；UELink 加 Lua 调试通道（同步核心源码）、名片 `luaDebug` 字段、`HookMux` 接入 | 本仓库 + UEKit(UELink) | UE 真机 + 免注入直连，不改项目打包 |
+| P5 真机 | 设备运行配置、adb 设备与进程列表、源码映射 UI | 插件 | Android 可用（与 P6 一起交付） |
+| P6 Android 真机附加 | 基于新核心的 `emmy_agent_android`（attach-agent、ShadowHook、localabstract）；IDE 侧符号偏移提取与进程选择 | 本仓库 | UE Android 开发包零改动可调试 |
 | P7 UI 打磨 | Attach to Process 集成、设置页、状态栏、i18n | 插件 | — |
+| P8 切换 | 一个 PR：plugin.xml 指向新实现，删除旧 `debugger/` 包、旧协议模块、CLI、LuaPanda（第 9 节清单） | 本仓库 | 发布 3.0 |
 
-P2 与 P1 可并行；P3 依赖 P2 的协议定稿（可以先定协议文档，两边同时做）。
+P1、P2 可并行；P3 依赖 P2 的协议定稿（可以先定协议文档，两边同时做）；P8 之前旧实现保持可用，用户不受影响。
 
 ---
 
@@ -853,8 +903,9 @@ P2 与 P1 可并行；P3 依赖 P2 的协议定稿（可以先定协议文档，
 | --- | --- | --- |
 | 协议不兼容 | 旧 runtime（已编进游戏的 emmy_core）无法连新插件 | 新插件握手失败时明确提示升级；保留一个旧插件版本下载链接 |
 | 按函数开关行钩子的边界 | 尾调用、协程切换、C 函数回调 Lua 时深度计数易错 | 用现有 `vm_lifecycle_harness` 和新增用例覆盖；保留"全量行钩子"调试开关做兜底 |
-| iOS usbmux 内置实现 | 协议非公开，Windows 依赖 iTunes/Apple 设备服务 | 第一期只用 iproxy |
 | MCP 客户端配置格式变化 | 各家格式还在变 | 每个客户端一个独立写入器，配格式测试 |
 | 默认端口冲突 | 9330 / 9966 被占用 | 顺延并在 UI / 安装器中提示 |
-| UnLua 定制分支 | Lua ABI 与官方不同 | UELink 调试通道与游戏共用同一份 Lua 头文件编译（UELink 已经这样做）；Host API 中对 ABI 描述做对账（已有 `lua_abi_descriptor`） |
+| UnLua 定制分支 | Lua ABI 与官方不同 | 真机附加不重新编译 Lua，只调用游戏里现成的函数；`lua_Debug` 用大缓冲兜底；Host API 中对 ABI 描述做对账（已有 `lua_abi_descriptor`） |
+| 真机附加依赖未裁剪 so | 构建机清理了 `Intermediate` 就找不到符号 | IDE 提示保留路径；支持从构建产物归档（符号服务器 / 共享盘）按 Build ID 取；没有时退回特征码 |
+| Android 版本差异 | `attach-agent` 要求 Android 9+ 且应用可调试 | Android 8 及以下走 run-as + ptrace；正式签名包只在 root 设备支持 |
 | 待定 | MCP 默认端口号、配对码展示方式（日志 / 屏幕浮层）、是否去掉 251 构建 | 评审时确认 |
