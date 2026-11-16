@@ -96,6 +96,8 @@ project(":") {
             plugin("com.redhat.devtools.lsp4ij", providers.gradleProperty("lsp4ijVersion").get())
             // 可选依赖：.emmyrc.json 的 JSON Schema（plugin.xml 里 optional depends）
             bundledPlugin("com.intellij.modules.json")
+            // 拼写检查词典：平台模块，不在默认编译类路径里（plugin.xml 里同样是 optional depends）
+            bundledModule("intellij.spellchecker")
             pluginVerifier()
             testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Platform)
         }
