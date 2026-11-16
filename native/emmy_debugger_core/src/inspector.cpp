@@ -112,6 +112,8 @@ uint64_t Inspector::NewRef(RefKind kind, uint64_t frameId, int slot, const std::
 }
 
 int Inspector::Anchor(lua_State* L, int idx) {
+	// 不在暂停里没有锚表：rawseti 到 nil 上会让 Lua 读坏内存，直接不锚（返回 0，PushAnchored 压 nil）
+	if (anchorRef_ == LUA_NOREF || anchorRef_ == LUA_REFNIL) return 0;
 	idx = lua::AbsIndex(L, idx);
 	lua_rawgeti(L, LUA_REGISTRYINDEX, anchorRef_);
 	lua_pushvalue(L, idx);
@@ -122,7 +124,16 @@ int Inspector::Anchor(lua_State* L, int idx) {
 }
 
 void Inspector::PushAnchored(lua_State* L, int slot) {
+	if (slot <= 0 || anchorRef_ == LUA_NOREF || anchorRef_ == LUA_REFNIL) {
+		lua_pushnil(L);
+		return;
+	}
 	lua_rawgeti(L, LUA_REGISTRYINDEX, anchorRef_);
+	if (lua_type(L, -1) != LUA_TTABLE) { // 锚表丢了（不该发生）：当成取不到，不对 nil 做 rawgeti
+		lua_pop(L, 1);
+		lua_pushnil(L);
+		return;
+	}
 	lua_rawgeti(L, -1, slot);
 	lua_remove(L, -2);
 }
@@ -617,6 +628,8 @@ void NoteProvider(std::vector<uint64_t>& used, uint64_t id) {
 } // namespace
 
 bool Inspector::HostDescribe(lua_State* L, int idx, VariableItem& item, const std::string& evaluateName) {
+	// 宿主（UELink）只在暂停循环里、游戏线程上被调；暂停之外（条件断点、日志断点求值）一律不问宿主
+	if (!pausedL_ || !L) return false;
 	host::Described d;
 	bool claimed;
 	{

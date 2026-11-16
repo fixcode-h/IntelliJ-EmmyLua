@@ -7,6 +7,7 @@ import com.tang.intellij.lua.debug.api.LuaDebugProcessFactory
 import com.tang.intellij.lua.debug.api.LuaDebugTarget
 import com.tang.intellij.lua.debug.engine.transport.Connector
 import com.tang.intellij.lua.debug.engine.transport.MessageConnection
+import com.tang.intellij.lua.debug.engine.transport.TargetGoneException
 import com.tang.intellij.lua.debug.engine.transport.TcpConnector
 import com.tang.intellij.lua.debugger.resources.DebuggerResourceService
 import java.io.IOException
@@ -29,18 +30,34 @@ class LocalProcessDebugProcessFactory : LuaDebugProcessFactory {
         return process
     }
 
+    /**
+     * 每次建连前先确认进程还在：进程退出（游戏、编辑器关了）就抛 [TargetGoneException]，引擎直接结束会话，
+     * 不再反复注入。位数第一次查到后记住，之后重连不再查。
+     */
     private class InjectingConnector(private val pid: Int, private val token: String) : Connector {
         @Volatile
         var log: (String) -> Unit = {}
+        @Volatile
+        private var arch: String? = null
+
+        override fun isTargetAlive(): Boolean = ProcessHandle.of(pid.toLong()).map { it.isAlive }.orElse(false)
 
         override fun connect(): MessageConnection {
+            if (!isTargetAlive()) throw TargetGoneException("进程 $pid 已退出，调试结束")
             val root = try {
-                // 工具随插件打包，首次使用时解压；P8 切换时随旧 debugger 包一起迁移
                 DebuggerResourceService.emmyNativeToolsDirectory().toFile()
             } catch (e: Exception) {
                 throw IOException("无法准备注入工具：${e.message}", e)
             }
-            val result = LocalAttachTool(root, log).attach(pid, token)
+            val tool = LocalAttachTool(root, log)
+            val result = try {
+                val known = arch ?: tool.detectArch(pid).also { arch = it }
+                tool.attach(pid, token, known)
+            } catch (e: IOException) {
+                // 注入途中进程退出时 emmy_tool 报的是各种「打不开进程」，统一成进程已退出
+                if (!isTargetAlive()) throw TargetGoneException("进程 $pid 已退出，调试结束")
+                throw e
+            }
             return TcpConnector(result.host, result.port, token = token).connect()
         }
     }

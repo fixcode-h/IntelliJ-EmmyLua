@@ -436,6 +436,10 @@ TEST_CASE("session.host_value_provider") {
 	p.listChildren = &HostList;
 	p.releasePause = &HostRelease;
 	uint64_t pid = Emmy_RegisterHostValueProviderV2(&p);
+	// 宿主定期重注册（UELink 每 2 秒）不会产生重复项
+	CHECK_EQ(Emmy_RegisterHostValueProviderV2(&p), pid);
+	CHECK_EQ(Emmy_HasHostValueProviderV2(pid), 1);
+	CHECK_EQ(Emmy_HasHostValueProviderV2(pid + 1000), 0);
 	CHECK(pid != 0);
 
 	TestClient c;

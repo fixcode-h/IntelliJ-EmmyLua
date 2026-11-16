@@ -78,6 +78,7 @@ bool HasProviders() {
 }
 
 bool Describe(lua_State* L, int idx, uint64_t vmId, uint64_t pauseId, uint32_t maxValueLength, Described& out) {
+	if (!L) return false;
 	idx = lua::AbsIndex(L, idx);
 	for (const Entry& e : Snapshot()) {
 		if (!e.p.describe) continue;
@@ -113,7 +114,10 @@ bool ListChildren(uint64_t providerId, lua_State* L, int idx, const std::string&
 	}
 	std::string buf;
 	if (!hostRef.empty()) idx = 0;
-	else idx = lua::AbsIndex(L, idx);
+	else if (!L) {
+		err = "没有可查询的 Lua 状态";
+		return false;
+	} else idx = lua::AbsIndex(L, idx);
 	EmmyHostValueQuery q = MakeQuery(L, idx, hostRef.empty() ? nullptr : hostRef.c_str(),
 		vmId, pauseId, maxValueLength, &buf);
 	q.start = start;
@@ -152,6 +156,11 @@ extern "C" uint64_t EMMY_HOST_API_CALL Emmy_RegisterHostValueProviderV2(const Em
 	if (!provider || provider->version != EMMY_HOST_VALUE_ABI_VERSION) return 0;
 	if (provider->size < sizeof(EmmyHostValueProviderV2) || !provider->describe) return 0;
 	std::lock_guard<std::mutex> lk(g_mutex);
+	// 同一个提供者（同一组回调 + userData）重复注册返回原来的 id：宿主可以定期重注册，
+	// 核心被卸载后在同一地址重新加载时（模块句柄不变，宿主分不出来）也能接上
+	for (const Entry& old : g_providers) {
+		if (old.p.describe == provider->describe && old.p.userData == provider->userData) return old.id;
+	}
 	Entry e;
 	e.id = g_nextId++;
 	e.p = *provider;
@@ -168,5 +177,13 @@ extern "C" int EMMY_HOST_API_CALL Emmy_UnregisterHostValueProviderV2(uint64_t pr
 	if (it == g_providers.end()) return -1;
 	g_providers.erase(it);
 	g_count.store(g_providers.size(), std::memory_order_release);
+	return 0;
+}
+
+extern "C" int EMMY_HOST_API_CALL Emmy_HasHostValueProviderV2(uint64_t providerId) {
+	std::lock_guard<std::mutex> lk(g_mutex);
+	for (const Entry& e : g_providers) {
+		if (e.id == providerId) return 1;
+	}
 	return 0;
 }
