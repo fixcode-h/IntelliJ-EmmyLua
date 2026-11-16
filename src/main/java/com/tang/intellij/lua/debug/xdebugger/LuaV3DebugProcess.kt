@@ -8,6 +8,7 @@ import com.intellij.openapi.ui.MessageType
 import com.intellij.openapi.vfs.VirtualFileManager
 import com.intellij.xdebugger.XDebugProcess
 import com.intellij.xdebugger.XDebugSession
+import com.intellij.xdebugger.XDebugSessionListener
 import com.intellij.xdebugger.XSourcePosition
 import com.intellij.xdebugger.breakpoints.SuspendPolicy
 import com.intellij.xdebugger.breakpoints.XBreakpointHandler
@@ -74,6 +75,27 @@ class LuaV3DebugProcess(
         session.setPauseActionSupported(true)
         subscription = engine.events.subscribe(::onEvent)
         LuaDebugSessionManager.getInstance(session.project).register(LuaDebugSessionManager.Entry(engine, target, session))
+        session.addSessionListener(InlineValuesListener())
+    }
+
+    /** 编辑器行尾的变量值跟着「当前选中的栈帧」走：暂停、切帧时取快照，继续运行或结束时清掉。 */
+    private inner class InlineValuesListener : XDebugSessionListener {
+        private val store get() = LuaInlineValueStore.getInstance(session.project)
+
+        override fun sessionPaused() = loadSelected()
+
+        override fun stackFrameChanged() = loadSelected()
+
+        override fun sessionResumed() = store.clear(session)
+
+        override fun sessionStopped() = store.clear(session)
+
+        private fun loadSelected() {
+            val frame = session.currentStackFrame as? LuaV3StackFrame
+                ?: (session.suspendContext?.activeExecutionStack?.topFrame as? LuaV3StackFrame)
+                ?: return store.clear(session)
+            store.load(session, engine, frame.handle)
+        }
     }
 
     override fun getEditorsProvider(): XDebuggerEditorsProvider = editorsProvider
