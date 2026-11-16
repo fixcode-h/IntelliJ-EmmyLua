@@ -11,7 +11,8 @@
 > 5. MCP 支持一键写入当前项目的版本管理根目录；没装时弹窗提示是否安装。
 > 6. EmmyLuaDebugger 并入本仓库，不再作为子模块，也不迁到 UEKit。
 > 7. 游戏包里不能加入任何调试代码或插件；真机调试走运行时注入，首期只支持 Android。
-> 8. 改动大的部分可以重写；评估结论见 [12.1](#121-重写还是重构评估结论)。
+> 8. EmmyLuaDebugger 并入后原仓库删除，只保留一个项目；开发在 `dev` 分支，验收后合入 `main`。
+> 9. 改动大的部分可以重写；评估结论见 [12.1](#121-重写还是重构评估结论)。
 
 ---
 
@@ -691,8 +692,9 @@ IntelliJ-EmmyLua/
 2. 删除 `.gitmodules` 和 `EmmyLuaDebugger` 子模块条目。
 3. CI 中 `cmake -S EmmyLuaDebugger` 改为 `cmake -S native`，去掉 `submodules: recursive`；顺手加 `-DCMAKE_POLICY_VERSION_MINIMUM=3.5` 或升级 `third-party` 的 `cmake_minimum_required`（当前 runner 的 CMake 4.x 因 libuv 等第三方库最低版本过低而配置失败，所有 Native 检查都是红的）。
 4. 原生 CI 只在 `native/**` 变化时跑（`paths` 过滤），不拖慢纯 Kotlin 的 PR。
-5. 原 EmmyLuaDebugger 仓库：README 写明"已迁移到 IntelliJ-EmmyLua/native"，然后归档（只读）。外部若有人直接引用旧仓库，旧 tag 仍可用。
-6. 插件资源目录 `src/main/resources/debugger/emmy/**` 的二进制改为由同一次 CI 构建产出、打进插件包，不再提交到仓库。
+5. 原 EmmyLuaDebugger 仓库：确认 `native/` 的历史和 CI 都正常后**删除**（用户已确认）。删除前在本仓库打一个 tag 记录并入时的原仓库提交号，便于追溯。之后只维护一个项目。
+6. `native/` 不是原样搬运：按第 5 节和 12.1 的结论重构，只保留新架构需要的部分（Windows 注入、Lua ABI 加载、受限求值、测试），其余由 `emmy_debugger_core` 取代。
+7. 插件资源目录 `src/main/resources/debugger/emmy/**` 的二进制改为由同一次 CI 构建产出、打进插件包，不再提交到仓库。
 
 **和 UEKit 的关系**：真机调试**不依赖 UEKit / UELink**，也不往游戏包里加任何东西，走第 7 节的"真机附加"。UELink 若在 PC 编辑器里存在，可以作为可选增强：IDE 读它的名片发现编辑器 / PIE 进程（仍然用注入附加，不需要 UELink 改动）。
 
@@ -877,7 +879,13 @@ MCP Server
 
 这样做的结果：阶段 P1（删减）不再需要单独做，删除动作合并到切换 PR 里；P3（引擎拆分）变成"新写引擎"。下表已按此调整。
 
-### 12.2 阶段
+### 12.2 分支流程
+
+- 所有开发在 `dev` 分支进行：每个阶段从 `dev` 拉功能分支，PR 合入 `dev`。
+- 阶段完成、`dev` 上 CI 全绿并验收后，再把 `dev` 合入 `main` 发布（`main` 的推送会触发自动发版）。
+- 旧实现在 P8 切换前保持可用，`main` 随时可以发补丁版本。
+
+### 12.3 阶段
 
 每个阶段一个或几个 PR，每阶段结束都能发版。
 
