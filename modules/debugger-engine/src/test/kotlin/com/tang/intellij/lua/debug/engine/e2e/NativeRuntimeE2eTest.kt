@@ -72,11 +72,11 @@ class NativeRuntimeE2eTest {
         if (this::root.isInitialized) root.deleteRecursively()
     }
 
-    private fun session(): Pair<DebugSession, EventRecorder> {
-        val config = SessionConfig(
+    private fun session(configure: (SessionConfig) -> SessionConfig = { it }): Pair<DebugSession, EventRecorder> {
+        val config = configure(SessionConfig(
             name = "e2e", requestTimeoutMillis = 5_000, handshakeTimeoutMillis = 5_000,
             heartbeatIntervalMillis = 0, reconnect = ReconnectPolicy.NONE
-        )
+        ))
         val mapper = SourceMapper(listOf(MappingRule("game", File(root, "game").path)))
         val session = DebugSession(config, TcpConnector("127.0.0.1", port), mapper)
         sessions += session
@@ -130,6 +130,28 @@ class NativeRuntimeE2eTest {
     }
 
     @Test
+    fun `richVariables 下发变量视图设置 返回分组和 kind`() {
+        // 和设置页 VariableViewSettings.toProtocolOptions() 的字段一致
+        val view = com.tang.intellij.lua.debug.protocol.jsonObject {
+            put("sort", "smart"); put("groupMethods", true); put("showInherited", true); put("showMetatable", true)
+            put("toString", "tables"); put("hideStdGlobals", true); put("showTemporaries", false)
+        }
+        val (session, events) = session { it.copy(options = it.options.copy(variableView = view), maxValueLength = 16) }
+        assumeTrue("runtime 没有声明 richVariables", session.hasCapability(Capabilities.RICH_VARIABLES))
+        session.addBreakpoint(BreakpointRequest(script.path, LINE_LOCAL_R)).await()
+        val pause = events.pause()
+        val frame = session.stackTrace(pause).await().frames.first()
+        val locals = session.scopes(frame).await().single { it.name == "locals" }
+        val t = session.variables(locals).await().variables.single { it.variable.name == "t" }
+        assertTrue("t 应该有 kind：${t.variable}", t.variable.kind != null)
+        val page = session.variables(t.children()!!).await()
+        assertTrue("应该有继承 / 元表分组：${page.groups.map { it.variable.name }}", page.groups.isNotEmpty())
+        assertTrue("name" in page.variables.map { it.variable.name })
+        val failed = session.output().map { it.value.text }.filter { "选项下发失败" in it }
+        assertTrue(failed.toString(), failed.isEmpty())
+    }
+
+    @Test
     fun `条件断点只在条件成立时停`() {
         val (session, events) = session()
         assumeTrue(session.hasCapability(Capabilities.CONDITION))
@@ -178,7 +200,7 @@ class NativeRuntimeE2eTest {
               return sum
             end
             function M.tick(i)
-              local t = { name = "x", list = {1, 2, 3} }
+              local t = setmetatable({ name = "x", list = {1, 2, 3} }, { __index = { base = 2, Show = function() end } })
               local r = M.add(i, 1)
               counter = counter + r
               return r
