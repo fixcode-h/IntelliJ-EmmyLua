@@ -123,6 +123,7 @@ private:
 	void RefreshIndex();
 	SourceEntry* Lookup(const char* source, size_t len);
 	bool IsHotFunc(const lua::FuncInfo& f);
+	bool IsHotIn(const SourceEntry* e, const lua::FuncInfo& f);
 	bool AnyHotFrame(lua_State* L, lua_Debug* ar);
 	void ReportMatch(const SourceEntry& entry);
 	void OnBreakLine(lua_State* L, lua_Debug* ar, SourceEntry* entry);
@@ -178,6 +179,13 @@ private:
 	std::unordered_map<const char*, SourceEntry> cache_;
 	const char* lastSource_ = nullptr;
 	SourceEntry* lastEntry_ = nullptr;
+	// 行事件的快速路径：上一个行事件所在函数的判断
+	const char* lineSource_ = nullptr;
+	int lineDefined_ = -1;
+	int lineLastDefined_ = -1;
+	uint64_t lineStamp_ = 0;
+	SourceEntry* lineEntry_ = nullptr;
+	bool lineHot_ = false;
 	std::unordered_map<uint64_t, int64_t> hitCounts_;
 	std::unordered_map<uint64_t, std::string> reported_;
 	std::shared_ptr<Breakpoint> runToLine_;

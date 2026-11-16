@@ -165,8 +165,11 @@ void Vm::AdaptCount() {
 
 bool Vm::IsHotFunc(const lua::FuncInfo& f) {
 	if (f.isC) return false;
-	SourceEntry* e = Lookup(f.source, 0);
-	if (!e || !e->hot) return false;
+	return IsHotIn(Lookup(f.source, 0), f);
+}
+
+bool Vm::IsHotIn(const SourceEntry* e, const lua::FuncInfo& f) {
+	if (!e || !e->hot || f.isC) return false;
 	if (f.lineDefined == 0) return true; // 主 chunk 覆盖整个文件
 	// 只有函数定义范围内有断点行才开行钩子（同一文件里的其他函数不受影响）
 	auto it = std::lower_bound(e->lines.begin(), e->lines.end(), f.lineDefined);
@@ -216,8 +219,24 @@ int Vm::OnHook(lua_State* L, lua_Debug* ar) {
 	}
 	if (ev == LUA_HOOKLINE) {
 		bool hasInfo = lua::HookFuncInfo(L, ar, false, f);
-		SourceEntry* e = hasInfo && !f.isC ? Lookup(f.source, 0) : nullptr;
-		bool hot = hasInfo && IsHotFunc(f);
+		SourceEntry* e = nullptr;
+		bool hot = false;
+		if (hasInfo && !f.isC) {
+			// 热函数里每行都进来：同一个函数连续的行事件直接用上次的判断（断点表变了 cacheStamp_ 会变）
+			if (f.source == lineSource_ && f.lineDefined == lineDefined_ && f.lastLineDefined == lineLastDefined_ && lineStamp_ == cacheStamp_) {
+				e = lineEntry_;
+				hot = lineHot_;
+			} else {
+				e = Lookup(f.source, 0);
+				hot = IsHotIn(e, f);
+				lineSource_ = f.source;
+				lineDefined_ = f.lineDefined;
+				lineLastDefined_ = f.lastLineDefined;
+				lineStamp_ = cacheStamp_;
+				lineEntry_ = e;
+				lineHot_ = hot;
+			}
+		}
 		const uint64_t pausesBefore = pauseCounter_;
 		if (pauseAtLine_) {
 			pauseAtLine_ = false;
@@ -236,7 +255,10 @@ int Vm::OnHook(lua_State* L, lua_Debug* ar) {
 			OnBreakLine(L, ar, e);
 		}
 		// 暂停之后断点/单步状态可能变了，重新判断
-		if (pauseCounter_ != pausesBefore) hot = hasInfo && IsHotFunc(f);
+		if (pauseCounter_ != pausesBefore) {
+			e = hasInfo && !f.isC ? Lookup(f.source, 0) : nullptr;
+			hot = IsHotIn(e, f);
+		}
 		if (hot) return BaseMask() | region | LUA_MASKLINE;
 		return BaseMask() | (curMask & LUA_MASKRET ? region : 0);
 	}
@@ -259,6 +281,7 @@ Vm::SourceEntry* Vm::Lookup(const char* source, size_t) {
 	if (it == cache_.end()) {
 		if (cache_.size() >= kMaxCacheEntries) {
 			cache_.clear();
+			++cacheStamp_; // 指向旧条目的缓存（lineEntry_ 等）一起作废
 			lastSource_ = nullptr;
 			lastEntry_ = nullptr;
 		}
