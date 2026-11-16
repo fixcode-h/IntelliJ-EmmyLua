@@ -396,6 +396,31 @@ void Session::CmdSetBreakpoints(uint64_t id, const json& args) {
 	uint64_t rev = update.revision;
 	if (!core.ApplyBreakpoints(std::move(update), err)) return Fail(id, "INVALID_ARGS", err);
 	Reply(id, {{"revision", rev}, {"breakpoints", std::move(states)}});
+	ScheduleBreakpointDiagnostics();
+}
+
+void Session::ScheduleBreakpointDiagnostics() {
+	// 断点下发 5 秒后还没匹配上任何执行过的脚本，就把执行过的 chunk 名报给用户：看得出是路径对不上还是钩子没跑。
+	// 连续下发只算最后一次（代数对不上的线程直接退出）。
+	const uint64_t gen = ++bpDiagGen_;
+	std::weak_ptr<Session> weak = shared_from_this();
+	std::thread([weak, gen] {
+		for (int i = 0; i < 50; ++i) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(100));
+			auto s = weak.lock();
+			if (!s || s->closed_ || s->bpDiagGen_.load() != gen) return;
+		}
+		auto s = weak.lock();
+		if (!s || s->closed_ || s->bpDiagGen_.load() != gen) return;
+		Core& core = Core::Get();
+		auto idx = core.CurrentIndex();
+		for (auto& vm : core.Vms()) {
+			std::string text = vm->BreakpointDiagnostics(idx.get());
+			if (!text.empty()) {
+				s->Emit("output", {{"category", "runtime"}, {"level", "warning"}, {"text", text + "\n"}, {"vmId", vm->id()}});
+			}
+		}
+	}).detach();
 }
 
 void Session::CmdSetOptions(uint64_t id, const json& args) {

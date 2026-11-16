@@ -118,6 +118,38 @@ TEST_CASE("index.longest_match_wins_and_ambiguous") {
 	CHECK_EQ(amb.ambiguous.size(), static_cast<size_t>(2));
 }
 
+TEST_CASE("path.file_chunk_without_at") {
+	// UnLua 等不加 '@' 的路径 / 模块名
+	CHECK(IsFileChunk("@main.lua"));
+	CHECK(IsFileChunk("D:/Game/Content/Script/BP_CharacterBase.lua"));
+	CHECK(IsFileChunk("Content\\Script\\BP_CharacterBase.lua"));
+	CHECK(IsFileChunk("BP_CharacterBase.lua"));
+	CHECK(IsFileChunk("D:/My Game/Script/A.lua"));
+	CHECK(IsFileChunk("Tutorials.BP_CharacterBase"));
+	CHECK(IsFileChunk("BP_CharacterBase"));
+	// 代码串仍然不是文件
+	CHECK(!IsFileChunk("=[C]"));
+	CHECK(!IsFileChunk("return 1"));
+	CHECK(!IsFileChunk("return"));
+	CHECK(!IsFileChunk("return M.lua"));
+	CHECK(!IsFileChunk("x = a / b"));
+	CHECK(!IsFileChunk("print('a/b.lua')"));
+	CHECK(!IsFileChunk("local t = {}\nreturn t"));
+	CHECK(!IsFileChunk("[string \"boot\"]"));
+	CHECK_EQ(NormalizePath("Tutorials.BP_CharacterBase", false).text, std::string("tutorials/bp_characterbase"));
+	CHECK_EQ(NormalizePath("BP_CharacterBase.lua", true).text, std::string("BP_CharacterBase"));
+}
+
+TEST_CASE("index.match_unlua_chunks") {
+	std::vector<BreakpointPtr> bps = {MakeBp("a", "D:/Game/Content/Script/Tutorials/BP_CharacterBase.lua", 12)};
+	BreakpointIndex idx(1, bps, false);
+	CHECK_EQ(idx.Match("D:\\Game\\Content\\Script\\Tutorials\\BP_CharacterBase.lua", 1).bps.size(), static_cast<size_t>(1));
+	CHECK_EQ(idx.Match("Tutorials/BP_CharacterBase.lua", 1).bps.size(), static_cast<size_t>(1));
+	CHECK_EQ(idx.Match("Tutorials.BP_CharacterBase", 1).bps.size(), static_cast<size_t>(1));
+	CHECK_EQ(idx.Match("BP_CharacterBase", 1).bps.size(), static_cast<size_t>(1));
+	CHECK(idx.Match("return BP_CharacterBase", 1).bps.empty());
+}
+
 TEST_CASE("index.chunkname_exact") {
 	std::vector<BreakpointPtr> bps = {MakeBp("a", "D:/x/main.lua", 3, "[string \"boot\"]")};
 	BreakpointIndex idx(1, bps, false);

@@ -47,6 +47,8 @@ public:
 	// 任意线程可调：让主线程立刻挂上钩子，并在下一次事件时把掩码扩散到所有协程。
 	// 用于 IDE 刚连上、宿主刚注册客户端这类「当前可能完全没有钩子」的时刻。
 	void Kick();
+	// 在 L 所在的线程上调用：L 没有任何钩子而调试器需要时挂上（新协程、遍历时漏掉的协程）
+	void EnsureHook(lua_State* L);
 
 	// 只在 VM 线程调用
 	void Dispatch(lua_State* L, lua_Debug* ar);

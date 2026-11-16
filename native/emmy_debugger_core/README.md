@@ -90,4 +90,6 @@ hello 的 `caps` 里**明确写了** `richVariables` 才开（不写 caps 的老
 `setOptions.exceptions` = `none` / `uncaught` / `all`，暂停时 `reason = exception`，`exception = { message, traceback, uncaught }`，栈从第一个 Lua 帧算起（错误处理函数、`error` / `assert` 不显示），局部变量还能看。
 
 - 「没被接住」只有宿主知道：宿主在 `lua_pcall` 的错误处理函数里调 `Emmy_NotifyLuaError`，或者直接用 `Emmy_LuaErrorHandler` 当错误处理函数；挂 `lua_pcall` 的注入方式用 `Emmy_PrepareHostPcall` / `Emmy_FinishHostPcall`（Windows 附加已接，Lua 自己的 `pcall` 和带续延的调用不插）。
+
+协程的钩子：`lua_sethook` 按线程设置，`lua_newthread` 继承的是创建者当时的钩子。核心在需要时遍历 VM 里的协程补钩子；挂了 `lua_resume` 的注入方式另外在每次恢复协程前调 `Emmy_SyncThreadHook(co)`（Windows 附加已接），协程没有任何钩子而调试器需要时补上，遍历漏掉（例如布局校验没通过）也不会丢断点。
 - `all` 时核心把全局 `pcall` / `xpcall` 换成用 `xpcall` 写的包装（5.2+ 仍可 yield），被接住的错误也会停；改回 `none` / `uncaught` 时还原。脚本里提前 `local pcall = pcall` 存下的引用不受影响。
