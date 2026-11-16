@@ -10,14 +10,15 @@ extern "C" {
 
 #include <cstddef>
 
-#if defined(EMMY_CORE_LUA_51)
-#  define EMMY_LUA_VERSION_NUM 501
-#elif defined(EMMY_CORE_LUA_52)
-#  define EMMY_LUA_VERSION_NUM 502
-#elif defined(EMMY_CORE_LUA_53)
-#  define EMMY_LUA_VERSION_NUM 503
-#else
+// 直接看 lua.h 的 LUA_VERSION_NUM：不依赖编译定义，测试、bench 等目标 include 时也一致
+#if LUA_VERSION_NUM >= 504
 #  define EMMY_LUA_VERSION_NUM 504
+#elif LUA_VERSION_NUM == 503
+#  define EMMY_LUA_VERSION_NUM 503
+#elif LUA_VERSION_NUM == 502
+#  define EMMY_LUA_VERSION_NUM 502
+#else
+#  define EMMY_LUA_VERSION_NUM 501
 #endif
 
 #ifndef LUA_OK

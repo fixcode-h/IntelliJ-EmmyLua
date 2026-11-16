@@ -5,9 +5,11 @@
 #include "breakpoints.h"
 #include "hook_mux.h"
 #include "inspector.h"
+#include "lua_internal.h"
 #include "lua_shim.h"
 #include "nlohmann/json.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -81,6 +83,7 @@ public:
 	int CountInterval() const override { return countInterval_.load(std::memory_order_relaxed); }
 	bool WantsHook() const override;
 	bool InEval(lua_State* L, bool& timedOut) override;
+	bool HasPendingWork() const override;
 
 	// 输出捕获（print）
 	void EmitOutput(lua_State* L, const std::string& text);
@@ -93,7 +96,8 @@ private:
 		ChunkMatch match;
 		bool rtl = false;
 		int rtlLine = 0;
-		bool HasLine(int line) const { return (rtl && rtlLine == line) || match.HasLine(line); }
+		std::vector<int> lines; // 断点行（含 runToLine），升序
+		bool HasLine(int line) const { return std::binary_search(lines.begin(), lines.end(), line); }
 	};
 
 	struct StepState {
@@ -108,6 +112,8 @@ private:
 	void ResetSessionState(lua_State* L);
 	void RefreshIndex();
 	SourceEntry* Lookup(const char* source, size_t len);
+	bool IsHotFunc(const lua::FuncInfo& f);
+	bool AnyHotFrame(lua_State* L, lua_Debug* ar);
 	void ReportMatch(const SourceEntry& entry);
 	void OnBreakLine(lua_State* L, lua_Debug* ar, SourceEntry* entry);
 	bool StepShouldStop(lua_State* L);
@@ -143,7 +149,6 @@ private:
 	// 只在 VM 线程
 	uint64_t sessionGen_ = 0;
 	std::shared_ptr<const BreakpointIndex> index_;
-	uint64_t indexRevision_ = 0;
 	uint64_t cacheStamp_ = 1;
 	uint64_t seenEpoch_ = 1;
 	std::unordered_map<const char*, SourceEntry> cache_;

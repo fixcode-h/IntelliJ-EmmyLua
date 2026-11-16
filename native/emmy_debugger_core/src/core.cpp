@@ -10,6 +10,8 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <mutex>
+#include <string>
 #include <thread>
 
 namespace emmy {
@@ -346,8 +348,46 @@ using emmy::Core;
 
 extern "C" {
 
-void Emmy_SetLuaApiResolver(Emmy_LuaApiResolver, void*) {
-	// 以源码方式编译的核心直接链接 Lua，不需要解析；动态 API 模式接入后在这里生效
+namespace {
+std::mutex g_lastErrorMutex;
+std::string g_lastError;
+
+void SetLastError(std::string e) {
+	std::lock_guard<std::mutex> lk(g_lastErrorMutex);
+	g_lastError = std::move(e);
+}
+
+// dynamic 模式下 Lua 函数指针还没填好就不能碰任何 lua_*；宿主没调 Emmy_SetLuaApiResolver 时退回 dlsym
+bool EnsureLuaApi() {
+#if defined(EMMY_CORE_LUA_DYNAMIC)
+	if (emmy_dyn_ready()) return true;
+	char err[512];
+	if (emmy_dyn_resolve(nullptr, nullptr, err, sizeof(err)) != 0) {
+		SetLastError(std::string("Lua API 未就绪（先调 Emmy_SetLuaApiResolver）：") + err);
+		return false;
+	}
+#endif
+	return true;
+}
+} // namespace
+
+void Emmy_SetLuaApiResolver(Emmy_LuaApiResolver resolve, void* ud) {
+#if defined(EMMY_CORE_LUA_DYNAMIC)
+	char err[512];
+	if (emmy_dyn_resolve(resolve, ud, err, sizeof(err)) != 0) SetLastError(err);
+#else
+	// source 模式直接链接 Lua，不需要解析
+	(void)resolve;
+	(void)ud;
+#endif
+}
+
+const char* Emmy_LastError(void) {
+	// 返回的指针在下一次出错前有效；只给宿主写日志 / 状态文件用
+	static thread_local std::string copy;
+	std::lock_guard<std::mutex> lk(g_lastErrorMutex);
+	copy = g_lastError;
+	return copy.c_str();
 }
 
 void Emmy_SetProcessInfo(const char* packageName, const char* buildId) {
@@ -369,7 +409,9 @@ int Emmy_ListenTcp(const char* host, int port, char* err, size_t errLen) {
 	return 0;
 }
 
-int Emmy_ListenAbstract(const char* name, char* err, size_t errLen) {
+int Emmy_ListenAbstract(const char* name, const char* token, char* err, size_t errLen) {
+	// token 为空表示不校验；非空等同于先调 Emmy_SetToken
+	if (token && *token) Core::Get().SetToken(token);
 	std::string e;
 	auto t = emmy::ListenAbstract(name ? name : "", &emmy::HandleConnection, e);
 	if (!t) {
@@ -418,6 +460,7 @@ int Emmy_IsConnected(void) {
 }
 
 uint64_t Emmy_RegisterLuaVm(lua_State* L, const char* discovery) {
+	if (!L || !EnsureLuaApi()) return 0;
 	return Core::Get().RegisterVm(L, discovery ? discovery : "");
 }
 

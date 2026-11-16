@@ -26,10 +26,12 @@ typedef struct lua_Debug lua_Debug;
 
 /* ---------- 进程与 Lua API ---------- */
 
-/* 运行时解析 Lua 符号（附加场景，取代 dlsym / GetProcAddress）。在任何 Lua 调用之前设置。
- * 以源码方式编译的核心忽略它。 */
+/* 运行时解析 Lua 符号（dynamic 模式，附加场景用，取代 dlsym）。在 Emmy_RegisterLuaVm 之前设置；不设则退回 dlsym(RTLD_DEFAULT)。
+ * source 模式（核心自带 Lua）忽略它。 */
 typedef void* (*Emmy_LuaApiResolver)(const char* name, void* ud);
 EMMY_API void Emmy_SetLuaApiResolver(Emmy_LuaApiResolver resolve, void* ud);
+/* 最近一次失败的原因（中文），例如 Emmy_RegisterLuaVm 返回 0 时缺了哪些 Lua 函数。没有错误时为空串。 */
+EMMY_API const char* Emmy_LastError(void);
 
 /* welcome.process 里的 package / buildId（Android 用），可为 NULL。 */
 EMMY_API void Emmy_SetProcessInfo(const char* packageName, const char* buildId);
@@ -42,7 +44,7 @@ EMMY_API void Emmy_SetToken(const char* token);
 /* 返回 0 成功；失败时 err 写入中文原因。 */
 EMMY_API int Emmy_ListenTcp(const char* host, int port, char* err, size_t errLen);
 /* Linux / Android 的 abstract unix socket（name 不含前导 \0，例如 "emmylua-12345"）。不需要 INTERNET 权限。 */
-EMMY_API int Emmy_ListenAbstract(const char* name, char* err, size_t errLen);
+EMMY_API int Emmy_ListenAbstract(const char* name, const char* token, char* err, size_t errLen);
 /* runtime 主动连 IDE（建连后仍由 IDE 先发 hello）。失败会每秒重试直到 Emmy_Stop。 */
 EMMY_API int Emmy_ConnectTcp(const char* host, int port, char* err, size_t errLen);
 /* 宿主自己 accept 好的连接（例如 agent 自己管 socket），核心接管 fd 的读写和关闭。 */

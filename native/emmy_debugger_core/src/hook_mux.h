@@ -27,6 +27,8 @@ public:
 	// 调试器正在执行求值（L 是求值用的协程）时返回 true，钩子入口直接返回；timedOut 为 true 时由入口抛错。
 	// 抛错必须在没有 C++ 对象存活的入口函数里做（lua_error 是 longjmp）。
 	virtual bool InEval(lua_State* L, bool& timedOut) = 0;
+	// 有跨线程投递过来、还没在 VM 线程处理的事（命令、暂停请求、断点变化）
+	virtual bool HasPendingWork() const = 0;
 };
 
 class HookMux {
@@ -68,6 +70,7 @@ private:
 	};
 
 	void SyncClients();
+	void DispatchClients(lua_State* L, lua_Debug* ar, int eventMask);
 	int DebuggerBaseMask() const;
 	int EffectiveCount(int debuggerMask) const;
 	void SpreadToCoroutines(lua_State* L);

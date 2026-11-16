@@ -98,10 +98,12 @@ void Vm::Post(Command cmd) {
 	}
 	pending_.fetch_or(kFlagCommands, std::memory_order_release);
 	cmdCv_.notify_all();
+	if (!currentPauseId()) mux_.Kick();
 }
 
 void Vm::SetFlags(uint32_t flags) {
 	pending_.fetch_or(flags, std::memory_order_release);
+	if (!currentPauseId()) mux_.Kick();
 	if (flags & kFlagDetach) {
 		std::lock_guard<std::mutex> lock(cmdMutex_);
 		cmdCv_.notify_all();
@@ -118,13 +120,20 @@ void Vm::RequestPause(const char* reason) {
 // ---------------------------------------------------------------- 掩码
 
 int Vm::BaseMask() const {
+	// 线程无关的基础掩码。没有断点、没有单步、没有待处理请求时为 0：
+	// Lua 5.4 只要挂了任何钩子（哪怕只有 COUNT）解释器就会逐条指令检查，开销接近 2 倍，所以平时一个都不挂。
+	// 需要 VM 线程处理事情（暂停请求、命令、断点变化）时由 Kick() 临时挂上 COUNT。
 	if (!active_.load(std::memory_order_relaxed)) return 0;
-	int m = LUA_MASKCOUNT;
-	if (anyBreakpoints_.load(std::memory_order_relaxed) || runToLine_ || step_.kind != ResumeKind::None) {
-		m |= LUA_MASKCALL | LUA_MASKRET;
-	}
-	if (step_.kind != ResumeKind::None || pauseAtLine_) m |= LUA_MASKLINE;
+	int m = 0;
+	if (anyBreakpoints_.load(std::memory_order_relaxed) || runToLine_) m |= LUA_MASKCALL;
+	if (step_.kind != ResumeKind::None) m |= LUA_MASKCALL | LUA_MASKRET | LUA_MASKLINE;
+	if (pauseAtLine_) m |= LUA_MASKLINE | LUA_MASKCOUNT;
+	if (pending_.load(std::memory_order_relaxed) != 0) m |= LUA_MASKCOUNT;
 	return m;
+}
+
+bool Vm::HasPendingWork() const {
+	return pending_.load(std::memory_order_acquire) != 0;
 }
 
 bool Vm::WantsHook() const {
@@ -153,6 +162,27 @@ void Vm::AdaptCount() {
 
 // ---------------------------------------------------------------- 热路径
 
+bool Vm::IsHotFunc(const lua::FuncInfo& f) {
+	if (f.isC) return false;
+	SourceEntry* e = Lookup(f.source, 0);
+	if (!e || !e->hot) return false;
+	if (f.lineDefined == 0) return true; // 主 chunk 覆盖整个文件
+	// 只有函数定义范围内有断点行才开行钩子（同一文件里的其他函数不受影响）
+	auto it = std::lower_bound(e->lines.begin(), e->lines.end(), f.lineDefined);
+	return it != e->lines.end() && *it <= f.lastLineDefined;
+}
+
+bool Vm::AnyHotFrame(lua_State* L, lua_Debug* ar) {
+	// 从调用者往上找有没有处在「热」函数里的帧；最多看 200 层
+	lua_Debug cur;
+	lua::FuncInfo f;
+	for (int level = 1; level < 200; ++level) {
+		if (!lua_getstack(L, level, &cur)) return false;
+		if (lua::HookFuncInfo(L, &cur, false, f) && IsHotFunc(f)) return true;
+	}
+	return true;
+}
+
 int Vm::OnHook(lua_State* L, lua_Debug* ar) {
 	if (pending_.load(std::memory_order_acquire) != 0) {
 		ProcessPending(L);
@@ -160,26 +190,32 @@ int Vm::OnHook(lua_State* L, lua_Debug* ar) {
 	if (!active_.load(std::memory_order_relaxed)) {
 		return 0;
 	}
+	// 线程掩码约定：
+	//   冷：只有 BaseMask（有断点时 CALL）
+	//   热函数里：CALL | RET | LINE
+	//   热函数调用的冷函数里：CALL | RET（等它返回到热函数时再开 LINE）
 	const int ev = ar->event;
-	bool hot = false;
+	const int curMask = lua_gethookmask(L);
+	const int region = LUA_MASKCALL | LUA_MASKRET;
+	lua::FuncInfo f;
 	if (lua::IsCallEvent(ev)) {
-		if (BaseMask() & LUA_MASKCALL) {
-			lua_getinfo(L, "S", ar);
-			SourceEntry* e = Lookup(ar->source, 0);
-			hot = e && e->hot;
+		if (lua::HookFuncInfo(L, ar, false, f) && IsHotFunc(f)) return BaseMask() | region | LUA_MASKLINE;
+		return BaseMask() | (curMask & LUA_MASKRET ? region : 0);
+	}
+	if (ev == LUA_HOOKRET) {
+		if (lua::HookFuncInfo(L, ar, true, f)) {
+			if (IsHotFunc(f)) return BaseMask() | region | LUA_MASKLINE;
+			// 回到冷的调用者：再往上还有热帧就继续跟 RET，否则回到冷状态
+			lua_Debug self;
+			if (lua_getstack(L, 0, &self) && AnyHotFrame(L, &self)) return BaseMask() | region;
 		}
-	} else if (ev == LUA_HOOKRET) {
-		// 返回到调用者：按调用者所在 chunk 决定要不要继续开行钩子
-		lua_Debug up;
-		if ((BaseMask() & LUA_MASKCALL) && lua_getstack(L, 1, &up)) {
-			lua_getinfo(L, "S", &up);
-			SourceEntry* e = Lookup(up.source, 0);
-			hot = e && e->hot;
-		}
-	} else if (ev == LUA_HOOKLINE) {
-		lua_getinfo(L, "S", ar);
-		SourceEntry* e = Lookup(ar->source, 0);
-		hot = e && e->hot;
+		return BaseMask();
+	}
+	if (ev == LUA_HOOKLINE) {
+		bool hasInfo = lua::HookFuncInfo(L, ar, false, f);
+		SourceEntry* e = hasInfo && !f.isC ? Lookup(f.source, 0) : nullptr;
+		bool hot = hasInfo && IsHotFunc(f);
+		const uint64_t pausesBefore = pauseCounter_;
 		if (pauseAtLine_) {
 			pauseAtLine_ = false;
 			EnterPause(L, pauseAtLineReason_, {}, nullptr);
@@ -196,16 +232,14 @@ int Vm::OnHook(lua_State* L, lua_Debug* ar) {
 		} else if (hot && e->HasLine(ar->currentline)) {
 			OnBreakLine(L, ar, e);
 		}
-		// 暂停/单步之后源码缓存可能已刷新，重新判断当前函数
-		if (!hot) {
-			e = Lookup(ar->source, 0);
-			hot = e && e->hot;
-		}
-	} else if (ev == LUA_HOOKCOUNT) {
-		AdaptCount();
-		hot = (lua_gethookmask(L) & LUA_MASKLINE) != 0;
+		// 暂停之后断点/单步状态可能变了，重新判断
+		if (pauseCounter_ != pausesBefore) hot = hasInfo && IsHotFunc(f);
+		if (hot) return BaseMask() | region | LUA_MASKLINE;
+		return BaseMask() | (curMask & LUA_MASKRET ? region : 0);
 	}
-	return BaseMask() | (hot ? LUA_MASKLINE : 0);
+	// COUNT：保持当前的区域状态
+	AdaptCount();
+	return BaseMask() | (curMask & (region | LUA_MASKLINE));
 }
 
 Vm::SourceEntry* Vm::Lookup(const char* source, size_t) {
@@ -237,6 +271,10 @@ Vm::SourceEntry* Vm::Lookup(const char* source, size_t) {
 		e.rtlLine = runToLine_->line;
 	}
 	e.hot = !e.match.bps.empty() || e.rtl;
+	e.lines.clear();
+	for (const Breakpoint* bp : e.match.bps) e.lines.push_back(bp->line);
+	if (e.rtl) e.lines.push_back(e.rtlLine);
+	std::sort(e.lines.begin(), e.lines.end());
 	if (!e.match.bps.empty() || !e.match.ambiguous.empty()) ReportMatch(e);
 	lastSource_ = source;
 	lastEntry_ = &e;

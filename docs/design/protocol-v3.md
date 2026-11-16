@@ -466,7 +466,7 @@ response 的 `breakpoints` 列出本次 upsert 的每个断点的**初始**状�
   "chunkName": "@Content/Script/UI/BagPanel.lua", "line": 120, "lineDefined": 112, "lastLineDefined": 140 }
 ```
 
-- `threadId` 省略时为暂停所在线程。runtime 会把**父协程链**（resume 了当前协程的线程）的帧接在后面，这些帧的 `threadId` 不同。
+- `threadId` 省略时为暂停所在线程。runtime **可以**把**父协程链**（resume 了当前协程的线程）的帧接在后面，这些帧的 `threadId` 不同；IDE 不能假设一定有（`emmy_debugger_core` 3.0 不追加，父协程的栈用 `threads` + `stackTrace { threadId }` 查看）。
 - `what`：`Lua` / `C` / `main` / `tail`。C 帧 `chunkName` 为 `=[C]`、`line` 为 -1。
 - `total` 是总帧数（含父协程链）。`count` 默认 20、最大 200。
 
@@ -594,13 +594,14 @@ ident   := [A-Za-z_][A-Za-z0-9_]*
       { "name": "emmyHelper_ue",     "source": "…" }
     ],
     "main": "emmyHelper" } }
-→ { "ok": true, "body": { "vms": [ { "vmId": 1, "ok": true }, { "vmId": 2, "ok": false, "message": "…" } ] } }
+→ { "ok": true, "body": {} }
 ```
 
 - IDE 发送脚本**内容**，不再发送本机路径（真机上不存在）。`name` 是模块名，`require(name)` 能取到。
-- runtime 对每个现有 VM 和之后新加的 VM：把每个脚本以 chunkName `@emmy/<name>.lua` 编译，放进一个**调试器私有**的模块表（不污染宿主的 `package.loaded` / `package.preload`），然后在私有环境里执行 `main`。helper 里的 `require` 先查私有表，查不到再走宿主的 `require`。
+- runtime 对每个现有 VM 和之后新加的 VM：把每个脚本以 chunkName `@emmy/<name>.lua` 编译，放进一个**调试器私有**的模块表（不污染宿主的 `package.loaded` / `package.preload`），然后执行 `main`。helper 的环境是 `setmetatable({ require = 私有 require }, { __index = _G, __newindex = _G })`：读写全局仍落到宿主的 `_G`（helper 约定要定义全局 `emmyHelper` / `emmyHelperInit`），只有 `require` 先查私有表，查不到再走宿主的 `require`。
 - 重复调用 `loadHelpers` 会替换之前的脚本并在每个 VM 重新执行。
-- 加载失败不影响调试，只是失去自定义显示；失败原因同时发 `output { category: "runtime", level: "warn" }`。
+- response 只表示脚本已收下，**立即返回 `{}`**：VM 可能正在跑、要到下一次钩子才执行脚本，不能为此阻塞。
+- 加载失败不影响调试，只是失去自定义显示；失败原因通过 `output { category: "runtime", level: "warn" }` 报告（每个 VM 一条）。
 
 ### 12.2 helper 契约
 
@@ -634,7 +635,7 @@ v3 的懒加载：helper 生成的子项由 runtime 缓存在本次暂停里，`
 | 选项 | 默认 | 说明 |
 | --- | --- | --- |
 | `stopOnEntry` | `false` | `configurationDone` 后第一次执行 Lua 时暂停（`reason: "entry"`） |
-| `exceptions` | `none` | 能力 `exceptions`。`none` / `uncaught`（错误没有被 `pcall`/`xpcall` 接住时暂停）/ `all`（任何错误都暂停，包括被 `pcall` 接住的） |
+| `exceptions` | `none` | 能力 `exceptions`（runtime 没声明这个能力时，传 `none` 以外的值返回 `UNSUPPORTED`；`emmy_debugger_core` 3.0 尚未声明）。`none` / `uncaught`（错误没有被 `pcall`/`xpcall` 接住时暂停）/ `all`（任何错误都暂停，包括被 `pcall` 接住的） |
 | `captureOutput` | `false` | 转发 `print`（11.1） |
 | `allowLuaEval` | `true` | `false` 时 `mode: "lua"` 的求值和 `setVariable` 回 `EVAL_FORBIDDEN`（MCP 未授权任意求值时由 IDE 设为 `false`） |
 | `valuePathInvokeIndex` | `false` | valuePath 是否触发 `__index` |
@@ -802,3 +803,4 @@ IDE                                           runtime
 | 修订 | 日期 | 内容 |
 | --- | --- | --- |
 | v3.0（revision 0） | 2026-11-16 | 首个定稿。采用 IDE 引擎线程提出的消息字段命名（`command`/`args`、`ok`/`body`/`error`、`seq`/`event`/`body`）与命令名 |
+| v3.0（revision 0） | 2026-11-16 | 按 `emmy_debugger_core` 实现补充说明（不改字段语义）：`loadHelpers` 立即返回 `{}`、失败走 `output`；helper 读写宿主 `_G`；父协程帧为可选；`exceptions` 能力未声明时 `setOptions.exceptions` 只接受 `none`。变量视图的字段扩展见 [variable-view.md](variable-view.md)，后续合进第 9 节 |

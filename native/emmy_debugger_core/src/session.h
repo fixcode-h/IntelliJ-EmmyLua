@@ -54,7 +54,6 @@ private:
 	uint64_t nextSeq_ = 1;
 	std::atomic<bool> handshaken_{false};
 	std::atomic<bool> closed_{false};
-	bool peerCbor_ = false;
 	std::string sessionId_;
 };
 

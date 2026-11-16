@@ -153,7 +153,7 @@ int HookMux::EffectiveCount(int debuggerMask) const {
 void HookMux::Kick() {
 	spreadPending_.store(true, std::memory_order_release);
 	int mask = staticMask_.load(std::memory_order_relaxed) | DebuggerBaseMask();
-	if (mask == 0) {
+	if (mask == 0 && !(debugger_ && debugger_->WantsHook() && debugger_->HasPendingWork())) {
 		return;
 	}
 	// 跨线程 lua_sethook 是 Lua 允许的（lua.c 在信号处理里就这么用）：只改几个字段，下一条指令起生效。
@@ -191,7 +191,7 @@ void HookMux::SpreadToCoroutines(lua_State* L) {
 
 void HookMux::Dispatch(lua_State* L, lua_Debug* ar) {
 	SyncClients();
-	if (spreadPending_.exchange(false, std::memory_order_acq_rel)) {
+	if (spreadPending_.load(std::memory_order_relaxed) && spreadPending_.exchange(false, std::memory_order_acq_rel)) {
 		SpreadToCoroutines(L);
 	}
 	int event = ar->event;
@@ -203,6 +203,11 @@ void HookMux::Dispatch(lua_State* L, lua_Debug* ar) {
 	if (debugger_) {
 		dbgMask = debugger_->OnHook(L, ar);
 	}
+	if (!clients_.empty()) DispatchClients(L, ar, eventMask);
+	Apply(L, dbgMask, debugger_ ? debugger_->CountInterval() : 0);
+}
+
+void HookMux::DispatchClients(lua_State* L, lua_Debug* ar, int eventMask) {
 	int currentCount = lua_gethookcount(L);
 	for (Client& c : clients_) {
 		if (!(c.mask & eventMask)) continue;
@@ -213,7 +218,6 @@ void HookMux::Dispatch(lua_State* L, lua_Debug* ar) {
 		}
 		c.cb(L, ar, c.ud);
 	}
-	Apply(L, dbgMask, debugger_ ? debugger_->CountInterval() : 0);
 }
 
 void HookMux::Apply(lua_State* L, int debuggerMask, int debuggerCount) {
@@ -226,12 +230,20 @@ void HookMux::Apply(lua_State* L, int debuggerMask, int debuggerCount) {
 		if (count <= 0) count = 1000;
 	}
 	(void)debuggerCount;
+	// Kick() 可能在别的线程刚设好 COUNT 就被我们这里覆盖；有待处理的事就保住 COUNT，避免丢通知
+	if (debugger_ && !(mask & LUA_MASKCOUNT) && debugger_->HasPendingWork()) {
+		mask |= LUA_MASKCOUNT;
+		count = 1000;
+	}
 	if (mask == 0) {
 		if (lua_gethook(L) != nullptr) lua_sethook(L, nullptr, 0, 0);
 		return;
 	}
-	if (lua_gethookmask(L) != mask || lua_gethook(L) != &HookMux::LuaHookEntry ||
-		((mask & LUA_MASKCOUNT) && lua_gethookcount(L) != count)) {
+	// 热路径：掩码没变且不含 COUNT 就什么都不做（钩子函数一定是我们的：事件就是从这里进来的）
+	if (lua_gethookmask(L) == mask && (!(mask & LUA_MASKCOUNT) || lua_gethookcount(L) == count)) {
+		return;
+	}
+	{
 		lua_sethook(L, &HookMux::LuaHookEntry, mask, count);
 	}
 }
