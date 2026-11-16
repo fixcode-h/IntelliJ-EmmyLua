@@ -2,13 +2,14 @@
 
 > 日期：2026-11-16
 > 状态：草案，待评审（本轮只出设计，不改代码）
-> 范围：IntelliJ-EmmyLua 插件的调试部分、`EmmyLuaDebugger` 原生端、与 `UEKit` 的集成
+> 范围：IntelliJ-EmmyLua 插件的调试部分、`EmmyLuaDebugger` 原生端（将并入本仓库 `native/`）、与 `UEKit` 的集成
 > 已确认的前提：
 > 1. 语言支持（补全、跳转、检查、格式化等）保留，只精简调试部分。
 > 2. 调试只保留两种场景：**附加调试**（本机进程）和**真机调试**（Android / iOS / 其他设备上的游戏）。
 > 3. 现有 `emmy-debug` CLI 删除，改为 **MCP Server** 给 Agent 用。
 > 4. 不需要兼容旧架构；有更高性能的新架构就直接换。
 > 5. MCP 支持一键写入当前项目的版本管理根目录；没装时弹窗提示是否安装。
+> 6. EmmyLuaDebugger 并入本仓库，不再作为子模块，也不迁到 UEKit。
 
 ---
 
@@ -21,7 +22,7 @@
 5. [原生端（EmmyLuaDebugger）重构与性能](#5-原生端emmyluadebugger重构与性能)
 6. [MCP Server 设计（替换 CLI）](#6-mcp-server-设计替换-cli)
 7. [真机调试](#7-真机调试)
-8. [EmmyLuaDebugger 是否保留、是否迁移到 UEKit](#8-emmyluadebugger-是否保留是否迁移到-uekit)
+8. [EmmyLuaDebugger 是否保留、迁移到哪里](#8-emmyluadebugger-是否保留迁移到哪里)
 9. [精简：删除清单](#9-精简删除清单)
 10. [UI 重新设计](#10-ui-重新设计)
 11. [其他优化与扩展点](#11-其他优化与扩展点)
@@ -44,11 +45,11 @@
 | 原生热路径 | 每行加锁 + 复制 set + 常开 LINE/CALL/RET 钩子 | 无锁不可变断点索引 + 按函数开关行钩子；无断点时近乎零开销 |
 | Agent 接入 | 独立 `emmy-debug` CLI + 授权/租约 | IDE 内置 **MCP Server**（127.0.0.1 HTTP），一键写入项目 `.mcp.json` 等配置 |
 | 真机 | 只有文档说"可以自己编进去" | 正式支持 Android（adb forward/reverse）、iOS（usbmux）、局域网发现；UE 项目走 UEKit 新插件 |
-| 原生库 | 二进制提交在插件仓库 `src/main/resources/debugger`（约 11 MB） | 由 EmmyLuaDebugger CI 产出，插件构建时下载并校验 |
+| 原生库 | 子模块 + 二进制提交在 `src/main/resources/debugger`（约 11 MB） | 源码并入 `native/`，同一次 CI 编译后打进插件包 |
 
 **功能不缩水、性能有量化目标。** 逐项对照见 [2.5](#25-功能完整性改造后不缩水)：除命名管道和纯 Lua 调试器两项（给出理由和兜底），现有能力全部保留，并新增修改变量、出错即停、协程视图、Agent 附加/连设备等。性能目标与验收方法见 [5.3](#53-性能目标与验收)：不下断点时游戏侧开销目标 ≤ 1.05 倍，USB 下命中断点到显示变量 ≤ 100 ms。
 
-**EmmyLuaDebugger 结论：必须保留，必须重构（性能和移动端），不整体迁到 UEKit。** 它是引擎无关的调试 runtime（附加注入、5 个 Lua 版本、非 UE 宿主都靠它）。UE 项目的真机调试另在 UEKit 里新增一个 `LuaDebug` 插件，以源码方式引用 EmmyLuaDebugger 的核心库编进游戏，并和 UELink 已有的 Lua 钩子共用一个钩子分发器。详见[第 8 节](#8-emmyluadebugger-是否保留是否迁移到-uekit)。
+**EmmyLuaDebugger 结论：必须保留，必须重构（性能和移动端），并入本仓库 `native/` 目录（已确认）。** 它是引擎无关的调试 runtime（附加注入、5 个 Lua 版本、非 UE 宿主都靠它）；并入后协议两端可以在一个 PR 里同时改。UE 项目的真机调试另在 UEKit 里新增一个 `LuaDebug` 插件，从本仓库 `native/` 按 tag 同步源码编进游戏，并和 UELink 已有的 Lua 钩子共用一个钩子分发器。详见[第 8 节](#8-emmyluadebugger-是否保留迁移到哪里)。
 
 ---
 
@@ -100,7 +101,7 @@
 13. `bunch/`（旧的多版本分支工具 + 15 个 jar）和根目录 `.bunch`，当前构建已不用。
 14. `.superpowers/`（过程记录）、根目录 `protocol_analysis_report.md`（LuaPanda 分析）、`design/emmy.ai`（设计源文件）、部分 `.idea/` 文件在仓库里。
 15. 原生二进制直接提交在插件仓库，和子模块源码版本没有可校验的对应关系。
-16. 子模块地址是 SSH（`git@github.com:...`），匿名 / CI 克隆会失败，应改成 HTTPS。
+16. 子模块地址是 SSH（`git@github.com:...`），匿名 / CI 克隆会失败，这也是并仓的理由之一（见 8.3）。
 17. README 已过时（指向 tangzx 的 Releases、LuaPanda 安装方式）。
 18. `org.eclipse.egit.github.core`（2014 年的库）只为错误上报使用。
 
@@ -376,7 +377,7 @@ FindBreakPoint(ar)       → manager->GetLineSet()：breakpointsMtx 加锁 + 复
 | 网络 | 保留 libuv（各平台都能编，已经在用）；网络线程只收发帧，解析后投递到每 VM 的命令队列 |
 | 钩子共存 | 新增 `HookMux`：一个 `lua_State` 只能挂一个钩子，提供 C ABI `Emmy_HookMux_Register(callback, mask)` 让宿主其他工具（如 UELink 的快照点 / 采样）共享，代替各自"记住上一个钩子再转发"的做法 |
 | 平台 | 新增 Android（NDK, arm64-v8a / armeabi-v7a / x86_64）、iOS（静态库 / xcframework）、Linux arm64 构建 |
-| 产物 | CI 发布 `emmy-runtime-<ver>-<platform>.zip` + `SHA256SUMS`；插件构建时按 `debugger-runtime.version` 下载并校验，插件仓库不再提交二进制 |
+| 产物 | 本仓库 CI 编译各平台 runtime，PC 端二进制直接打进插件包；Android/iOS/Unity 包作为 Release 附件 `emmy-runtime-<ver>-<platform>.zip` + `SHA256SUMS` 发布；仓库不再提交二进制 |
 | 安全 | 局域网监听强制 token（配对码）；`EMMY_DEBUG_ENABLED` 编译宏，发布包不编入 |
 
 ---
@@ -584,7 +585,7 @@ sequenceDiagram
 
 ---
 
-## 8. EmmyLuaDebugger 是否保留、是否迁移到 UEKit
+## 8. EmmyLuaDebugger 是否保留、迁移到哪里
 
 ### 8.1 是否必须保留
 
@@ -605,17 +606,45 @@ sequenceDiagram
 4. `HookMux` 钩子共存——和 UELink 共存必需。
 5. `EmmyFacade` 拆分、C++17 ——可放到后面。
 
-### 8.3 是否迁移到 UEKit
+### 8.3 迁移方式：并入 IntelliJ-EmmyLua（已确认）
 
-**不建议整体迁移**，建议"核心留在 EmmyLuaDebugger，UE 集成层放进 UEKit"：
+用户已确认：**EmmyLuaDebugger 并入 IntelliJ-EmmyLua 仓库**，不放进 UEKit，也不再作为子模块。
 
-| 考虑点 | 整体迁到 UEKit | 核心留原仓库 + UEKit 新增 `LuaDebug` 插件 |
-| --- | --- | --- |
-| 非 UE 用户（Unity、自研引擎、lua.exe） | 被迫依赖一个 UE 插件仓库 | 不受影响 |
-| Windows 附加（emmy_hook / emmy_tool / EasyHook） | 这些和 UE 无关，放进 UEKit 很别扭 | 留在原仓库 |
-| 构建 | UEKit 用 UBT；多 Lua 版本 + CMake 矩阵塞不进 UBT | 原仓库继续 CMake 出 PC 端二进制；UEKit 用 UBT 编 UE 版 |
-| UE 真机 | — | `LuaDebug` 插件用 UBT 为 Android/iOS/Win 编进游戏，天然跟随 UE 的打包流程 |
-| 版本同步 | 一个仓库 | `LuaDebug` 通过脚本同步原仓库的 `emmy_debugger` 源码（固定 tag），`kit.json` 记录 runtime 版本 |
+**为什么并入插件仓库**
+
+| 好处 | 说明 |
+| --- | --- |
+| 协议两端一次改完 | v3 协议、断点字段、能力位的改动在一个 PR 里同时改 Kotlin 和 C++，一起评审、一起测，不再有"子模块指针落后"的问题 |
+| 版本对齐 | 插件版本和 runtime 版本由同一个 tag 决定；插件打包的二进制一定来自同一提交的源码 |
+| CI 简化 | 现在的 `build.yml` / `verify.yml` 已经在编子模块，只是还要额外拉子模块；并入后少一步，也不再受子模块 SSH 地址影响 |
+| 体积可接受 | EmmyLuaDebugger 工作区约 15 MB（大头是 `third-party` 里的 5 个 Lua 版本、LuaJIT、libuv、EasyHook），历史约 6 MB、390 个提交 |
+
+**目录**
+
+```text
+IntelliJ-EmmyLua/
+  native/                     ← 原 EmmyLuaDebugger 全部内容
+    CMakeLists.txt
+    emmy_debugger/            调试核心（协议、VM 注册、断点索引、钩子）
+    emmy_core/                Lua C 模块（require "emmy_core"）
+    emmy_hook/ emmy_tool/     Windows 附加注入
+    shared/ tests/ cmake/ third-party/
+    platforms/android/        🆕 NDK 构建脚本
+    platforms/ios/            🆕 xcframework 构建脚本
+    integrations/ue/          🆕 给 UEKit LuaDebug 插件用的 UE 胶水源码（见 8.4）
+  modules/ src/ ...           插件
+```
+
+**迁移步骤**
+
+1. 用 `git subtree add --prefix=native <EmmyLuaDebugger> main`（不压缩历史）把代码连同提交历史并入；`git log -- native/` 仍能追溯原提交。
+2. 删除 `.gitmodules` 和 `EmmyLuaDebugger` 子模块条目。
+3. CI 中 `cmake -S EmmyLuaDebugger` 改为 `cmake -S native`，去掉 `submodules: recursive`；顺手加 `-DCMAKE_POLICY_VERSION_MINIMUM=3.5` 或升级 `third-party` 的 `cmake_minimum_required`（当前 runner 的 CMake 4.x 因 libuv 等第三方库最低版本过低而配置失败，所有 Native 检查都是红的）。
+4. 原生 CI 只在 `native/**` 变化时跑（`paths` 过滤），不拖慢纯 Kotlin 的 PR。
+5. 原 EmmyLuaDebugger 仓库：README 写明"已迁移到 IntelliJ-EmmyLua/native"，然后归档（只读）。外部若有人直接引用旧仓库，旧 tag 仍可用。
+6. 插件资源目录 `src/main/resources/debugger/emmy/**` 的二进制改为由同一次 CI 构建产出、打进插件包，不再提交到仓库。
+
+**和 UEKit 的关系**：UEKit 仍然需要一个 `LuaDebug` 插件把 runtime 编进 UE 游戏（UBT 只能编源码，不能直接用 CMake 产物），但它的源码来源从"EmmyLuaDebugger 仓库"改为"IntelliJ-EmmyLua 的 `native/` 目录"，按 tag 同步。
 
 ### 8.4 UEKit `LuaDebug` 插件设计
 
@@ -624,7 +653,7 @@ plugins/LuaDebug/
   LuaDebug.uplugin        Runtime 模块；Shipping 不加载；依赖 UnLua（可选）
   kit.json                kind: extension，requires: UELink（用于名片和面板）
   Source/LuaDebugRuntime/
-    ThirdParty/emmy/      由 scripts/sync-emmy.mjs 从 EmmyLuaDebugger@tag 拷入的 emmy_debugger 源码
+    ThirdParty/emmy/      由 scripts/sync-emmy.mjs 从 IntelliJ-EmmyLua@tag 的 native/emmy_debugger 与 native/integrations/ue 拷入
     Private/
       LuaDebugModule.cpp  模块启动：读配置 / 命令行，启动 runtime 监听
       UnLuaVmBridge.cpp   订阅 UnLua 的 Lua 环境创建/销毁，调用 Host API 注册 VM 和 source hash
@@ -661,10 +690,10 @@ plugins/LuaDebug/
 | `bunch/`、`.bunch` | 旧多版本工具，构建不用 |
 | `.superpowers/`、`docs/superpowers/` | 过程记录；有价值的结论并入本设计或 `docs/design/` |
 | `design/emmy.ai` | 移到发布素材仓库或 Git LFS |
-| `src/main/resources/debugger/emmy/**` 二进制 | 改为构建时从 EmmyLuaDebugger Release 下载 |
+| `src/main/resources/debugger/emmy/**` 二进制 | 改为由 `native/` 在同一次 CI 中编译后打包 |
 | `.idea/` 下的已提交文件 | 只留 `copyright` 配置 |
 | `org.eclipse.egit.github.core` | 错误上报改为打开预填 issue 的浏览器链接 |
-| `.gitmodules` | 子模块地址改 HTTPS；若产物改为下载，可考虑去掉子模块，只在 CI 里按 tag 拉取 |
+| `.gitmodules`、`EmmyLuaDebugger` 子模块 | 源码以 subtree 并入 `native/` 后删除 |
 
 ### 9.3 保留
 
@@ -786,13 +815,13 @@ MCP Server
 
 | 阶段 | 内容 | 涉及仓库 | 产出 |
 | --- | --- | --- | --- |
-| P0 清理 | 删除仓库垃圾（9.2）、子模块改 HTTPS、README 更新 | 插件 | 无功能变化 |
+| P0 清理 + 并仓 | 删除仓库垃圾（9.2）；EmmyLuaDebugger 以 subtree 并入 `native/`，删子模块；修复 CI 的 CMake 4.x 配置失败；README 更新 | 本仓库 | 无功能变化，CI 恢复绿色 |
 | P1 删减 | 删 LuaPanda、管道、CLI（9.1）；`EmmyDebugProcessBase` 去掉 CLI 相关代码 | 插件 | 只剩附加 + Emmy 远程，代码减约 40% |
-| P2 协议 v3 + 原生性能 | runtime 实现 v3、热路径优化、`HookMux`、基准；Android/iOS 构建；CI 发布产物 | EmmyLuaDebugger | runtime 3.0 |
-| P3 引擎拆分 | 新建 `debugger-protocol` / `debugger-engine`，拆上帝类，XDebugger 适配层；插件改为下载 runtime 产物 | 插件 | 对接 runtime 3.0 |
+| P2 协议 v3 + 原生性能 | `native/` 实现 v3、热路径优化、`HookMux`、基准；Android/iOS 构建；CI 发布产物 | 本仓库 `native/` | runtime 3.0 |
+| P3 引擎拆分 | 新建 `debugger-protocol` / `debugger-engine`，拆上帝类，XDebugger 适配层 | 本仓库 | 对接 runtime 3.0（可与 P2 在同一系列 PR 中推进） |
 | P4 MCP | `debugger-mcp` 模块、HTTP 宿主、权限确认、Agent 页、安装器与未安装提示 | 插件 | Agent 可调试 |
 | P5 真机 | 设备运行配置、adb / iproxy / 局域网发现、源码映射 UI | 插件 | Android / iOS 可用 |
-| P6 UE 集成 | UEKit `LuaDebug` 插件、UnLua VM 桥、UELink 名片与 `HookMux` 接入 | UEKit | UE 真机 + 免注入直连 |
+| P6 UE 集成 | `native/integrations/ue` 胶水代码；UEKit `LuaDebug` 插件（按 tag 同步）、UnLua VM 桥、UELink 名片与 `HookMux` 接入 | 本仓库 + UEKit | UE 真机 + 免注入直连 |
 | P7 UI 打磨 | Attach to Process 集成、设置页、状态栏、i18n | 插件 | — |
 
 P2 与 P1 可并行；P3 依赖 P2 的协议定稿（可以先定协议文档，两边同时做）。
