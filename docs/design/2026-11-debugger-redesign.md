@@ -667,7 +667,7 @@ App 进后台时连接可能被系统挂起，runtime 回前台时重建监听�
 | 协议两端一次改完 | v3 协议、断点字段、能力位的改动在一个 PR 里同时改 Kotlin 和 C++，一起评审、一起测，不再有"子模块指针落后"的问题 |
 | 版本对齐 | 插件版本和 runtime 版本由同一个 tag 决定；插件打包的二进制一定来自同一提交的源码 |
 | CI 简化 | 现在的 `build.yml` / `verify.yml` 已经在编子模块，只是还要额外拉子模块；并入后少一步，也不再受子模块 SSH 地址影响 |
-| 体积可接受 | EmmyLuaDebugger 工作区约 15 MB（大头是 `third-party` 里的 5 个 Lua 版本、LuaJIT、libuv、EasyHook），历史约 6 MB、390 个提交 |
+| 体积可接受 | EmmyLuaDebugger 工作区约 15 MB（大头是 `third-party` 里的 5 个 Lua 版本、LuaJIT、libuv、EasyHook）（并仓不带历史） |
 
 **目录**
 
@@ -688,11 +688,11 @@ IntelliJ-EmmyLua/
 
 **迁移步骤**
 
-1. 用 `git subtree add --prefix=native <EmmyLuaDebugger> main`（不压缩历史）把代码连同提交历史并入；`git log -- native/` 仍能追溯原提交。
+1. 把 EmmyLuaDebugger 的源码（原仓库提交 `1d56f79`）以单个提交导入 `native/`，**不保留原仓库历史**（用户确认）。
 2. 删除 `.gitmodules` 和 `EmmyLuaDebugger` 子模块条目。
 3. CI 中 `cmake -S EmmyLuaDebugger` 改为 `cmake -S native`，去掉 `submodules: recursive`；顺手加 `-DCMAKE_POLICY_VERSION_MINIMUM=3.5` 或升级 `third-party` 的 `cmake_minimum_required`（当前 runner 的 CMake 4.x 因 libuv 等第三方库最低版本过低而配置失败，所有 Native 检查都是红的）。
 4. 原生 CI 只在 `native/**` 变化时跑（`paths` 过滤），不拖慢纯 Kotlin 的 PR。
-5. 原 EmmyLuaDebugger 仓库：确认 `native/` 的历史和 CI 都正常后**删除**（用户已确认）。删除前在本仓库打一个 tag 记录并入时的原仓库提交号，便于追溯。之后只维护一个项目。
+5. 原 EmmyLuaDebugger 仓库：确认 `native/` 的历史和 CI 都正常后**删除**（用户已确认）。导入提交的说明里记录了原仓库提交号。之后只维护一个项目。
 6. `native/` 不是原样搬运：按第 5 节和 12.1 的结论重构，只保留新架构需要的部分（Windows 注入、Lua ABI 加载、受限求值、测试），其余由 `emmy_debugger_core` 取代。
 7. 插件资源目录 `src/main/resources/debugger/emmy/**` 的二进制改为由同一次 CI 构建产出、打进插件包，不再提交到仓库。
 
@@ -736,7 +736,7 @@ IntelliJ-EmmyLua/
 | `src/main/resources/debugger/emmy/**` 二进制 | 改为由 `native/` 在同一次 CI 中编译后打包 |
 | `.idea/` 下的已提交文件 | 只留 `copyright` 配置 |
 | `org.eclipse.egit.github.core` | 错误上报改为打开预填 issue 的浏览器链接 |
-| `.gitmodules`、`EmmyLuaDebugger` 子模块 | 源码以 subtree 并入 `native/` 后删除 |
+| `.gitmodules`、`EmmyLuaDebugger` 子模块 | 源码以单个提交导入 `native/` 后删除 |
 
 ### 9.3 保留
 
@@ -884,6 +884,8 @@ MCP Server
 - 所有开发在 `dev` 分支进行：每个阶段从 `dev` 拉功能分支，PR 合入 `dev`。
 - 阶段完成、`dev` 上 CI 全绿并验收后，再把 `dev` 合入 `main` 发布（`main` 的推送会触发自动发版）。
 - 旧实现在 P8 切换前保持可用，`main` 随时可以发补丁版本。
+- **自动出包必须保留（用户要求）**：`main` 推送触发 `.github/workflows/auto-release.yml`，计算版本号、按提交生成更新日志（`* 提交标题 (短哈希)`）、`buildPlugin`、发 GitHub Release、回写 `version.properties`。这套流程和更新日志格式保持不变。
+  - 原生二进制不再提交到仓库之后（见 9.2），`auto-release.yml` 必须在 `buildPlugin` 之前先在 Windows 上编译 `native/`（x86 / x64）并通过 `-PemmyNativeDir` 交给 Gradle（现有 `gradle/emmy-native-resources.gradle.kts` 已支持），Android agent 同理。这一步在去掉仓库内二进制的同一个 PR 里完成，保证任何时刻 `main` 都能出包。
 
 ### 12.3 阶段
 
@@ -891,7 +893,7 @@ MCP Server
 
 | 阶段 | 内容 | 涉及仓库 | 产出 |
 | --- | --- | --- | --- |
-| P0 清理 + 并仓 | 删除仓库垃圾（9.2）；EmmyLuaDebugger 以 subtree 并入 `native/`，删子模块；修复 CI 的 CMake 4.x 配置失败；README 更新 | 本仓库 | 无功能变化，CI 恢复绿色 |
+| P0 清理 + 并仓 | 删除仓库垃圾（9.2）；EmmyLuaDebugger 源码以单个提交导入 `native/`（不保留历史），删子模块；修复 CI 的 CMake 4.x 配置失败；README 更新 | 本仓库 | 无功能变化，CI 恢复绿色 |
 | P1 行为用例 | 把已修过的问题和现有调试行为写成针对新引擎的用例（Kotlin 假 runtime） | 本仓库 | 重写的验收基线 |
 | P2 新原生核心 | 新写 `native/emmy_debugger_core`（C++17）：协议 v3、新热路径、`HookMux`、基准；Android 构建；CI 发布产物 | 本仓库 `native/` | runtime 3.0 |
 | P3 新引擎 | 新写 `debugger-protocol` / `debugger-engine` / XDebugger 适配层，过 P1 用例 | 本仓库 | 对接 runtime 3.0（可与 P2 并行） |
