@@ -28,6 +28,9 @@ object DebuggerResourceService {
     )
     private val nativeFiles = listOf("EasyHook.dll", "emmy_core.dll", "emmy_hook.dll", "emmy_tool.exe")
         .flatMap { file -> listOf("x86/$file", "x64/$file") }
+    /** 新附加链路（协议 v3）的文件：出包流水线从 native/ 现编后放进来，本地开发构建可能没有，所以缺了不报错。 */
+    private val optionalNativeFiles = (listOf("emmy_attach.dll") + listOf("51", "52", "53", "54").map { "lua$it/emmy_debugger_core.dll" })
+        .flatMap { file -> listOf("x86/$file", "x64/$file") }
     private val extractionLocks = ConcurrentHashMap<Path, Any>()
 
     fun emmyHelperDirectory(project: Project, developmentMode: Boolean): Path {
@@ -48,6 +51,7 @@ object DebuggerResourceService {
     fun emmyNativeToolsDirectory(): Path = extract(
         resourceRoot = "debugger/emmy/windows",
         relativeFiles = nativeFiles,
+        optionalFiles = optionalNativeFiles,
         platform = "windows",
         arch = "multi-arch"
     )
@@ -56,12 +60,16 @@ object DebuggerResourceService {
         resourceRoot: String,
         relativeFiles: List<String>,
         platform: String,
-        arch: String
+        arch: String,
+        optionalFiles: List<String> = emptyList()
     ): Path {
+        val loader = DebuggerResourceService::class.java.classLoader
         val resources = relativeFiles.associateWith { relativePath ->
             val resourcePath = "$resourceRoot/$relativePath"
-            DebuggerResourceService::class.java.classLoader.getResourceAsStream(resourcePath)?.use { it.readBytes() }
+            loader.getResourceAsStream(resourcePath)?.use { it.readBytes() }
                 ?: error("Missing debugger resource: $resourcePath")
+        } + optionalFiles.mapNotNull { relativePath ->
+            loader.getResourceAsStream("$resourceRoot/$relativePath")?.use { relativePath to it.readBytes() }
         }
         val version = pluginVersion().replace(Regex("[^A-Za-z0-9._-]"), "_")
         val parent = Path.of(PathManager.getSystemPath(), "emmylua", "debugger-resources", version, platform, arch)
