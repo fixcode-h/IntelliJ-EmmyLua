@@ -10,6 +10,7 @@ on:
       - "native/emmy_attach/**"
       - "native/emmy_tool/**"
       - "native/shared/**"
+      - "native/CMakeLists.txt"
       - ".github/workflows/native-core.yml"
   pull_request:
     paths:
@@ -18,6 +19,7 @@ on:
       - "native/emmy_attach/**"
       - "native/emmy_tool/**"
       - "native/shared/**"
+      - "native/CMakeLists.txt"
       - ".github/workflows/native-core.yml"
 
 concurrency:
