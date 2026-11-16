@@ -20,6 +20,7 @@
         <lineIndentProvider implementation="com.fixcode.intellij.lua.editor.LuaLineIndentProvider"/>
         <enterHandlerDelegate implementation="com.fixcode.intellij.lua.editor.LuaEnterHandler"/>
         <typedHandler implementation="com.fixcode.intellij.lua.editor.LuaTypedHandler"/>
+        <lang.surroundDescriptor language="Lua" implementationClass="com.fixcode.intellij.lua.editor.LuaSurroundDescriptor"/>
 
         <!-- LSP4IJ 对自定义语言要显式绑定的几项（其余功能对任意语言自动生效） -->
         <lang.foldingBuilder language="Lua" order="first"
