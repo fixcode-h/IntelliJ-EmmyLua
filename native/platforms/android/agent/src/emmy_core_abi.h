@@ -29,4 +29,7 @@ extern "C" {
 int Emmy_WaitForClient(int timeoutMs) __attribute__((weak));
 // 可选：最近一次失败的原因（例如 Emmy_RegisterLuaVm 返回 0 时缺了哪些 Lua 函数）。
 const char* Emmy_LastError(void) __attribute__((weak));
+// 可选：出错即停（emmy_core.h「出错即停」）。老核心没有时为空，agent 不插错误处理函数。
+int Emmy_PrepareHostPcall(lua_State* L, int nargs, int errfunc) __attribute__((weak));
+void Emmy_FinishHostPcall(lua_State* L, int handlerIdx) __attribute__((weak));
 }

@@ -37,6 +37,9 @@ import com.tang.intellij.lua.debug.protocol.ScopesResult
 import com.tang.intellij.lua.debug.protocol.SetBreakpointsArgs
 import com.tang.intellij.lua.debug.protocol.SetBreakpointsResult
 import com.tang.intellij.lua.debug.protocol.SetOptionsArgs
+import com.tang.intellij.lua.debug.protocol.ThreadInfo
+import com.tang.intellij.lua.debug.protocol.ThreadStatuses
+import com.tang.intellij.lua.debug.protocol.ThreadsResult
 import com.tang.intellij.lua.debug.protocol.SetViewRulesArgs
 import com.tang.intellij.lua.debug.protocol.SetViewRulesResult
 import com.tang.intellij.lua.debug.protocol.SetVariableArgs
@@ -139,6 +142,8 @@ class FakeRuntime(
         internal var runToLine: Pair<SourceRef, Int>? = null
         internal var pausePending = false
         internal var stack: List<FakeFrame> = emptyList()
+        /** 暂停时还活着的其他协程：threadId → 它的栈（threads / stackTrace{threadId} 用）。 */
+        val coroutines: MutableMap<String, List<FakeFrame>> = java.util.concurrent.ConcurrentHashMap()
         /** 被 continue / 断线等恢复的记录，断言「目标没有卡在断点上」用。 */
         val resumes: MutableList<String> = CopyOnWriteArrayList()
 
@@ -423,6 +428,13 @@ class FakeRuntime(
                         ok()
                     }
                     Commands.STACK_TRACE -> stackTrace(request)
+                    Commands.THREADS -> {
+                        val (vm, failure) = pausedVm(request)
+                        if (vm == null) failure!! else ok(ThreadsResult(
+                            listOf(ThreadInfo(vm.threadId, ThreadStatuses.RUNNING, "main")) +
+                                vm.coroutines.keys.sorted().map { ThreadInfo(it, ThreadStatuses.SUSPENDED) }
+                        ))
+                    }
                     Commands.SCOPES -> scopes(request)
                     Commands.VARIABLES -> variables(request)
                     Commands.EVALUATE -> evaluate(request)
@@ -585,10 +597,10 @@ class FakeRuntime(
         return HitResult.PAUSED
     }
 
-    private fun frameDto(vm: FakeVm, frame: FakeFrame, level: Int): StackFrameDto {
+    private fun frameDto(vm: FakeVm, frame: FakeFrame, level: Int, threadId: String = vm.threadId): StackFrameDto {
         val existing = frames.entries.firstOrNull { it.value.first === vm && it.value.second === frame }?.key
         val frameId = existing ?: (nextObjectId++).also { frames[it] = vm to frame }
-        return StackFrameDto(frameId, frame.name, frame.chunkName, frame.line, level, frame.what, vm.threadId)
+        return StackFrameDto(frameId, frame.name, frame.chunkName, frame.line, level, frame.what, threadId)
     }
 
     private fun dropReferences(vm: FakeVm) {
@@ -609,8 +621,10 @@ class FakeRuntime(
         val (vm, failure) = pausedVm(request)
         if (vm == null) return failure!!
         val args = StackTraceArgs.fromJson(request.args)
-        val page = vm.stack.withIndex().drop(args.start).take(args.count).map { (level, frame) -> frameDto(vm, frame, level) }
-        return ok(StackTraceResult(page, vm.stack.size))
+        val thread = args.target.threadId?.takeIf { it != vm.threadId }
+        val stack = if (thread == null) vm.stack else vm.coroutines[thread] ?: return error(ErrorCodes.INVALID_ARGS, "没有协程 $thread（可能已结束）。")
+        val page = stack.withIndex().drop(args.start).take(args.count).map { (level, frame) -> frameDto(vm, frame, level, thread ?: vm.threadId) }
+        return ok(StackTraceResult(page, stack.size))
     }
 
     private fun scopes(request: ProtocolMessage.Request): Result {
@@ -772,7 +786,7 @@ class FakeRuntime(
             Capabilities.VALUE_PATH, Capabilities.LUA_EVAL, Capabilities.SET_VARIABLE, Capabilities.CONDITION,
             Capabilities.HIT_CONDITION, Capabilities.LOGPOINT, Capabilities.CAPTURE, Capabilities.RUN_TO_LINE,
             Capabilities.EXCEPTIONS, Capabilities.OUTPUT, Capabilities.HELPERS, Capabilities.TERMINATE,
-            Capabilities.RICH_VARIABLES, Capabilities.VIEW_RULES
+            Capabilities.RICH_VARIABLES, Capabilities.VIEW_RULES, Capabilities.COROUTINES
         )
 
         /** v3.0 原文的 runtime：没有变量视图增量。 */

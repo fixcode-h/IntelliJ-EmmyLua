@@ -635,7 +635,7 @@ v3 的懒加载：helper 生成的子项由 runtime 缓存在本次暂停里，`
 | 选项 | 默认 | 说明 |
 | --- | --- | --- |
 | `stopOnEntry` | `false` | `configurationDone` 后第一次执行 Lua 时暂停（`reason: "entry"`） |
-| `exceptions` | `none` | 能力 `exceptions`（runtime 没声明这个能力时，传 `none` 以外的值返回 `UNSUPPORTED`；`emmy_debugger_core` 3.0 尚未声明）。`none` / `uncaught`（错误没有被 `pcall`/`xpcall` 接住时暂停）/ `all`（任何错误都暂停，包括被 `pcall` 接住的） |
+| `exceptions` | `none` | 能力 `exceptions`（runtime 没声明这个能力时，传 `none` 以外的值返回 `UNSUPPORTED`；`emmy_debugger_core` 已声明；「没被接住」要宿主在自己的错误处理函数里通知核心，见原生核心 README「出错即停」）。`none` / `uncaught`（错误没有被 `pcall`/`xpcall` 接住时暂停）/ `all`（任何错误都暂停，包括被 `pcall` 接住的） |
 | `captureOutput` | `false` | 转发 `print`（11.1） |
 | `allowLuaEval` | `true` | `false` 时 `mode: "lua"` 的求值和 `setVariable` 回 `EVAL_FORBIDDEN`（MCP 未授权任意求值时由 IDE 设为 `false`） |
 | `valuePathInvokeIndex` | `false` | valuePath 是否触发 `__index` |

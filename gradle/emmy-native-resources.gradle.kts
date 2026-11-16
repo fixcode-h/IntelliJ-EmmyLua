@@ -5,12 +5,12 @@ import org.gradle.api.tasks.SourceSetContainer
 val emmyNativeDir = providers.gradleProperty("emmyNativeDir")
     .map { file(it).toPath().toAbsolutePath().normalize() }
 
+// Windows 本机附加（协议 v3）需要的全部文件
 val emmyNativeFiles = listOf(
     "EasyHook.dll",
-    "emmy_core.dll",
-    "emmy_hook.dll",
-    "emmy_tool.exe"
-)
+    "emmy_tool.exe",
+    "emmy_attach.dll"
+) + listOf("51", "52", "53", "54").map { "lua$it/emmy_debugger_core.dll" }
 
 val validateEmmyNativeResources = tasks.register("validateEmmyNativeResources") {
     onlyIf { emmyNativeDir.isPresent }

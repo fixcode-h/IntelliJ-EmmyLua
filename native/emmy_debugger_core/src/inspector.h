@@ -15,10 +15,29 @@ namespace emmy {
 
 using json = nlohmann::json;
 class Vm;
+struct ViewRuleSet;
+struct TypeViewRule;
 
 struct ProtocolError {
 	std::string code;
 	std::string message;
+};
+
+// variable-view 13.3 / 13.5：本次请求的显示方式。rich=false 时完全按 v3.0 原文
+struct ViewOptions {
+	bool rich = false;
+	int sort = 0; // 0 smart / 1 name / 2 none
+	bool groupMethods = true;
+	bool showInherited = true;
+	bool showMetatable = true;
+	bool hideStdGlobals = true;
+	bool showTemporaries = false;
+	int maxSortKeys = 10000;
+	size_t maxValueLength = 256;
+	int toString = 0; // 0 只对 table / 1 全部 / 2 从不（第 12 节）
+	int toStringBudgetMs = 5;
+	int helperBudgetMs = 20;                    // 11.2
+	std::shared_ptr<const ViewRuleSet> rules;   // 11.1，没下发时为空
 };
 
 struct EvalOptions {
@@ -45,6 +64,9 @@ struct VariableItem {
 	std::string hint;
 	std::vector<std::string> attrs;
 	int64_t length = -1;
+	std::string objectId;
+	std::string locationChunk; // location = { chunkName, line }
+	int locationLine = 0;
 
 	json ToJson() const;
 };
@@ -54,15 +76,23 @@ public:
 	explicit Inspector(Vm& vm);
 
 	// ---- 暂停生命周期 ----
-	void BeginPause(lua_State* L);
+	// skipLevels：栈顶这几层不显示（出错即停时的错误处理函数、error 本身）
+	void BeginPause(lua_State* L, int skipLevels = 0);
 	void EndPause(lua_State* L);
 	bool active() const { return pausedL_ != nullptr; }
 
+	// 每条协议命令前设置（Session 按协商的能力和请求参数算好）
+	void SetView(const ViewOptions& v) { view_ = v; }
+	const ViewOptions& view() const { return view_; }
+
 	// ---- 协议命令（暂停中） ----
-	bool StackTrace(int start, int count, json& body, ProtocolError& err);
+	// threadId 为空：暂停的那个线程；否则是 threads 返回的 id（别的协程的栈）
+	bool StackTrace(int start, int count, json& body, ProtocolError& err, const std::string& threadId = "");
 	json TopFrame();
 	bool Scopes(uint64_t frameId, json& body, ProtocolError& err);
-	bool Variables(uint64_t ref, int start, int count, const std::string& filter, json& body, ProtocolError& err);
+	// expand（variable-view 10.4）：相对 ref 的名字路径，命中的节点把首页子项内联到 children
+	bool Variables(uint64_t ref, int start, int count, const std::string& filter, json& body, ProtocolError& err,
+		const json& expand = json());
 	bool Evaluate(uint64_t frameId, const std::string& expr, const std::string& mode, const EvalOptions& opt, json& body, ProtocolError& err);
 	bool SetVariable(uint64_t ref, const std::string& name, const std::string& value, const std::string& mode, const EvalOptions& opt, json& body, ProtocolError& err);
 	bool Threads(json& body, ProtocolError& err);
@@ -88,7 +118,20 @@ private:
 		int level = 0;
 	};
 	// HostList：子项来自宿主值提供者（slot 处的值，或 hostRef 句柄）
-	enum class RefKind { Locals, Upvalues, Varargs, Globals, Value, HostList };
+	// Group：底部分组，子项来自 slot 处的表、键在建分组时就定好；Static：子项是现成的 VariableItem
+	enum class RefKind { Locals, Upvalues, Varargs, Globals, Value, HostList, Group, Static };
+	enum : uint8_t { kAttrInherited = 1, kAttrShadowed = 2, kAttrMetamethod = 4, kAttrPinned = 8 };
+	// 键快照里的一项（variable-view 10.2）：数组段只记下标，其他键放进锚表，C++ 只记槽位
+	struct RichKey {
+		int64_t index = 0;   // 数组段的下标
+		int keySlot = 0;     // 其他键在锚表里的槽位
+		bool indexed = false;
+		uint8_t attrs = 0;
+		std::string name;    // 显示名（5.2）
+		std::string nameType;
+		std::string field;   // 字符串键原文（函数名用）
+		std::string evaluateName;
+	};
 	struct RefEntry {
 		RefKind kind = RefKind::Value;
 		uint64_t frameId = 0;
@@ -99,6 +142,20 @@ private:
 		uint64_t providerId = 0; // 被宿主值提供者认领的值
 		std::string hostRef;
 		std::string hostSummary;
+		// richVariables
+		bool keysBuilt = false;
+		bool sorted = true;
+		size_t arrayKeys = 0; // keys 前面多少项是数组段
+		int64_t arrayLen = 0; // rawlen，filter=indexed 时的 total
+		std::vector<RichKey> keys;
+		bool richBuilt = false;
+		std::vector<VariableItem> richChildren;
+		std::vector<VariableItem> groups;
+		std::string owner; // 子项函数名的前缀（类名）
+		bool noEvalNames = false; // 别的协程的帧：valuePath 只对当前帧有效，不给 evaluateName
+		std::string ruleType; // 显示规则按这个类型名匹配（11.1）：类名或模块全名
+		bool formatter = false; // 子项由 helper v2 formatter 列（11.2）
+		std::string fmtType;    // 匹配 formatter 时用的类型名
 	};
 
 	uint64_t NewFrameId(lua_State* thread, int level);
@@ -118,7 +175,36 @@ private:
 	bool LookupRoot(lua_State* L, lua_State* thread, int level, const std::string& name);
 	bool IndexValue(lua_State* L, const struct PathSegment& seg, bool invokeIndex, std::string& err);
 	std::string FormatNumber(lua_State* L, int idx);
+	// ---- richVariables（rich_view.cpp） ----
+	static void RichEvalFields(const VariableItem& item, json& body);
+	bool SafeToString(lua_State* L, int idx, std::string& out, std::string& err);
+	void ExpandInline(json& body, const json& paths, int depth, size_t& budget);
+	bool PageRef(uint64_t ref, int start, int count, const std::string& filter, json& body, ProtocolError& err);
+	bool RichVariables(RefEntry& entry, int start, int count, const std::string& filter, json& body);
+	void MakeItemRich(lua_State* L, int idx, VariableItem& item, const std::string& evaluateName,
+		const std::string& field, const std::string& owner);
+	void RichTable(lua_State* L, int idx, VariableItem& item);
+	void RichFunction(lua_State* L, int idx, VariableItem& item, const std::string& field, const std::string& owner);
+	void BuildRichFrame(RefEntry& entry);
+	void BuildTableKeys(RefEntry& entry, int obj);
+	void BuildGroups(RefEntry& entry, int obj, const std::vector<std::string>& ownKeys);
+	uint64_t NewGroup(int sourceSlot, std::vector<RichKey> keys, bool sorted);
+	void SortKeys(lua_State* L, std::vector<RichKey>& keys, bool& sorted);
+	std::string RichKeyName(lua_State* L, int keyIdx);
+	std::string NestedSummary(lua_State* L, int idx);
+	std::string ClassName(lua_State* L, int idx);
+	const std::string& LoadedName(lua_State* L, int idx);
 	std::string TableSummary(lua_State* L, int idx, size_t maxLen);
+	// ---- 显示规则（rich_rules.cpp） ----
+	const TypeViewRule* RuleFor(const std::string& type) const;
+	std::string RenderRuleSummary(lua_State* L, int idx, const TypeViewRule& rule);
+	void ApplyRuleToKeys(const TypeViewRule& rule, std::vector<RichKey>& keys);
+	bool IsRuleBuiltinGlobal(const char* s, size_t len) const;
+	std::string RuleClassName(lua_State* L, int t);
+	// ---- helper v2 formatter（rich_rules.cpp） ----
+	bool FormatterDescribe(lua_State* L, int idx, VariableItem& item, const std::string& evaluateName);
+	bool FormatterChildren(RefEntry& entry, int start, int count, std::vector<VariableItem>& out, int64_t& total);
+	bool CallFormatter(lua_State* L, int nargs, std::string& err);
 
 	Vm& vm_;
 	lua_State* pausedL_ = nullptr;
@@ -133,6 +219,19 @@ private:
 	int64_t evalDeadlineMs_ = 0;
 	std::vector<uint64_t> usedProviders_; // 本次暂停里调用过的宿主值提供者，暂停结束时通知释放
 	uint64_t pauseIdForHost_ = 0;
+	ViewOptions view_;
+	int skip_ = 0;
+	// helper v2：每次暂停重新问一次注册了哪些类型（fmtPause_ 和 pauseIdForHost_ 不同就重置）
+	uint64_t fmtPause_ = ~0ull;
+	int fmtState_ = 0; // 0 未知 / 1 没有 formatter / 2 有
+	bool fmtDynamic_ = false;
+	std::unordered_map<std::string, bool> fmtTypes_;
+	std::unordered_map<std::string, int> fmtErrors_; // 同一类型连续出错 3 次后本次暂停不再调用
+	// 本次暂停内的缓存（variable-view 14.4）
+	std::unordered_map<const void*, std::string> classNames_;
+	std::unordered_map<const void*, std::string> loadedNames_;
+	bool loadedBuilt_ = false;
+	std::unordered_map<const void*, int> toStringFails_; // 按元表计连续出错次数，3 次后本次暂停不再调
 };
 
 } // namespace emmy

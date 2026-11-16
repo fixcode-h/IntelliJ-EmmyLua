@@ -17,36 +17,13 @@ import java.util.concurrent.ConcurrentHashMap
 
 object DebuggerResourceService {
     private const val PLUGIN_ID = "com.fixcode.emmylua.enhanced"
-    private val helperFiles = listOf(
-        "emmyHelper.lua",
-        "emmyHelper_ue.lua",
-        "tool/emmyFrameworks.lua",
-        "tool/emmyHandler.lua",
-        "tool/emmyLog.lua",
-        "tool/emmyMatcher.lua",
-        "tool/emmyProxy.lua"
-    )
-    private val nativeFiles = listOf("EasyHook.dll", "emmy_core.dll", "emmy_hook.dll", "emmy_tool.exe")
+    // emmy_tool attach -protocol 3 注入 emmy_attach.dll，它动态链接 EasyHook.dll；旧的 emmy_core.dll / emmy_hook.dll 已删除
+    private val nativeFiles = listOf("EasyHook.dll", "emmy_tool.exe")
         .flatMap { file -> listOf("x86/$file", "x64/$file") }
     /** 新附加链路（协议 v3）的文件：出包流水线从 native/ 现编后放进来，本地开发构建可能没有，所以缺了不报错。 */
     private val optionalNativeFiles = (listOf("emmy_attach.dll") + listOf("51", "52", "53", "54").map { "lua$it/emmy_debugger_core.dll" })
         .flatMap { file -> listOf("x86/$file", "x64/$file") }
     private val extractionLocks = ConcurrentHashMap<Path, Any>()
-
-    fun emmyHelperDirectory(project: Project, developmentMode: Boolean): Path {
-        if (developmentMode) {
-            project.basePath?.let { basePath ->
-                val sourceDirectory = Path.of(basePath, "src", "main", "resources", "debugger", "emmy", "code")
-                if (Files.isDirectory(sourceDirectory)) return sourceDirectory
-            }
-        }
-        return extract(
-            resourceRoot = "debugger/emmy/code",
-            relativeFiles = helperFiles,
-            platform = "common",
-            arch = "all"
-        )
-    }
 
     fun emmyNativeToolsDirectory(): Path = extract(
         resourceRoot = "debugger/emmy/windows",

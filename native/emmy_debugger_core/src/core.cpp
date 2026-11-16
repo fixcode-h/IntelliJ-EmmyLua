@@ -1,9 +1,11 @@
 #include "core.h"
+#include "lua_shim.h"
 
 #include "emmy/emmy_core.h"
 #include "hook_mux.h"
 #include "lua_internal.h"
 #include "session.h"
+#include "view_rules.h"
 #include "transport.h"
 #include "vm.h"
 
@@ -36,6 +38,17 @@ void Options::Reset() {
 	evalTimeoutMs = 1000;
 	caseSensitive = -1;
 	pauseLatencyMs = 20;
+	richVariables = false;
+	viewSort = 0;
+	viewGroupMethods = true;
+	viewShowInherited = true;
+	viewShowMetatable = true;
+	viewHideStdGlobals = true;
+	viewShowTemporaries = false;
+	viewMaxSortKeys = 10000;
+	viewToString = 0;
+	exceptions = 0;
+	viewHelperBudgetMs = 20;
 }
 
 // ---------------------------------------------------------------- Core
@@ -132,6 +145,7 @@ bool Core::Activate(const std::shared_ptr<Session>& session) {
 	{
 		std::lock_guard<std::mutex> lock(helperMutex_);
 		helpers_.reset();
+		viewRules_.reset();
 	}
 	NotifyVms(kFlagSession | kFlagRefresh);
 	for (auto& vm : Vms()) vm->Kick();
@@ -255,6 +269,16 @@ void Core::SetHelpers(std::vector<HelperScript> scripts, std::string mainName) {
 std::shared_ptr<const std::pair<std::vector<HelperScript>, std::string>> Core::Helpers() const {
 	std::lock_guard<std::mutex> lock(helperMutex_);
 	return helpers_;
+}
+
+void Core::SetViewRules(std::shared_ptr<const ViewRuleSet> rules) {
+	std::lock_guard<std::mutex> lock(helperMutex_);
+	viewRules_ = std::move(rules);
+}
+
+std::shared_ptr<const ViewRuleSet> Core::ViewRules() const {
+	std::lock_guard<std::mutex> lock(helperMutex_);
+	return viewRules_;
 }
 
 uint64_t Core::AllocObjectId(uint64_t vmId) {
@@ -493,6 +517,33 @@ void Emmy_RegisterLuaSource(lua_State*, const char* chunkName, const char* sha25
 void Emmy_BreakHere(lua_State* L) {
 	auto vm = Core::Get().FindVmByState(L);
 	if (vm) vm->BreakHere(L);
+}
+
+int Emmy_LuaErrorHandler(lua_State* L) {
+	auto vm = Core::Get().FindVmByState(L);
+	if (vm) vm->OnLuaError(L, 1, true);
+	lua_settop(L, 1);
+	return 1;
+}
+
+void Emmy_NotifyLuaError(lua_State* L, int msgIdx) {
+	auto vm = Core::Get().FindVmByState(L);
+	if (vm) vm->OnLuaError(L, emmy::lua::AbsIndex(L, msgIdx), true);
+}
+
+int Emmy_PrepareHostPcall(lua_State* L, int nargs, int errfunc) {
+	if (errfunc != 0 || Core::Get().options().exceptions.load() == 0 || !Core::Get().connected()) return 0;
+	auto vm = Core::Get().FindVmByState(L);
+	if (!vm || vm->IsInsideLuaPcall(L)) return 0;
+	const int idx = lua_gettop(L) - nargs; // 被调用的函数的位置
+	if (idx < 1) return 0;
+	lua_pushcfunction(L, &Emmy_LuaErrorHandler);
+	lua_insert(L, idx);
+	return idx;
+}
+
+void Emmy_FinishHostPcall(lua_State* L, int handlerIdx) {
+	if (handlerIdx > 0 && handlerIdx <= lua_gettop(L)) lua_remove(L, handlerIdx);
 }
 
 void Emmy_Log(int level, const char* text) {

@@ -21,6 +21,7 @@ namespace emmy {
 class Vm;
 class Session;
 class Transport;
+struct ViewRuleSet;
 using json = nlohmann::json;
 
 struct Options {
@@ -31,6 +32,18 @@ struct Options {
 	std::atomic<int> evalTimeoutMs{1000};
 	std::atomic<int> caseSensitive{-1}; // -1 按平台默认
 	std::atomic<int> pauseLatencyMs{20};
+	// variable-view 13.1 / 13.5：hello 协商到 richVariables 才生效
+	std::atomic<bool> richVariables{false};
+	std::atomic<int> viewSort{0}; // 0 smart / 1 name / 2 none
+	std::atomic<bool> viewGroupMethods{true};
+	std::atomic<bool> viewShowInherited{true};
+	std::atomic<bool> viewShowMetatable{true};
+	std::atomic<bool> viewHideStdGlobals{true};
+	std::atomic<bool> viewShowTemporaries{false};
+	std::atomic<int> viewMaxSortKeys{10000};
+	std::atomic<int> viewToString{0}; // 0 tables / 1 all / 2 never
+	std::atomic<int> exceptions{0}; // 0 none / 1 uncaught / 2 all
+	std::atomic<int> viewHelperBudgetMs{20}; // 11.2：每次调用 helper v2 formatter 的时间预算
 
 	bool CaseSensitive() const;
 	void Reset();
@@ -88,6 +101,10 @@ public:
 	void SetHelpers(std::vector<HelperScript> scripts, std::string mainName);
 	std::shared_ptr<const std::pair<std::vector<HelperScript>, std::string>> Helpers() const;
 
+	// ---- 显示规则（variable-view 11.1 / 13.4）----
+	void SetViewRules(std::shared_ptr<const ViewRuleSet> rules);
+	std::shared_ptr<const ViewRuleSet> ViewRules() const;
+
 	// ---- 引用路由：frameId / ref → vmId ----
 	uint64_t AllocObjectId(uint64_t vmId);
 	void ReleaseObjectIds(const std::vector<uint64_t>& ids);
@@ -131,6 +148,7 @@ private:
 
 	mutable std::mutex helperMutex_;
 	std::shared_ptr<const std::pair<std::vector<HelperScript>, std::string>> helpers_;
+	std::shared_ptr<const ViewRuleSet> viewRules_;
 
 	std::mutex objMutex_;
 	std::unordered_map<uint64_t, uint64_t> objOwner_;

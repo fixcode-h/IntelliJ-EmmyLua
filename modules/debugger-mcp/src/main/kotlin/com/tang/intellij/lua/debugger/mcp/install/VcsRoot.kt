@@ -38,13 +38,40 @@ object VcsRoot {
     }
 
     /**
-     * 安装位置：项目目录往上找到的版本管理根；找不到时用 [p4ClientRoot]（包含项目目录才用）；都没有就用项目目录本身。
+     * 安装位置（Agent 一般在这里启动，所以要落在「整个项目」的根上，而不是 IDE 打开的某个子目录）：
+     *
+     * 1. 有版本管理：用版本管理根目录。IDE 常常只打开 UE 项目里的 `Content/Script` 之类的脚本目录，
+     *    往上找到的仓库根才是 Agent 工作的地方。脚本目录自己是个嵌套仓库（子模块）、而它在一个 UE 项目里面时，
+     *    以 UE 项目为准：从 UE 项目根再往上找版本管理根，找不到就用 UE 项目根。
+     * 2. 没找到标记文件时问 [p4ClientRoot]（没有 P4CONFIG 的 Perforce 工作区），包含项目目录才用。
+     * 3. 没有版本管理：往上找 UE 项目根（含 `.uproject` 的目录）。
+     * 4. 都没有：项目目录本身。
      */
     fun installRoot(projectDir: Path, p4ClientRoot: (() -> Path?)? = null): Path {
-        find(projectDir)?.let { return it }
+        val dir = projectDir.toAbsolutePath().normalize()
+        val ue = findUnrealProject(dir)
+        val vcs = find(dir)
+        if (vcs != null) {
+            // 版本管理根在 UE 项目里面（脚本目录单独成库）：以 UE 项目为准
+            if (ue != null && vcs != ue && vcs.startsWith(ue)) return find(ue) ?: ue
+            return vcs
+        }
         val p4 = runCatching { p4ClientRoot?.invoke() }.getOrNull()
-        if (p4 != null && isSameOrUnder(projectDir, p4)) return p4.toAbsolutePath().normalize()
-        return projectDir.toAbsolutePath().normalize()
+        if (p4 != null && isSameOrUnder(dir, p4)) return p4.toAbsolutePath().normalize()
+        return ue ?: dir
+    }
+
+    /** 往上找 UE 项目根：目录里直接有 `*.uproject` 文件。 */
+    fun findUnrealProject(startDir: Path): Path? {
+        var d: Path? = startDir.toAbsolutePath().normalize()
+        while (d != null) {
+            val hasUproject = runCatching {
+                Files.list(d).use { files -> files.anyMatch { Files.isRegularFile(it) && it.fileName.toString().endsWith(".uproject", ignoreCase = true) } }
+            }.getOrDefault(false)
+            if (hasUproject) return d
+            d = d.parent
+        }
+        return null
     }
 
     fun isSameOrUnder(dir: Path, ancestor: Path): Boolean {

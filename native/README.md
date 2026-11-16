@@ -1,148 +1,26 @@
-<div align="center">
+# native
 
-# 🚀 EmmyLua Debugger
+IntelliJ-EmmyLua 调试器的原生部分（协议 v3）。旧的 emmy_core / emmy_debugger / emmy_hook 已经删除，不再兼容旧协议。
 
-[![Build Status](https://img.shields.io/badge/build-passing-brightgreen?style=flat-square)](https://github.com/EmmyLua/EmmyLuaDebugger)
-[![Lua Version](https://img.shields.io/badge/lua-5.1%20%7C%205.2%20%7C%205.3%20%7C%205.4%20%7C%20LuaJIT-orange?style=flat-square)](#lua-support)
+| 目录 | 内容 |
+| --- | --- |
+| `emmy_debugger_core/` | 调试核心：协议 v3、断点、单步、变量视图、出错即停。支持 Lua 5.1–5.4，源码接入或运行时解析 Lua API（dynamic）。说明见它自己的 README |
+| `emmy_attach/` | Windows 本机附加：注入目标进程后找到 Lua 模块、判断版本、加载 `lua5X/emmy_debugger_core.dll` 并开端口 |
+| `emmy_tool/` | Windows 命令行工具：`attach`（注入 emmy_attach.dll，stdout 最后一行输出结果 JSON）、`arch_pid`、`arch_file`、`list_processes` |
+| `shared/` | emmy_tool 和 emmy_attach 共用的共享内存、附加结果码 |
+| `platforms/android/` | Android 真机附加用的 agent |
+| `third-party/` | Lua 5.1–5.4 源码（测试和源码接入用）、nlohmann/json、EasyHook |
 
-**High-performance cross-platform Lua debugger with full debugging features including breakpoints, variable watch, stack trace, and more.**
-
-</div>
-
----
-
-## ✨ Features
-
-- 🎯 **Full Debugging Features** - Breakpoints, step execution, variable watch, stack trace
-- 🌍 **Cross-Platform Support** - Windows, macOS, Linux
-- ⚡ **High Performance** - Efficient debugging communication based on TCP protocol
-- 🔧 **Easy Integration** - Supports multiple Lua versions and game engine integration
-
-## 🎮 Supported Platforms
-
-| Platform      | Status | Notes                  |
-|---------------|--------|------------------------|
-| Windows x64   | ✅     | Fully supported        |
-| macOS         | ✅     | Intel & Apple Silicon  |
-| Linux         | ✅     | any                    |
-
-## 🔧 Lua Support
-
-| Lua Version | Status | Notes           |
-|-------------|--------|-----------------|
-| Lua 5.1     | ✅     | Fully supported |
-| Lua 5.2     | ✅     | Fully supported |
-| Lua 5.3     | ✅     | Fully supported |
-| Lua 5.4     | ✅     | Fully supported |
-| LuaJIT      | ✅     | Fully supported |
-
-## 🚀 Quick Start
-
-### 1. Clone the Repository
+## 构建
 
 ```bash
-git clone https://github.com/EmmyLua/EmmyLuaDebugger.git
-cd EmmyLuaDebugger
+# 调试核心（任意平台）
+cmake -S native/emmy_debugger_core -B build/core -DEMMY_CORE_LUA_VERSION=54
+cmake --build build/core && build/core/emmy_core_session_test
+
+# Windows 附加工具
+cmake -S native -B build/native -A x64
+cmake --build build/native --config Release --target emmy_tool emmy_attach
 ```
 
-### 2. Build the Project
-
-#### Windows (Visual Studio)
-```bash
-mkdir build
-cd build
-cmake .. -DEMMY_LUA_VERSION=54
-cmake --build . --config Release
-```
-
-#### macOS/Linux
-```bash
-mkdir build
-cd build
-cmake .. -DEMMY_LUA_VERSION=54 -DCMAKE_BUILD_TYPE=Release
-cmake --build . --config Release
-```
-
-### 3. Basic Usage
-
-#### Integrate the debugger in your Lua code:
-
-```lua
--- Load the debugger module
-local dbg = require('emmy_core')
-
--- Start the TCP debug server
-dbg.tcpListen('localhost', 9966)
-
--- Wait for IDE connection
-dbg.waitIDE()
-
--- Set a strong breakpoint here
-dbg.breakHere()
-
--- Your Lua code
-print("Hello, EmmyLua Debugger!")
-```
-
-#### Connect the debugger in your IDE:
-
-1. Open an IDE that supports EmmyLua (e.g., IntelliJ IDEA + EmmyLua plugin)
-2. Configure the debug connection: `TCP Connect` mode, address `localhost:9966`
-3. Click to start debugging
-4. Set breakpoints in your code and enjoy debugging!
-
-## 📚 Documentation
-
-## 🛠️ Build Options
-
-| Option                | Default | Description                        |
-|-----------------------|---------|------------------------------------|
-| `EMMY_LUA_VERSION`    | `54`    | Lua version (51/52/53/54/jit)      |
-| `EMMY_USE_LUA_SOURCE` | `OFF`   | Whether to build with Lua source   |
-
-### Advanced Build Examples
-
-```bash
-# Build for a specific version
-cmake .. -DEMMY_LUA_VERSION=53 
-# Build using Lua source
-cmake .. -DEMMY_USE_LUA_SOURCE=ON
-```
-
-### Development Environment Setup
-
-1. Install required build tools:
-    - Windows: Visual Studio 2019+
-    - macOS: Xcode + Command Line Tools
-    - Linux: GCC 7+ or Clang 6+
-
-2. Install CMake 3.11+
-
-3. Clone and build the project:
-    ```bash
-    git clone --recursive https://github.com/EmmyLua/EmmyLuaDebugger.git
-    cd EmmyLuaDebugger
-    mkdir build && cd build
-    cmake ..
-    cmake --build .
-    ```
-
-## 🙏 Acknowledgements
-
-- [libuv](https://github.com/libuv/libuv) - Cross-platform asynchronous I/O library
-- [nlohmann/json](https://github.com/nlohmann/json) - Modern C++ JSON library
-- [Lua](https://www.lua.org/) - Powerful embedded scripting language
-
-## 📞 Support & Contact
-
-- 🐛 [Report Issues](https://github.com/EmmyLua/EmmyLuaDebugger/issues)
-- 💬 [Discussion](https://github.com/EmmyLua/EmmyLuaDebugger/discussions)
----
-
-<div align="center">
-
-**⭐ If you find this project helpful, please give us a Star! ⭐**
-
-Made with ❤️ by [EmmyLua Team](https://github.com/EmmyLua)
-
-</div>
+出包时 `.github/workflows/auto-release.yml` 会编好 Windows x86/x64 的 `emmy_tool.exe`、`emmy_attach.dll`、`EasyHook.dll` 和 `lua51`–`lua54/emmy_debugger_core.dll`，以及 Android 的 agent，放进插件资源。约定见 [docs/design/protocol-v3.md](../docs/design/protocol-v3.md) 第 16 节。

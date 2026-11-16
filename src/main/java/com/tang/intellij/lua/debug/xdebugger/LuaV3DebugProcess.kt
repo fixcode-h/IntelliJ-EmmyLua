@@ -8,6 +8,7 @@ import com.intellij.openapi.ui.MessageType
 import com.intellij.openapi.vfs.VirtualFileManager
 import com.intellij.xdebugger.XDebugProcess
 import com.intellij.xdebugger.XDebugSession
+import com.intellij.xdebugger.XDebugSessionListener
 import com.intellij.xdebugger.XSourcePosition
 import com.intellij.xdebugger.breakpoints.SuspendPolicy
 import com.intellij.xdebugger.breakpoints.XBreakpointHandler
@@ -30,7 +31,11 @@ import com.tang.intellij.lua.debug.engine.DebugSession
 import com.tang.intellij.lua.debug.engine.Initiator
 import com.tang.intellij.lua.debug.engine.PauseInfo
 import com.tang.intellij.lua.debug.engine.SourceResolution
+import com.tang.intellij.lua.debug.protocol.Capabilities
+import com.tang.intellij.lua.debug.protocol.ExceptionModes
 import com.tang.intellij.lua.debug.protocol.OutputCategories
+import com.tang.intellij.lua.debug.protocol.SetOptionsArgs
+import com.intellij.xdebugger.breakpoints.XBreakpoint
 import com.tang.intellij.lua.debug.protocol.PauseReasons
 import com.tang.intellij.lua.debug.protocol.VmStates
 import com.tang.intellij.lua.debugger.LuaDebuggerEditorsProvider
@@ -70,11 +75,32 @@ class LuaV3DebugProcess(
         session.setPauseActionSupported(true)
         subscription = engine.events.subscribe(::onEvent)
         LuaDebugSessionManager.getInstance(session.project).register(LuaDebugSessionManager.Entry(engine, target, session))
+        session.addSessionListener(InlineValuesListener())
+    }
+
+    /** 编辑器行尾的变量值跟着「当前选中的栈帧」走：暂停、切帧时取快照，继续运行或结束时清掉。 */
+    private inner class InlineValuesListener : XDebugSessionListener {
+        private val store get() = LuaInlineValueStore.getInstance(session.project)
+
+        override fun sessionPaused() = loadSelected()
+
+        override fun stackFrameChanged() = loadSelected()
+
+        override fun sessionResumed() = store.clear(session)
+
+        override fun sessionStopped() = store.clear(session)
+
+        private fun loadSelected() {
+            val frame = session.currentStackFrame as? LuaV3StackFrame
+                ?: (session.suspendContext?.activeExecutionStack?.topFrame as? LuaV3StackFrame)
+                ?: return store.clear(session)
+            store.load(session, engine, frame.handle)
+        }
     }
 
     override fun getEditorsProvider(): XDebuggerEditorsProvider = editorsProvider
 
-    override fun getBreakpointHandlers(): Array<XBreakpointHandler<*>> = arrayOf(BreakpointHandler())
+    override fun getBreakpointHandlers(): Array<XBreakpointHandler<*>> = arrayOf(BreakpointHandler(), ExceptionBreakpointHandler())
 
     override fun sessionInitialized() {
         super.sessionInitialized()
@@ -171,7 +197,10 @@ class LuaV3DebugProcess(
         val context = LuaV3SuspendContext(engine, pause)
         val breakpoint = if (pause.reason == PauseReasons.BREAKPOINT) breakpointFor(pause.breakpointIds) else null
         pause.exception?.let { print("[EmmyLua] 出错暂停：${it.message}\n${it.traceback ?: ""}\n", ConsoleViewContentType.ERROR_OUTPUT) }
-        if (breakpoint != null) {
+        val exceptionBreakpoint = if (pause.reason == PauseReasons.EXCEPTION) exceptionBreakpoints.firstOrNull() else null
+        if (exceptionBreakpoint != null) {
+            session.breakpointReached(exceptionBreakpoint, pause.exception?.message, context)
+        } else if (breakpoint != null) {
             // 条件、日志断点都在 runtime 侧处理过了，这里不再求值；返回 false 只可能是 IDE 侧挂起策略为「不挂起」
             if (!session.breakpointReached(breakpoint, null, context)) engine.resume(pause.vmId)
         } else {
@@ -228,6 +257,35 @@ class LuaV3DebugProcess(
 
         override fun unregisterBreakpoint(breakpoint: XLineBreakpoint<XBreakpointProperties<*>>, temporary: Boolean) {
             breakpointIds.remove(breakpoint)?.thenAccept { id -> engine.removeBreakpoint(id) }
+        }
+    }
+
+    /** 启用中的「Lua 错误」断点；全部关掉时 runtime 回到不停（exceptions = none）。 */
+    private val exceptionBreakpoints = java.util.concurrent.CopyOnWriteArrayList<XBreakpoint<LuaExceptionBreakpointProperties>>()
+
+    private inner class ExceptionBreakpointHandler :
+        XBreakpointHandler<XBreakpoint<LuaExceptionBreakpointProperties>>(LuaExceptionBreakpointType::class.java) {
+        override fun registerBreakpoint(breakpoint: XBreakpoint<LuaExceptionBreakpointProperties>) {
+            exceptionBreakpoints.remove(breakpoint)
+            exceptionBreakpoints += breakpoint
+            applyExceptionMode()
+        }
+
+        override fun unregisterBreakpoint(breakpoint: XBreakpoint<LuaExceptionBreakpointProperties>, temporary: Boolean) {
+            exceptionBreakpoints.remove(breakpoint)
+            applyExceptionMode()
+        }
+    }
+
+    private fun applyExceptionMode() {
+        val mode = when {
+            exceptionBreakpoints.isEmpty() -> ExceptionModes.NONE
+            exceptionBreakpoints.any { it.properties?.includeCaught == true } -> ExceptionModes.ALL
+            else -> ExceptionModes.UNCAUGHT
+        }
+        engine.updateOptions(SetOptionsArgs(exceptions = mode)).whenComplete { _, error -> if (error != null) reportError(error) }
+        if (mode != ExceptionModes.NONE && engine.welcome != null && !engine.hasCapability(Capabilities.EXCEPTIONS)) {
+            print("[EmmyLua] 这个 runtime 还不支持出错即停，「Lua 错误」断点暂不生效；未捕获的错误仍会输出到控制台。\n", ConsoleViewContentType.LOG_WARNING_OUTPUT)
         }
     }
 

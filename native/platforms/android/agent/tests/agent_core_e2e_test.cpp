@@ -33,6 +33,7 @@ const char* kToken = "0123456789abcdef0123456789abcdef";
 const char* kScript = R"(local M = {}
 function M.tick(i)
   local doubled = i * 2
+  if FAIL then FAIL = nil; local t = nil; return t.x end
   return doubled
 end
 return M
@@ -112,12 +113,24 @@ struct FakeBackend : HookBackend {
         static_cast<Entry*>(h)->removed = true;
         return true;
     }
-    // 主机测试不替换函数（lua_newstate 不 hook），返回失败，agent 只告警
-    void* Replace(void*, void*, void**, std::string& err) override {
-        err = "主机测试不替换函数";
-        return nullptr;
+    // 主机上没有内联 hook：记下「替身」，游戏通过 Target() 取函数地址时拿到替身，原函数入口就是函数本身
+    std::map<void*, void*> replaced;
+    void* Replace(void* func, void* replacement, void** original, std::string&) override {
+        std::lock_guard<std::mutex> lock(mutex);
+        *original = func;
+        replaced[func] = replacement;
+        return func;
     }
-    bool RemoveReplace(void*) override { return false; }
+    bool RemoveReplace(void* h) override {
+        std::lock_guard<std::mutex> lock(mutex);
+        return replaced.erase(h) != 0;
+    }
+    template <typename T>
+    T Target(T func) {
+        std::lock_guard<std::mutex> lock(mutex);
+        auto it = replaced.find(reinterpret_cast<void*>(func));
+        return it == replaced.end() ? func : reinterpret_cast<T>(it->second);
+    }
     void Fire(void* func, void* arg) {
         std::lock_guard<std::mutex> lock(mutex);
         for (auto* e : entries)
@@ -143,12 +156,15 @@ using PushInteger = void (*)(lua_State*, long long);
 using SetTop = void (*)(lua_State*, int);
 using GetTop = int (*)(lua_State*);
 using Close = void (*)(lua_State*);
+using PushBoolean = void (*)(lua_State*, int);
+using SetGlobal = void (*)(lua_State*, const char*);
 
 FakeBackend g_backend;
 SymbolFile g_syms;
 uintptr_t g_bias = 0;
 std::atomic<bool> g_stop{false};
 std::atomic<int64_t> g_ticks{0};
+std::atomic<bool> g_triggerError{false}; // 让下一次 tick 抛一个没人接的错误
 
 template <typename T>
 T Fn(const char* name) {
@@ -157,18 +173,22 @@ T Fn(const char* name) {
 }
 
 void GameLoop() {
-    lua_State* L = Fn<NewState>("luaL_newstate")();
+    lua_State* L = g_backend.Target(Fn<NewState>("luaL_newstate"))();
     Fn<OpenLibs>("luaL_openlibs")(L);
     Fn<LoadBufferX>("luaL_loadbufferx")(L, kScript, std::strlen(kScript), "@game/main.lua", nullptr);
     Fn<CallK>("lua_callk")(L, 0, 1, 0, nullptr);
     int mod = Fn<GetTop>("lua_gettop")(L);
-    auto pcallk = Fn<PCallK>("lua_pcallk");
+    // 真机上 ShadowHook 改的是函数入口，游戏代码照常调原地址；主机上用 Target() 模拟「调用进了替身」
+    auto pcallk = g_backend.Target(Fn<PCallK>("lua_pcallk"));
     int64_t i = 0;
     while (!g_stop) {
         Fn<GetField>("lua_getfield")(L, mod, "tick");
         Fn<PushInteger>("lua_pushinteger")(L, ++i);
-        // 真机上 ShadowHook 在 lua_pcallk 入口回调；这里手动触发同一个回调
-        g_backend.Fire(reinterpret_cast<void*>(pcallk), L);
+        if (g_triggerError.exchange(false)) {
+            Fn<PushBoolean>("lua_pushboolean")(L, 1);
+            Fn<SetGlobal>("lua_setglobal")(L, "FAIL");
+        }
+        // 宿主自己不给 errfunc：错误「没被接住」，出错即停靠 agent 在替身里插的处理函数
         pcallk(L, 1, 1, 0, 0, nullptr);
         Fn<SetTop>("lua_settop")(L, mod);
         g_ticks = i;
@@ -245,11 +265,36 @@ TEST_CASE("agent_e2e.breakpoint_over_abstract_socket") {
     c.Request("disconnect");
 }
 
+TEST_CASE("agent_e2e.uncaught_error_stops") {
+    TestClient c;
+    CHECK(c.ConnectAbstract(g_socket));
+    json args = {{"protocol", 3}, {"client", {{"name", "e2e"}, {"version", "0"}}}, {"token", kToken},
+                 {"caps", json::array({"valuePath", "luaEval", "exceptions"})}};
+    CHECK(Ok(c.Request("hello", args)));
+    CHECK(Ok(c.Request("setOptions", {{"exceptions", "uncaught"}})));
+    CHECK(Ok(c.Request("configurationDone")));
+    g_triggerError = true;
+    json ex = c.WaitEvent("paused", 5000);
+    CHECK(ex.is_object());
+    if (!ex.is_object()) return;
+    CHECK_EQ(ex["body"]["reason"].get<std::string>(), std::string("exception"));
+    CHECK_EQ(ex["body"]["top"]["line"].get<int>(), 4);
+    CHECK(ex["body"]["exception"]["uncaught"].get<bool>());
+    CHECK(Ok(c.Request("setOptions", {{"exceptions", "none"}})));
+    CHECK(Ok(c.Request("continue", {{"vmId", ex["body"]["vmId"]}, {"pauseId", ex["body"]["pauseId"]}})));
+    int64_t before = g_ticks;
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    CHECK(g_ticks > before); // 宿主 pcall 照常返回错误，游戏继续跑
+    CHECK(ReadFile(g_statusPath).find("errorStop=1") != std::string::npos);
+    c.Request("disconnect");
+}
+
 TEST_CASE("agent_e2e.capture_intercept_removed_after_window") {
-    void* pcallk = reinterpret_cast<void*>(g_bias + g_syms.functions["lua_pcallk"]);
+    // lua_pcallk 是常驻替身；临时 intercept 只剩 lua_resume，窗口结束后撤掉
+    void* resume = reinterpret_cast<void*>(g_bias + g_syms.functions["lua_resume"]);
     bool removed = false;
     for (int i = 0; i < 60 && !removed; ++i) {
-        removed = g_backend.CaptureRemoved(pcallk);
+        removed = g_backend.CaptureRemoved(resume);
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
     CHECK(removed);

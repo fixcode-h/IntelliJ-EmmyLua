@@ -2,6 +2,7 @@
 
 #include "core.h"
 #include "host_value.h"
+#include "inspector_util.h"
 #include "lua_internal.h"
 #include "value_path.h"
 #include "vm.h"
@@ -16,67 +17,13 @@
 
 namespace emmy {
 
+using namespace detail;
+
 namespace {
 
 int64_t NowMs() {
 	return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
-
-std::string PtrString(const void* p) {
-	char buf[32];
-	std::snprintf(buf, sizeof(buf), "0x%" PRIxPTR, reinterpret_cast<uintptr_t>(p));
-	return buf;
-}
-
-void AppendEscaped(std::string& out, const char* s, size_t len, size_t maxLen) {
-	out += '"';
-	for (size_t i = 0; i < len; ++i) {
-		if (out.size() >= maxLen) {
-			out += "…";
-			return;
-		}
-		char c = s[i];
-		switch (c) {
-		case '"': out += "\\\""; break;
-		case '\\': out += "\\\\"; break;
-		case '\n': out += "\\n"; break;
-		case '\r': out += "\\r"; break;
-		case '\t': out += "\\t"; break;
-		default:
-			if (static_cast<unsigned char>(c) < 0x20) {
-				char buf[8];
-				std::snprintf(buf, sizeof(buf), "\\x%02x", static_cast<unsigned char>(c));
-				out += buf;
-			} else {
-				out += c;
-			}
-		}
-	}
-	out += '"';
-}
-
-bool IsIdentifier(const char* s, size_t len) {
-	if (len == 0) return false;
-	if (!(std::isalpha(static_cast<unsigned char>(s[0])) || s[0] == '_')) return false;
-	for (size_t i = 1; i < len; ++i) {
-		if (!(std::isalnum(static_cast<unsigned char>(s[i])) || s[i] == '_')) return false;
-	}
-	return true;
-}
-
-// metatable.__name（5.3+ luaL_newmetatable 会设置；UnLua 等也常用）
-std::string MetaName(lua_State* L, int idx) {
-	idx = lua::AbsIndex(L, idx);
-	std::string name;
-	if (lua_getmetatable(L, idx)) {
-		lua_pushstring(L, "__name");
-		lua_rawget(L, -2);
-		if (lua_type(L, -1) == LUA_TSTRING) name = lua_tostring(L, -1);
-		lua_pop(L, 2);
-	}
-	return name;
-}
-
 
 } // namespace
 
@@ -92,6 +39,8 @@ json VariableItem::ToJson() const {
 	if (!hint.empty()) j["hint"] = hint;
 	if (!attrs.empty()) j["attrs"] = attrs;
 	if (length >= 0) j["length"] = length;
+	if (!objectId.empty()) j["objectId"] = objectId;
+	if (!locationChunk.empty()) j["location"] = {{"chunkName", locationChunk}, {"line", locationLine}};
 	return j;
 }
 
@@ -99,9 +48,14 @@ Inspector::Inspector(Vm& vm) : vm_(vm) {}
 
 // ---------------------------------------------------------------- 暂停生命周期
 
-void Inspector::BeginPause(lua_State* L) {
+void Inspector::BeginPause(lua_State* L, int skipLevels) {
 	pausedL_ = L;
+	skip_ = skipLevels;
 	usedProviders_.clear();
+	classNames_.clear();
+	loadedNames_.clear();
+	loadedBuilt_ = false;
+	toStringFails_.clear();
 	pauseIdForHost_ = vm_.currentPauseId();
 	lua_newtable(L);
 	anchorRef_ = luaL_ref(L, LUA_REGISTRYINDEX);
@@ -126,6 +80,10 @@ void Inspector::EndPause(lua_State* L) {
 	frames_.clear();
 	refs_.clear();
 	frameOrder_.clear();
+	classNames_.clear();
+	loadedNames_.clear();
+	loadedBuilt_ = false;
+	toStringFails_.clear();
 	pausedL_ = nullptr;
 }
 
@@ -185,11 +143,28 @@ bool Inspector::GetFrame(uint64_t frameId, FrameRef& out, lua_Debug& ar, Protoco
 
 // ---------------------------------------------------------------- 栈
 
-bool Inspector::StackTrace(int start, int count, json& body, ProtocolError& err) {
+bool Inspector::StackTrace(int start, int count, json& body, ProtocolError& err, const std::string& threadId) {
 	lua_State* L = pausedL_;
 	if (!L) {
 		err = {"NOT_PAUSED", "Lua VM 正在运行，先暂停或等断点命中。"};
 		return false;
+	}
+	int skip = skip_;
+	if (!threadId.empty() && threadId != "t" + PtrString(L).substr(2)) {
+		lua_State* found = nullptr;
+		lua_State* mainL = vm_.mainState();
+		if (threadId == "t" + PtrString(mainL).substr(2)) found = mainL;
+		else {
+			lua::ForEachCoroutine(L, [&](lua_State* co) {
+				if (!found && threadId == "t" + PtrString(co).substr(2)) found = co;
+			});
+		}
+		if (!found) {
+			err = {"INVALID_ARGS", "找不到协程 " + threadId + "（可能已经结束），请重新取 threads。"};
+			return false;
+		}
+		L = found;
+		skip = 0;
 	}
 	if (start < 0) start = 0;
 	if (count <= 0) count = 20;
@@ -197,12 +172,13 @@ bool Inspector::StackTrace(int start, int count, json& body, ProtocolError& err)
 	json frames = json::array();
 	int total = 0;
 	lua_Debug ar;
-	for (int level = 0; lua_getstack(L, level, &ar); ++level) {
+	for (int real = skip; lua_getstack(L, real, &ar); ++real) {
+		const int level = real - skip;
 		++total;
 		if (level < start || level >= start + count) continue;
 		lua_getinfo(L, "nSl", &ar);
 		json f;
-		f["frameId"] = NewFrameId(L, level);
+		f["frameId"] = NewFrameId(L, real);
 		f["level"] = level;
 		f["threadId"] = "t" + PtrString(L).substr(2);
 		std::string name = ar.name ? ar.name : "";
@@ -225,10 +201,10 @@ bool Inspector::StackTrace(int start, int count, json& body, ProtocolError& err)
 json Inspector::TopFrame() {
 	lua_State* L = pausedL_;
 	lua_Debug ar;
-	if (!L || !lua_getstack(L, 0, &ar)) return nullptr;
+	if (!L || !lua_getstack(L, skip_, &ar)) return nullptr;
 	lua_getinfo(L, "nSl", &ar);
 	json f;
-	f["frameId"] = NewFrameId(L, 0);
+	f["frameId"] = NewFrameId(L, skip_);
 	f["name"] = ar.name ? ar.name : "?";
 	f["chunkName"] = ar.source ? ar.source : "=?";
 	f["line"] = ar.currentline;
@@ -411,6 +387,10 @@ std::string Inspector::Summarize(lua_State* L, int idx, size_t maxLen, std::stri
 }
 
 void Inspector::MakeItem(lua_State* L, int idx, VariableItem& item, const std::string& evaluateName) {
+	if (view_.rich) {
+		MakeItemRich(L, idx, item, evaluateName, "", "");
+		return;
+	}
 	idx = lua::AbsIndex(L, idx);
 	int t = lua_type(L, idx);
 	item.type = lua_typename(L, t);
@@ -744,7 +724,17 @@ int64_t Inspector::HostChildren(lua_State* L, int idx, const RefEntry& entry, in
 	return start + static_cast<int64_t>(children.size());
 }
 
-bool Inspector::Variables(uint64_t ref, int start, int count, const std::string& filter, json& body, ProtocolError& err) {
+bool Inspector::Variables(uint64_t ref, int start, int count, const std::string& filter, json& body, ProtocolError& err,
+	const json& expand) {
+	if (!PageRef(ref, start, count, filter, body, err)) return false;
+	if (view_.rich && expand.is_array() && !expand.empty()) {
+		size_t budget = 256 * 1024;
+		ExpandInline(body, expand, 0, budget);
+	}
+	return true;
+}
+
+bool Inspector::PageRef(uint64_t ref, int start, int count, const std::string& filter, json& body, ProtocolError& err) {
 	auto it = refs_.find(ref);
 	if (it == refs_.end()) {
 		err = {"STALE_REFERENCE", "这个变量引用已失效（游戏已继续运行），请重新获取调用栈和变量。"};
@@ -772,6 +762,7 @@ bool Inspector::Variables(uint64_t ref, int start, int count, const std::string&
 		body = {{"variables", std::move(vars)}, {"total", total}};
 		return true;
 	}
+	if (view_.rich && RichVariables(entry, start, count, filter, body)) return true;
 	if (!entry.materialized) Materialize(entry);
 	json vars = json::array();
 	int64_t total = 0;
@@ -783,6 +774,15 @@ bool Inspector::Variables(uint64_t ref, int start, int count, const std::string&
 	}
 	body = {{"variables", std::move(vars)}, {"total", total}};
 	return true;
+}
+
+// evaluate / setVariable 的返回带上 13.2 的字段（有 richVariables 时）
+void Inspector::RichEvalFields(const VariableItem& item, json& body) {
+	json j = item.ToJson();
+	for (const char* k : {"kind", "attrs", "objectId", "length", "location", "hint", "namedCount", "indexedCount"}) {
+		auto it = j.find(k);
+		if (it != j.end()) body[k] = *it;
+	}
 }
 
 bool Inspector::Threads(json& body, ProtocolError& err) {
@@ -1041,6 +1041,7 @@ bool Inspector::Evaluate(uint64_t frameId, const std::string& expr, const std::s
 	lua_settop(L, top);
 	body = {{"value", item.value}, {"type", item.type}, {"ref", item.ref}};
 	if (!item.typeName.empty()) body["typeName"] = item.typeName;
+	if (view_.rich) RichEvalFields(item, body);
 	return true;
 }
 
@@ -1175,7 +1176,13 @@ bool Inspector::SetVariable(uint64_t ref, const std::string& name, const std::st
 	lua_settop(L, top);
 	// 缓存的子项已经过时，下次重新取
 	entry.materialized = false;
+	entry.keysBuilt = false;
+	entry.richBuilt = false;
+	entry.richChildren.clear();
+	entry.groups.clear();
 	body = {{"value", item.value}, {"type", item.type}, {"ref", item.ref}};
+	if (!item.typeName.empty()) body["typeName"] = item.typeName;
+	if (view_.rich) RichEvalFields(item, body);
 	return true;
 }
 

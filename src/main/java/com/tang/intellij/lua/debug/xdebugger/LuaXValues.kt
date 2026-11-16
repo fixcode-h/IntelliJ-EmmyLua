@@ -129,10 +129,21 @@ internal fun iconOf(v: VariableDto): Icon = when {
     }
 }
 
-/** 展开时带下去的上下文：所在帧（查看完整值时在哪一帧求值）、祖先的 objectId（判断循环引用）。 */
-internal data class ExpandContext(val frame: FrameHandle?, val ancestors: List<String> = emptyList()) {
-    fun child(objectId: String?) = if (objectId.isNullOrEmpty()) this else copy(ancestors = ancestors + objectId)
+/**
+ * 展开时带下去的上下文：所在帧（查看完整值时在哪一帧求值）、祖先的 objectId（判断循环引用）、
+ * 子项所属对象的类名（右键「固定 / 隐藏字段」写进显示规则文件的哪个类型，11.1）。
+ */
+internal data class ExpandContext(
+    val frame: FrameHandle?,
+    val ancestors: List<String> = emptyList(),
+    val ownerType: String? = null
+) {
+    fun child(objectId: String?, ownerType: String? = null): ExpandContext =
+        copy(ancestors = if (objectId.isNullOrEmpty()) ancestors else ancestors + objectId, ownerType = ownerType)
 }
+
+/** 有类名的对象才能按类型写显示规则；数组、普通 table、模块里的函数这类没有可匹配的类型。 */
+private val RULE_KINDS = setOf("object", "record", "class", "module", "userdata")
 
 /**
  * 子项加载：分页、过期时静默显示提示（协议第 18 节：STALE 不弹错误）。
@@ -159,13 +170,13 @@ internal fun loadChildren(
             val v = handle.variable
             // 宿主给的分组（UE 对象按声明类分组、组件、方法）是 kind=group 的普通子项，按顺序放在顶部
             if (v.kind == "group" && v.ref > 0) {
-                handle.children()?.let { list.addTopGroup(LuaV3VariableGroup(engine, it, v.value, ctx)) }
+                handle.children()?.let { list.addTopGroup(LuaV3VariableGroup(engine, it, groupComment(v), ctx)) }
             } else {
                 list.add(LuaV3Value(engine, v, container, ctx))
             }
         }
         // 继承成员、方法、元表放在底部分组（variable-view.md 5.4），只在第一页给
-        page.groups.forEach { group -> group.children()?.let { list.addBottomGroup(LuaV3VariableGroup(engine, it, group.variable.value, ctx)) } }
+        page.groups.forEach { group -> group.children()?.let { list.addBottomGroup(LuaV3VariableGroup(engine, it, groupComment(group.variable), ctx)) } }
         val loaded = start + page.variables.size
         val remaining = if (end != null) {
             // 数组区间按下标算：空洞会让这一页少几项，但区间之外的不再取
@@ -181,6 +192,12 @@ internal fun loadChildren(
         node.addChildren(list, remaining <= 0)
         if (remaining > 0) node.tooManyChildren(remaining) { loadChildren(engine, container, node, loaded, ctx, filter, end) }
     }
+}
+
+/** 分组名后面的灰字：runtime 把数量放在 namedCount、来源放在 value（例「module UI.BagPanel」），不拼进名字 */
+internal fun groupComment(v: VariableDto): String {
+    val count = v.namedCount ?: v.length?.toInt()
+    return listOfNotNull(count?.let { "($it)" }, v.value.takeIf { it.isNotBlank() }).joinToString("  ")
 }
 
 /**
@@ -265,7 +282,7 @@ class LuaV3Value internal constructor(
         val pause = parent?.pause ?: return node.addChildren(XValueChildrenList.EMPTY, true)
         if (!variable.expandable || variable.hasAttr("invalid")) return node.addChildren(XValueChildrenList.EMPTY, true)
         val container = VariableContainer(pause, variable.ref, variable.name)
-        val childCtx = ctx.child(variable.objectId)
+        val childCtx = ctx.child(variable.objectId, variable.typeName?.takeIf { it.isNotBlank() && variable.kind in RULE_KINDS })
         val indexed = variable.indexedCount ?: 0
         if (indexed > childrenPage()) {
             // 大数组：数组段切成区间放在顶部，字段段（和底部分组）照常分页
@@ -279,6 +296,16 @@ class LuaV3Value internal constructor(
     }
 
     override fun getEvaluationExpression(): String? = variable.evaluateName
+
+    /** 右键「固定 / 隐藏字段」用：所属对象的类名和字符串键原文；不能按规则处理的返回 null。 */
+    internal fun ruleTarget(): Pair<String, String>? {
+        val owner = ctx.ownerType ?: return null
+        if (variable.nameType != null && variable.nameType != "string") return null
+        if (variable.kind == "group" || variable.hasAttr("metamethod")) return null
+        return owner to fieldName(variable.name)
+    }
+
+    internal val pinned: Boolean get() = variable.hasAttr("pinned")
 
     override fun canNavigateToSource(): Boolean = variable.location != null
 
@@ -305,6 +332,10 @@ class LuaV3Value internal constructor(
     }
 
     private companion object {
+        /** 非标识符的字符串键显示成 `["end"]`，规则文件里写原文 */
+        fun fieldName(name: String): String =
+            if (name.startsWith("[\"") && name.endsWith("\"]")) unescape(name.substring(2, name.length - 2)) else name
+
         /** runtime 摘要里的转义还原成原文（查看完整内容时显示原文） */
         fun unescape(text: String): String {
             if ('\\' !in text) return text

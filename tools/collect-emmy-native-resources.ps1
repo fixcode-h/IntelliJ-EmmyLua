@@ -13,7 +13,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$files = @("EasyHook.dll", "emmy_core.dll", "emmy_hook.dll", "emmy_tool.exe")
+$files = @("EasyHook.dll", "emmy_tool.exe", "emmy_attach.dll")
 
 $artifacts = @()
 foreach ($architecture in @("x86", "x64")) {

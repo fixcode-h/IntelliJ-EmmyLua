@@ -251,7 +251,7 @@ public class LuaParserUtil extends GeneratedParserUtilBase {
                 }
 
                 // 3.2 尝试解析嵌套结构 (如内部的 if, do, repeat)
-                // bug fix: https://github.com/EmmyLua/IntelliJ-EmmyLua/issues/276
+                // bug fix: 原 EmmyLua 插件的问题 #276
                 if (type == UNTIL) {
                     return true;
                 }

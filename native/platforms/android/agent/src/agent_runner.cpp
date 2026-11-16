@@ -103,17 +103,17 @@ void RunAgent(const RunOptions& options) {
     }
     capture.Arm();
     g_status.Write("listening", {{"socket", socketName}, {"module", g_module.path}, {"hooks", capture.Describe()},
-                                 {"hookBackend", backend->Name()}});
+                                 {"hookBackend", backend->Name()}, {"errorStop", capture.HostPcallHooked() ? "1" : "0"}});
     AGENT_LOGI("监听 localabstract:%s，hook：%s", socketName.c_str(), capture.Describe().c_str());
 
-    // 抓到 L 后过了捕获窗口就撤掉临时 intercept。agent 常驻进程（JVMTI agent 不能卸载），线程不退出。
+    // 抓到 L 后过了捕获窗口就停止抓取、撤掉临时 intercept（pcall 替身常驻，出错即停要用）。agent 常驻进程（JVMTI agent 不能卸载），线程不退出。
     while (capture.CaptureActive()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
         capture.Tick();
     }
     std::vector<std::pair<std::string, std::string>> fields = {
         {"socket", socketName}, {"module", g_module.path}, {"vms", std::to_string(capture.KnownVmCount())},
-        {"hookBackend", backend->Name()}};
+        {"hookBackend", backend->Name()}, {"errorStop", capture.HostPcallHooked() ? "1" : "0"}};
     std::string vmErr = capture.LastError();
     if (!vmErr.empty()) fields.emplace_back("warning", vmErr);
     g_status.Write("listening", fields);

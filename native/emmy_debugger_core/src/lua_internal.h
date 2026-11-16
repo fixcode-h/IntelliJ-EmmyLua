@@ -1,5 +1,5 @@
 // 需要 Lua 内部结构的少数操作，按版本隔离在 lua_internal.cpp。
-// 动态 API 模式下这里换成按偏移读取（参考原 native/emmy_debugger/src/api/lua_state/）。
+// 动态 API 模式下这里换成按偏移读取（旧实现的 native/emmy_debugger/src/api/lua_state/ 已删除，见 git 历史）。
 #pragma once
 
 #include <functional>

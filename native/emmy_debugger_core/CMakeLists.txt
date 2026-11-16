@@ -105,6 +105,9 @@ set(EMMY_CORE_SOURCES
     src/hook_mux.cpp
     src/inspector.cpp
     src/host_value.cpp
+    src/rich_view.cpp
+    src/rich_rules.cpp
+    src/view_rules.cpp
     src/vm.cpp
     src/session.cpp
     src/transport.cpp
@@ -169,6 +172,9 @@ if(EMMY_CORE_BUILD_TESTS)
     add_executable(emmy_core_session_test tests/session_test.cpp tests/test_client.cpp)
     target_include_directories(emmy_core_session_test PRIVATE src tests "${EMMY_THIRD_PARTY}/nlohmann/include")
     target_link_libraries(emmy_core_session_test PRIVATE emmy_debugger_core emmy_core_lua)
+    # helper v2 的 Lua 脚本在插件资源里，端到端用例直接加载真文件（找不到时用例跳过）
+    target_compile_definitions(emmy_core_session_test PRIVATE
+        EMMY_HELPERS_V3_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../src/main/resources/debugger/emmy/v3")
     if(EMMY_CORE_LUA_MODE STREQUAL "dynamic")
         # dynamic 模式在主机上测：核心用 dlsym 找测试程序自己链接的 Lua，所以要导出符号
         set_target_properties(emmy_core_session_test PROPERTIES ENABLE_EXPORTS ON)

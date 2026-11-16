@@ -451,7 +451,7 @@ v3 增量：`variables` 可以带 `expand`，列出要顺带展开的**名字路
 
 ### 11.2 helper v2
 
-在现有 `emmyHelper` 上新增 `emmy.registerFormatter`，**惰性、分页**：
+新核心的 helper 放在插件资源 `debugger/emmy/v3/`：`emmy.lua`（接口和调度）、`emmy_ue.lua`（UE 结构体和容器）、`emmy_main.lua`（入口，`loadHelpers` 的 main）。runtime 加载完后从入口返回的 `emmy.__dispatch` 取调度函数放进 registry（键 `emmy.formatter.dispatch`），不放全局、不依赖 debug 库。写法 `local emmy = require("emmy")` 后调用 `emmy.registerFormatter`，**惰性、分页**：
 
 ```lua
 emmy.registerFormatter {
@@ -479,7 +479,8 @@ emmy.registerFormatter {
 
 - `children` 返回的每项 `value` 是真实的 Lua 值，runtime 再按本文规则生成它的 `Variable`（嵌套的 TArray 也会再匹配 formatter）；也可以给 `{ name, summary, typeName, kind }` 直接指定显示。
 - 每个回调都在 `pcall` + 指令预算（`helperBudgetMs`，默认 20 ms）下执行；出错或超时时这一项退回默认显示，行尾标「helper 出错」，悬停给错误信息，同一类型连续出错 3 次后本次暂停内不再调用。
-- 旧的 `registerProcessor` / `registerProxyRecognizer` 保留：旧 processor 一次构造的子项由 runtime 缓存后分页返回（协议 12.2 已约定），行为不变。新写的 UE 处理（`emmyHelper_ue.lua`）全部改用 `registerFormatter`。
+- 旧的 `registerProcessor` / `getProcessorBase` / `createNode` 在 `emmy.lua` 里做了兼容：processor 被包成一个低优先级的 formatter，展开时跑一遍 `process` 再按页切出来。`registerProxyRecognizer` 不再支持。UE 处理（`emmy_ue.lua`）全部用 `registerFormatter`；UObject 本身归 UELink 的宿主值提供者（13.6），formatter 只在宿主不认领时才被问到。
+- `children` 的每一项都要包成表（`{ name, value }` 或 `{ name, summary }`）；不是表的项按 `[下标] = 原值` 显示。不给 `count` 时，返回满一页就认为还有下一页。
 
 ---
 
@@ -516,6 +517,8 @@ emmy.registerFormatter {
 | --- | --- |
 | `richVariables` | 13.2–13.3 的所有新参数、新字段和新排序 |
 | `viewRules` | `setViewRules`（13.4） |
+
+`richVariables` 改变 `variables` 的返回形状，所以 runtime 只在 `hello.caps` **明确列出**它时开启；不带 `caps` 的客户端（「全要」）拿到的仍是 v3.0 的形状。
 
 ### 13.2 `Variable` 新增字段
 
@@ -571,7 +574,8 @@ emmy.registerFormatter {
 
 - 整体替换。runtime 预解析模板，非法的规则跳过并在 `warnings` 里说明，不影响其他规则。
 - 推荐在握手后的初始化序列里，`loadHelpers` 之后、`setOptions` 之前发送。
-- 下次暂停生效；当前暂停里已经取过的节点不变，IDE 收到 response 后可以主动刷新可见部分。
+- 对之后新建的引用生效；已经取过的节点不变。IDE 收到 response 后刷新变量树（重新取作用域 = 新引用），所以右键固定 / 隐藏在当前这次暂停里就能看到。
+- 实现：摘要模板只用于实例（`object` / `record`），类表和模块表照常；`{路径}` 里的字符串放原文、其他按 4.1 的嵌套写法，取不到写 `?`；只有 `pin` 没有 `summary` 时摘要是 `{固定字段=值, …}`。`hide` 也作用于继承分组里的成员。规则优先于 `__tostring`。
 
 ### 13.5 `setOptions` 新增
 
@@ -695,7 +699,7 @@ val groups: List<VariableDto>?, val sorted: Boolean?, val truncated: Boolean?
 - 字符串 `length > value 长度` 时 `setFullValueEvaluator`。
 - 函数 / 协程 / 模块的 `location`：`computeSourcePosition` + `computeInlineDebuggerData`，支持 Jump to Source。
 - 循环引用：`LuaValueNode` 持有父链，构造时比对 `objectId`。
-- 变化高亮：引擎记录上一次暂停（同一函数、同一帧深度）可见节点的 `evaluateName → value`，新值不同时 `XValueNode` 标 changed（IntelliJ 的 `XValueNodeImpl.markChanged`，在新平台 API 下用 `XValuePresentation` 的高亮属性）。
+- 变化高亮：用平台自带的。IntelliJ 换帧时按 `XStackFrame.getEqualityObject()` 保存 / 恢复变量树状态，恢复时把名字路径相同、显示值不同的节点标成 changed（`XDebuggerTreeRestorer` → `markChanged`）。所以栈帧的身份必须跨暂停稳定：用「VM + 协程 + chunk + 定义行 + 函数名」，不用每次暂停都换新的 `frameId`。同时也让单步后展开状态自动恢复。只比较展开过、可见的节点。
 - 全部请求在后台协程，EDT 只做 `setPresentation` / `addChildren`。
 - 删掉旧 `LuaXValue.kt` 的 `VariableComparator`、`buildInlineSummary`、`evalExpr` 拼接、对 userdata 的特殊绕行（由 runtime 安全策略取代）。
 
@@ -808,9 +812,9 @@ val groups: List<VariableDto>?, val sorted: Boolean?, val truncated: Boolean?
 | V0 | 本文评审；协议增量合进 `protocol-v3.md`（加变更记录） | 本线程 + 协议 / 原生核心线程 |
 | V1 | runtime：`richVariables` 全部（键快照、智能排序、分组、继承、摘要、`expand`、`objectId`、函数 / 协程显示、作用域规则、安全调用）；fixture + golden + `bench_variables` | 原生核心线程（本线程可承担 fixture 和 golden） |
 | V2 | IDE：`VariableDto` 可选字段、XDebugger 渲染（区间、分页、分组、图标、循环引用、完整值、跳转）和右键动作（挂在 `com.tang.intellij.lua.debug.xdebugger` 的 XValue 上）、MCP 文本渲染 | IDE 引擎线程；「变量视图」设置页（15.3）由本线程在 UI 线程的设置类上补 |
-| V3 | `viewRules`：显示规则文件、`setViewRules`、固定 / 隐藏动作；helper v2 `registerFormatter`，`emmyHelper_ue.lua` 改写（结构体、容器分页、有效性） | 本线程 |
+| V3 | `viewRules`：显示规则文件、`setViewRules`、固定 / 隐藏动作；helper v2 `registerFormatter`，UE 结构体 / 容器改写到 `v3/emmy_ue.lua`（已完成） | 本线程 |
 | V4 | UE 来源 A：runtime 实现 13.6 的 v2 注册入口和调用；UEKit UELink 侧已完成（UELink 2.4.0-beta.4） | 原生核心线程 |
-| V5（可选） | 变化高亮、Mark Object、复制为 JSON、Android 来源 C（原生反射） | 视 V1–V4 结果再排 |
+| V5（可选） | Mark Object、复制为 JSON、Android 来源 C（原生反射）。变化高亮已用平台机制做掉（15.2） | 视 V1–V4 结果再排 |
 
 V1、V2 可以并行：IDE 先对着假 runtime 和 golden JSON 开发。
 

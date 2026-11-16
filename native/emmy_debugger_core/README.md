@@ -67,8 +67,27 @@ Emmy_UnregisterLuaVm(L);                      // lua_close 之前
 - 断点所在函数自己的紧循环逃不掉 Lua 行钩子（每条指令都要判断），比旧架构的空钩子仍好，但达不到 2x；这一项的目标需要按函数粒度重新定。
 - 条件断点单次判断约 0.07 µs（目标 ≤ 2 µs）。
 
-## 还没做
+## 变量视图（richVariables）
 
-- `exceptions` 能力（错误时暂停）；`setOptions.exceptions` 只接受 `none`。
-- helper（`emmyHelper.queryVariable`）参与变量展示：脚本已能加载执行，还没接到 `variables`。
-- 变量视图的 `richVariables` / `viewRules`（[docs/design/variable-view.md](../../docs/design/variable-view.md) 13.1–13.5：智能排序、分组、继承成员、显示规则）。宿主值提供者已做，子项里的 `kind` / `hint` / `attrs` / `length` 已经输出。
+hello 的 `caps` 里**明确写了** `richVariables` 才开（不写 caps 的老客户端拿到的还是 v3.0 的形状）。`variables` 收 `view`（`auto` / `raw`）和 `maxValueLength`（16–1024，默认 256），`setOptions.variableView` 收 13.5 的各项。实现在 `src/rich_view.cpp`：
+
+- 每个值给 `kind`、`objectId`、字符串的 `length`、函数和协程的 `location`；table 按 4.1 分 `array` / `record` / `object` / `class` / `module`，类名按 6.3 推断（`__name` → `__cname` 等字段 → `package.loaded` 反查，每次暂停建一次反查表、按元表缓存）。
+- 第一次展开 table 时建键快照（数组段 + 按 5.1 智能排序的字段段），之后每页只 `rawget` 这一页的值；键超过 `maxSortKeys` 不排序并回 `sorted: false`。`filter=indexed` 按下标区间分页。
+- 首页回 `groups`：方法、`__index` 链每层的「继承自 X」（被更近一层覆盖的标 `shadowed`）、「`__index` 是函数」、「元表 X」（元方法在前、标 `metamethod`）、全局作用域的「内置」、局部变量的「临时值」（`showTemporaries`）、宿主认领的表的「UE 对象」。
+- 局部变量里被遮蔽的同名外层变量也列出（`attrs: ["shadowed"]`），upvalue 不列 `_ENV`。
+- 一页估算超过 256 KiB 就少给几项并回 `truncated: true`。
+- `expand`（10.4）：最多 32 条名字路径、深度 8，命中的节点（含分组）把首页子项内联到 `children`，合计超过 256 KiB 停止并标 `truncated`。
+- 协程值可以展开：`status` 和「调用栈」分组，每帧再展开是那一帧的局部变量（不给 `evaluateName`）。`stackTrace` 也认 `threadId`。
+- 除了 `__tostring`（`toString`：默认只对 table，`all` 连 userdata 一起，`never` 不调），全程只用 rawget / lua_next / rawlen / lua_getinfo / lua_getlocal / lua_getupvalue，不调元方法。`__tostring` 在新协程里跑，5 ms 指令预算，期间不命中断点；出错的标 `helperError`，同一个元表连续出错 3 次后本次暂停不再调。
+
+## 显示规则和 helper v2
+
+- `setViewRules`（能力 `viewRules`，variable-view 11.1 / 13.4）：摘要模板（只 rawget）、`pin` 排最前并标 `pinned`、`hide`（含继承成员）、`classNameFields`、`builtinGlobals`。实现在 `view_rules.cpp`（解析）和 `rich_rules.cpp`（接入）。
+- helper v2（11.2）：`loadHelpers` 的主模块返回 `emmy` 表时，`emmy.__dispatch` 放进 registry；宿主不认领的 table / userdata 交给 formatter，在新协程里带 `helperBudgetMs`（默认 20 ms）预算执行，出错退回默认显示并标 `helperError`。IDE 下发的脚本在插件资源 `debugger/emmy/v3/`。
+
+## 出错即停（exceptions）
+
+`setOptions.exceptions` = `none` / `uncaught` / `all`，暂停时 `reason = exception`，`exception = { message, traceback, uncaught }`，栈从第一个 Lua 帧算起（错误处理函数、`error` / `assert` 不显示），局部变量还能看。
+
+- 「没被接住」只有宿主知道：宿主在 `lua_pcall` 的错误处理函数里调 `Emmy_NotifyLuaError`，或者直接用 `Emmy_LuaErrorHandler` 当错误处理函数；挂 `lua_pcall` 的注入方式用 `Emmy_PrepareHostPcall` / `Emmy_FinishHostPcall`（Windows 附加已接，Lua 自己的 `pcall` 和带续延的调用不插）。
+- `all` 时核心把全局 `pcall` / `xpcall` 换成用 `xpcall` 写的包装（5.2+ 仍可 yield），被接住的错误也会停；改回 `none` / `uncaught` 时还原。脚本里提前 `local pcall = pcall` 存下的引用不受影响。
