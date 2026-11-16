@@ -38,6 +38,8 @@
         <library.type implementation="com.tang.intellij.lua.project.LuaLibraryType"/>
         <!--<indexedRootsProvider implementation="com.tang.intellij.lua.project.LuaPredefinedLibraryProvider"/>-->
         <additionalLibraryRootsProvider implementation="com.tang.intellij.lua.project.StdLibraryProvider"/>
+        <!-- 只打开 Content/Script 时，把 UE 项目里 UnLua 生成的 IntelliSense 声明加进索引 -->
+        <additionalLibraryRootsProvider implementation="com.tang.intellij.lua.project.UnrealIntelliSenseLibraryProvider"/>
         <directoryProjectGenerator implementation="com.tang.intellij.lua.project.EmmyLuaDirectoryProjectGenerator"/>
 
         <!--lang-->
