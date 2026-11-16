@@ -3,6 +3,9 @@ package com.fixcode.intellij.lua.project
 import com.fixcode.intellij.lua.lsp.EmmyLuaServer
 import com.fixcode.intellij.lua.lsp.EmmyLuaServerLocator
 import com.fixcode.intellij.lua.lsp.EmmyLuaWorkspaceConfig
+import com.google.gson.JsonObject
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.options.BoundSearchableConfigurable
@@ -15,7 +18,9 @@ import com.intellij.ui.dsl.builder.bindSelected
 import com.intellij.ui.dsl.builder.bindText
 import com.intellij.ui.dsl.builder.panel
 import com.intellij.ui.dsl.builder.rows
+import java.io.IOException
 import java.nio.file.Files
+import javax.swing.JLabel
 
 /** 设置 → 语言和框架 → EmmyLua。改了会影响 emmylua_ls 的项，应用后重启服务器。 */
 class LuaSettingsConfigurable(private val project: Project) :
@@ -28,6 +33,7 @@ class LuaSettingsConfigurable(private val project: Project) :
     private var level = app.languageLevel
     private var detectUnreal = proj.detectUnrealProject
     private var libraries = proj.additionalSourcesRoot.joinToString("\n")
+    private var declStatus: JLabel? = null
 
     override fun createPanel(): DialogPanel = panel {
         group("语言服务器（emmylua_ls）") {
@@ -50,10 +56,18 @@ class LuaSettingsConfigurable(private val project: Project) :
         }
         group("库目录") {
             row {
-                checkBox("自动探测 UE 项目，加入 UnLua 生成的 IntelliSense 声明")
+                checkBox("自动探测 UE 项目，加入 UE 反射声明（UELink 生成的或 UnLua 的 IntelliSense）")
                     .bindSelected(::detectUnreal)
                     .comment(describeUnreal())
             }
+            row("UE 反射声明：") {
+                button("让 UE 编辑器后台生成") { toggleUnrealDecl(true) }
+                button("关闭") { toggleUnrealDecl(false) }
+                declStatus = label("").component
+            }.comment(
+                "默认不生成。打开后 UE 编辑器（需要 UEKit 的 UELink 2.5+，编辑器要开着）在后台把 C++ 类和蓝图生成 Lua 声明到 " +
+                    "Intermediate/UELink/LuaDecl，蓝图编译、资源保存、Live Coding 后只更新变了的文件；有这个目录时优先用它，不再用 UnLua 生成的"
+            )
             row {
                 label("额外库目录（每行一个，可写相对项目目录的路径）：")
             }
@@ -116,9 +130,37 @@ class LuaSettingsConfigurable(private val project: Project) :
         val ue = UnrealIntelliSenseRoots.findUnrealProjectRoot(root) ?: return "没找到 .uproject"
         val dirs = UnrealIntelliSenseRoots.find(root)
         return if (dirs.isEmpty()) {
-            "UE 项目：$ue；还没有 IntelliSense 目录，在 UE 编辑器里用 UnLua 的 Generate IntelliSense 生成"
+            "UE 项目：$ue；还没有声明目录：用下面的按钮让 UE 编辑器后台生成，或在 UE 编辑器里用 UnLua 的 Generate IntelliSense"
         } else {
             "UE 项目：$ue<br>" + dirs.joinToString("<br>")
+        }
+    }
+
+    /** 调 UE 编辑器里 UELink 的 luadecl.enable；网络请求放后台线程，结果写回设置页。 */
+    private fun toggleUnrealDecl(enabled: Boolean) {
+        val root = EmmyLuaWorkspaceConfig.projectRoot(project)
+        val ue = root?.let { UnrealIntelliSenseRoots.findUnrealProjectRoot(it) }
+        if (ue == null) {
+            declStatus?.text = "没找到 .uproject"
+            return
+        }
+        declStatus?.text = "正在连 UE 编辑器…"
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val text = try {
+                val editor = UELinkClient.findEditor(ue)
+                    ?: throw IOException("没找到开着的 UE 编辑器（或项目里没装 UELink）：先打开 UE 编辑器")
+                val args = JsonObject().apply { addProperty("enabled", enabled) }
+                val result = UELinkClient.call(editor, "luadecl.enable", args)
+                if (enabled) {
+                    UnrealDeclWatcher.getInstance(project).checkSoon()
+                    "已打开，UE 编辑器正在后台生成（${result.get("dir")?.asString ?: ""}），第一次要几十秒，生成完自动换库目录"
+                } else {
+                    "已关闭；已生成的声明留着照样能用，删掉 Intermediate/UELink/LuaDecl 就回到 UnLua 的声明"
+                }
+            } catch (e: IOException) {
+                e.message ?: "失败"
+            }
+            ApplicationManager.getApplication().invokeLater({ declStatus?.text = text }, ModalityState.any())
         }
     }
 

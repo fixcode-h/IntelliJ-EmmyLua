@@ -23,8 +23,21 @@ object UnrealIntelliSenseRoots {
      * UnLua 写在「插件目录/Intermediate/IntelliSense」；插件可能直接在 Plugins 下，也可能多套一层分类目录。
      * 项目自己的 Intermediate/IntelliSense 也收（有的分支改了输出位置）。
      */
+    /** UELink（UEKit）后台生成的声明目录；有清单才算生成过。 */
+    const val UELINK_DECL_DIR = "Intermediate/UELink/LuaDecl"
+    const val UELINK_DECL_MANIFEST = ".uelink-luadecl.json"
+
+    fun uelinkDeclDir(ueRoot: Path): Path? =
+        ueRoot.resolve(UELINK_DECL_DIR).takeIf { Files.isRegularFile(it.resolve(UELINK_DECL_MANIFEST)) }
+            ?.toAbsolutePath()?.normalize()
+
+    /**
+     * 有 UELink 生成的声明目录就只用它（里面已经带了 UnLua 的静态声明），
+     * 不再加 UnLua 自己生成的目录：两份声明同名类型会重复定义，跳转出现两个目标。
+     */
     fun find(start: Path): List<Path> {
         val root = findUnrealProjectRoot(start) ?: return emptyList()
+        uelinkDeclDir(root)?.let { return listOf(it) }
         val result = mutableListOf<Path>()
         root.resolve("Intermediate").resolve("IntelliSense").takeIf { Files.isDirectory(it) }?.let(result::add)
         val plugins = root.resolve("Plugins")
