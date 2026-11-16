@@ -94,6 +94,18 @@ enum class DetectedLuaVersion(val code: String) {
     LUA_51("51"), LUA_52("52"), LUA_53("53"), LUA_54("54"), LUAJIT("jit"), UNKNOWN("");
 }
 
+/** 符号表从哪来（按兜底顺序）。 */
+enum class SymbolSource(val label: String) {
+    /** 运行配置里指定的未裁剪 so，或在符号目录里按文件名找到的（设备 Build ID 未知时）。 */
+    LOCAL_FILE("本地未裁剪 so"),
+    /** 符号目录里 Build ID 和设备一致的 ELF（含 .build-id 布局）。 */
+    SYMBOL_DIR("符号目录（Build ID 匹配）"),
+    /** 设备 so 自带的 .dynsym / .gnu_debugdata（MiniDebugInfo）。 */
+    DEVICE_SYMBOLS("设备 so 自带的符号"),
+    /** 用参考 so 的函数特征码在设备 so 里搜。 */
+    SIGNATURE("特征码"),
+}
+
 /** 从未裁剪 so 里得到的符号偏移表。偏移即 st_value（armv7 Thumb 函数带最低位 1，agent 原样加基址）。 */
 data class LuaSymbolTable(
     val buildId: String,
@@ -104,6 +116,9 @@ data class LuaSymbolTable(
     val missingRequired: List<String>,
     val conflicts: Map<String, List<Long>>,
     val sourcePath: String,
+    val source: SymbolSource = SymbolSource.LOCAL_FILE,
+    /** 来源的补充说明，例如「.dynsym 3 个 + MiniDebugInfo 60 个」「参考 so xxx，特征码找到 58 个」。 */
+    val sourceDetail: String = "",
 ) {
     val versionSupported: Boolean get() = luaVersion in LuaApiSymbols.supportedVersions
     val usable: Boolean get() = missingCritical.isEmpty() && missingRequired.isEmpty() && conflicts.isEmpty() &&
@@ -115,7 +130,9 @@ data class LuaSymbolTable(
 
     /** 给用户看的一句话结论。 */
     fun describe(): String = buildString {
-        append("Build ID ${buildId.take(12)}…，找到 ${functions.size} 个 Lua 函数")
+        append("Build ID ${buildId.take(12)}…，")
+        if (source != SymbolSource.LOCAL_FILE) append("来源：${source.label}${if (sourceDetail.isNotEmpty()) "（$sourceDetail）" else ""}，")
+        append("找到 ${functions.size} 个 Lua 函数")
         if (luaVersion != DetectedLuaVersion.UNKNOWN) append("（Lua ${luaVersion.code}）")
         if (conflicts.isNotEmpty()) append("；同名函数有多份实现：${conflicts.keys.joinToString()}，so 里可能静态链接了两份 Lua")
         if (!versionSupported) append("；真机附加的调试核心目前只支持 Lua 5.4")
@@ -145,12 +162,37 @@ class LuaSymbolResolver(private val cacheDir: File?) {
                 throw SymbolResolveException("${file.name} 已被裁剪（没有 .symtab），请指定打包时保留的未裁剪 so，一般在 Binaries/Android 或 Intermediate/Android 下")
             }
             val found = HashMap<String, MutableSet<Long>>()
-            elf.forEachSymbol(LuaApiSymbols::mayMatch) { sym ->
+            collectLuaSymbols(elf, listOf(".symtab", ".dynsym"), found)
+            val table = buildTable(found, buildId, elf.abi, file.absolutePath)
+            saveCache(table, file)
+            return table
+        }
+    }
+
+    companion object {
+        private const val CACHE_FORMAT = "2"
+        private val SKIP_DIRS = setOf(".git", ".svn", "node_modules", "DerivedDataCache", "Saved", "Content")
+
+        /** 把 [elf] 指定符号表里的 Lua 函数（含 C++ 修饰名、版本标记）收进 [found]：名字 → 不同的地址。 */
+        fun collectLuaSymbols(elf: ElfFile, tables: List<String>, found: MutableMap<String, MutableSet<Long>>) {
+            elf.forEachSymbol(LuaApiSymbols::mayMatch, tables) { sym ->
                 if (!sym.isDefined || !sym.isFunction || sym.value == 0L) return@forEachSymbol
                 val name = LuaApiSymbols.canonicalName(sym.name) ?: return@forEachSymbol
                 found.getOrPut(name) { LinkedHashSet() }.add(sym.value)
             }
-            val version = detectVersion(found.keys)
+        }
+
+        fun buildTable(
+            found: Map<String, Set<Long>>,
+            buildId: String,
+            abi: String?,
+            sourcePath: String,
+            source: SymbolSource = SymbolSource.LOCAL_FILE,
+            sourceDetail: String = "",
+            versionHint: DetectedLuaVersion? = null,
+        ): LuaSymbolTable {
+            val detected = detectVersion(found.keys)
+            val version = if (detected == DetectedLuaVersion.UNKNOWN && versionHint != null) versionHint else detected
             val functions = LinkedHashMap<String, Long>()
             val conflicts = LinkedHashMap<String, List<Long>>()
             for (name in found.keys.filter(LuaApiSymbols::isApi).sorted()) {
@@ -158,28 +200,28 @@ class LuaSymbolResolver(private val cacheDir: File?) {
                 if (values.size == 1) functions[name] = values.first()
                 else conflicts[name] = values.sorted()
             }
-            val table = LuaSymbolTable(
+            return LuaSymbolTable(
                 buildId = buildId,
-                abi = elf.abi,
+                abi = abi,
                 luaVersion = version,
                 functions = functions,
                 missingCritical = LuaApiSymbols.critical.filter { it !in functions },
                 missingRequired = LuaApiSymbols.requiredFor(version).filter { it !in functions },
                 conflicts = conflicts,
-                sourcePath = file.absolutePath,
+                sourcePath = sourcePath,
+                source = source,
+                sourceDetail = sourceDetail,
             )
-            saveCache(table, file)
-            return table
         }
-    }
 
-    private fun detectVersion(names: Set<String>): DetectedLuaVersion = when {
+        fun detectVersion(names: Set<String>): DetectedLuaVersion = when {
         "lj_state_new" in names || "luaopen_jit" in names -> DetectedLuaVersion.LUAJIT
         "luaE_warning" in names || "lua_newuserdatauv" in names -> DetectedLuaVersion.LUA_54
         "luaV_div" in names || "lua_rotate" in names -> DetectedLuaVersion.LUA_53
         "luaE_extendCI" in names || "lua_callk" in names || "lua_pcallk" in names -> DetectedLuaVersion.LUA_52
         "luaV_execute" in names -> DetectedLuaVersion.LUA_51
         else -> DetectedLuaVersion.UNKNOWN
+    }
     }
 
     // ---- 缓存：一个 Build ID 一个 properties 文件，记下来源文件的大小和修改时间，变了就重新解析 ----
@@ -266,10 +308,5 @@ class LuaSymbolResolver(private val cacheDir: File?) {
             }
         }
         return withSymtab.sortedByDescending { it.lastModified() }
-    }
-
-    companion object {
-        private const val CACHE_FORMAT = "2"
-        private val SKIP_DIRS = setOf(".git", ".svn", "node_modules", "DerivedDataCache", "Saved", "Content")
     }
 }

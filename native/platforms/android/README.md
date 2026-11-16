@@ -6,13 +6,13 @@
 
 | 部分 | 位置 | 作用 |
 | --- | --- | --- |
-| IDE 侧 | `modules/debugger-android` | 读本地未裁剪 so 的 Lua 函数偏移和 Build ID；adb 设备/进程；部署和注入 agent；建转发；环境检查 |
+| IDE 侧 | `modules/debugger-android` | 找 Lua 函数偏移（未裁剪 so / 符号目录 / 设备 so 自带符号 / 特征码，见下文）和 Build ID；adb 设备/进程；部署和注入 agent；建转发；环境检查 |
 | agent | `native/platforms/android/agent` | `libemmylua_agent.so`：在游戏进程里按偏移算出 `lua_*` 地址、校验 Build ID、替换 `lua_pcallk` 抓 `lua_State` 并支持出错即停、交给调试核心、监听抽象 socket |
 | 调试核心 | `native/emmy_debugger_core`（另一个线程在做） | 协议 v3、钩子、断点；agent 通过 `emmy_core_abi.h` 里的 C ABI 调它 |
 
 ## 流程
 
-1. IDE 读本地未裁剪 `libUnreal.so`：`.symtab` 里的 `lua_*`（含 C++ 修饰名）偏移 + GNU Build ID，按 Build ID 缓存。
+1. IDE 找 `lua_*` 函数偏移（含 C++ 修饰名）：优先读本地未裁剪 `libUnreal.so` 的 `.symtab`，没有时逐级兜底（见「没有未裁剪 so 时」），结果按 Build ID 缓存。
 2. 设备侧预检：`run-as <包> cat /proc/<pid>/maps` 找到 `libUnreal.so`，只读开头 8 KB（`dd | od`）取 Build ID 比对，不一致直接报错。
 3. 部署：`adb push` 到 `/data/local/tmp/emmylua/`，再 `run-as` 拷进应用私有目录 `code_cache/emmylua/`（`libemmylua_agent.so` + `agent.cfg`），共享目录里的配置随即删除（里面有握手 token）。
 4. 注入：
@@ -27,7 +27,29 @@
 ## 前提
 
 - 应用可调试（`android:debuggable=true`，UE Development 包默认如此）。正式签名包需要 root，暂不支持。
-- 本地有这次安装包对应的**未裁剪** `libUnreal.so`（UE 打包后在 `Binaries/Android` 或 `Intermediate/Android` 下），链接时带 `--build-id`（NDK 默认）。
+- 本地有这次安装包对应的**未裁剪** `libUnreal.so`（UE 打包后在 `Binaries/Android` 或 `Intermediate/Android` 下），链接时带 `--build-id`（NDK 默认）。没有时见下一节的兜底。
+
+## 没有未裁剪 so 时
+
+构建机清了 `Intermediate`、只拿到安装包时，IDE 按下面的顺序逐级找，**任何一级拿全调试核心必需的函数就用它**，附加日志和「检查环境」里写明用的是哪一级、前面几级为什么不行（`elf/LuaSymbolLocator.kt`）：
+
+| 顺序 | 来源 | 说明 |
+| --- | --- | --- |
+| 0 | 运行配置里指定的 so | Build ID 和设备不一致时跳过，继续往下找（不再直接报错） |
+| 1 | 符号目录（设置 → 设备，可多个） | 递归找 ELF（`.so` / `.debug` / `.dbg` / `.sym`），Build ID 和设备上的 so 一致且带 `.symtab` 就用；也认 `<目录>/.build-id/xx/yyyy.debug`。扫描结果按「路径 + 大小 + 修改时间」缓存，归档目录第二次只 stat。适合把每次出包的未裁剪 so 存到共享盘 |
+| 2 | 设备 so 自带的符号 | 经 adb 按需读设备上的 so（`run-as dd` + `exec-out`，只读头部、节头和符号表几次往返，APK 内直接映射的也行）：`.dynsym` 和 `.gnu_debugdata`（MiniDebugInfo，xz 压缩的 `.symtab`）。UE 默认 `-fvisibility=hidden`，`.dynsym` 一般没有 `lua_*`；打包时保留 MiniDebugInfo 的工程这一级就够了 |
+| 3 | 特征码 | 设置里（或运行配置里）指定「参考 so」：同一工程**以前任意一次构建**的未裁剪 `libUnreal.so`，同 ABI、同 Lua 版本。见下 |
+
+特征码怎么做（`ArmCodeMasker.kt`、`SignatureScanner.kt`）：
+
+- 从参考 so 的 `.symtab` 取每个需要的函数（必需 + 可选 + hook 点）从入口到结尾的机器码（最多 4 KB），把和地址有关的立即数通配掉：arm64 的 ADRP / ADR、B / BL、B.cond、CBZ / CBNZ、TBZ / TBNZ、LDR literal，以及 ADRP 之后以它为基址的 `:lo12:` ADD / LDR / STR；armv7 Thumb-2 的 B / B.cond / CBZ、BL / BLX / B.W、LDR literal（连同落在函数里的文字池）、ADR、MOVW / MOVT；ARM 模式的 B / BL / BLX、LDR literal、MOVW / MOVT。Thumb 函数看符号最低位，结果也带上最低位。
+- 在设备 so 的可执行段里一次扫完所有函数：每个特征选一个全固定位的 4 字节锚点，按对齐步长取字、先查位图再查锚点表，命中后校验前 64 字节。**只接受唯一匹配**：多处匹配就把特征加长一倍再比，直到函数结尾；仍不唯一或一处都没有就算这个函数找不到。实测 128 MB 代码段约 0.5 秒（不含经 adb 读取的时间）。
+- 两三条指令的小函数（`lua_status` 之类）单独做特征不可靠：再搜参考 so 里紧挨着它的函数（含 static），按「前后两个已匹配函数间距不变」或「256 字节内的紧邻函数」推算位置，并且整个函数体（通配后）都对得上才接受。
+- 两个函数匹配到同一个地址（参考 so 里不是同一个）时两个都不要。
+- 第 2 级找到的函数直接沿用，只搜剩下的；可选函数缺了照常降级。结果按「设备 Build ID + 参考 Build ID」缓存在 IDE 的 system 目录（`emmylua/android-symbols/`），第二次附加不再读设备、不再搜索。搜索在后台线程，调试会话停止时会中止。
+- 必需函数缺一个就整体失败，提示里列出缺哪些、每一级的结果和三条办法：保留未裁剪 so、配符号目录、指定参考 so。
+
+启动并附加（应用还没跑）时，从 `pm path` 的安装目录 `lib/<abi>/` 或 APK（含 split APK）里不压缩存放的 `lib/<abi>/libUnreal.so` 找设备上的 so，同样能读 Build ID、走第 2、3 级。
 - 设备 ABI：arm64-v8a、armeabi-v7a（ShadowHook 的支持范围）。
 
 ## 构建
@@ -65,4 +87,7 @@ cmake --build build/agent-host && ctest --test-dir build/agent-host --output-on-
 
 - 抓 `lua_State` 依赖 `lua_pcallk` / `lua_pcall` / `lua_resume` 之一没被链接器裁掉（UE 宿主一定会调 pcall，实际上都在）。被 `--gc-sections` 裁掉的其他 `lua_*` 会在 IDE 里列出来，相关功能（例如修改变量）降级。
 - 一个 so 里静态链接了两份 Lua 时同名函数有多个地址，IDE 拒绝附加并提示。
-- 没有未裁剪 so 时的特征码兜底（设计文档 7.2 第 2 点）还没做。
+- 特征码兜底依赖参考 so 和这次构建的 Lua 代码、编译选项基本一致：UnLua 改了 Lua 源码、换了编译器版本或优化级别，函数体变了就匹配不上，只能回到未裁剪 so 或符号目录。只接受唯一匹配，宁可找不到也不认错地址。
+- 特征码只支持 arm64 和 armv7（ARM / Thumb）；x86 / x86_64 模拟器只能用未裁剪 so 或设备符号。
+- 第 2、3 级要经 adb 读设备上的 so：特征码要把代码段（libUnreal.so 常有一两百 MB）读一遍，第一次会慢（USB 下几十秒），之后走缓存。
+- 兜底流程只在主机单测里用真 Lua 5.4.6 的两次构建验证过（`modules/debugger-android` 的 `SymbolFallbackTest`），还没在真机和真实 libUnreal.so 上验收。

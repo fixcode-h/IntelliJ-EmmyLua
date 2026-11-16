@@ -61,6 +61,8 @@ class LuaDeviceOptions : RunConfigurationOptions() {
     var launchAndAttach by property(false)
     /** 空 = 按设置里的搜索目录自动找。 */
     var symbolFile by string("")
+    /** 空 = 用设置里的参考 so。 */
+    var referenceSo by string("")
     var mappings by list<SourceMappingRowState>()
     var autoLearnMapping by property(true)
 
@@ -120,6 +122,7 @@ class LuaDeviceConfiguration(project: Project, factory: ConfigurationFactory) :
             pid = null,
             launchAndAttach = o.launchAndAttach,
             symbolFile = o.symbolFile?.trim()?.takeIf { it.isNotEmpty() }?.let { expand(it) },
+            referenceSo = o.referenceSo?.trim()?.takeIf { it.isNotEmpty() }?.let { expand(it) },
             sourceMapping = mappingConfig(),
         )
     }

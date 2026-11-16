@@ -11,7 +11,8 @@ import com.fixcode.intellij.lua.debugger.android.attach.AndroidAttachRequest
 import com.fixcode.intellij.lua.debugger.android.attach.AndroidAttachSession
 import com.fixcode.intellij.lua.debugger.android.attach.AttachEnvironmentChecker
 import com.fixcode.intellij.lua.debugger.android.attach.CheckStatus
-import com.fixcode.intellij.lua.debugger.android.elf.LuaSymbolResolver
+import com.fixcode.intellij.lua.debugger.android.elf.LuaSymbolLocator
+import com.fixcode.intellij.lua.debugger.android.elf.SymbolSearchOptions
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -74,7 +75,7 @@ class AndroidAttachSessionTest {
     }
 
     private fun session() = AndroidAttachSession(
-        AdbClient(adb), AgentBinaryProvider.fromDirectory(agentDir), LuaSymbolResolver(null), sleeper = {},
+        AdbClient(adb), AgentBinaryProvider.fromDirectory(agentDir), LuaSymbolLocator(null), sleeper = {},
     )
 
     @Test
@@ -190,8 +191,8 @@ class AndroidAttachSessionTest {
     @Test
     fun environmentCheck() {
         adb.onShell("run-as $pkg id", "uid=10234(u0_a234) gid=10234(u0_a234)\n")
-        val items = AttachEnvironmentChecker(AdbClient(adb), AgentBinaryProvider.fromDirectory(agentDir), LuaSymbolResolver(null))
-            .check("SER123", pkg, symbolFile)
+        val items = AttachEnvironmentChecker(AdbClient(adb), AgentBinaryProvider.fromDirectory(agentDir), LuaSymbolLocator(null))
+            .check("SER123", pkg, SymbolSearchOptions(configuredFile = symbolFile))
         val byTitle = items.associateBy { it.title }
         assertEquals(CheckStatus.OK, byTitle["adb"]!!.status)
         assertEquals(CheckStatus.OK, byTitle["系统版本"]!!.status)
@@ -203,7 +204,7 @@ class AndroidAttachSessionTest {
 
     @Test
     fun environmentCheckWithoutAdb() {
-        val items = AttachEnvironmentChecker(null, AgentBinaryProvider.fromDirectory(agentDir), LuaSymbolResolver(null)).check(null, null, null)
+        val items = AttachEnvironmentChecker(null, AgentBinaryProvider.fromDirectory(agentDir), LuaSymbolLocator(null)).check(null, null, SymbolSearchOptions())
         assertEquals(CheckStatus.FAILED, items.single().status)
     }
 

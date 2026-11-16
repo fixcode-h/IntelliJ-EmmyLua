@@ -11,6 +11,12 @@ data class AdbResult(val exitCode: Int, val stdout: String, val stderr: String, 
 /** 抽象出来便于单测：测试里用脚本化的假实现。 */
 fun interface AdbExecutor {
     fun run(args: List<String>, timeoutMs: Long): AdbResult
+
+    /**
+     * 原样取回 stdout 的字节（adb exec-out 读设备文件用）。脚本化的假实现不需要时可以不实现。
+     */
+    fun runBinary(args: List<String>, timeoutMs: Long): ByteArray =
+        throw AdbException("当前 adb 执行器不支持读取二进制输出")
 }
 
 class AdbException(message: String, val result: AdbResult? = null) : Exception(message)
@@ -64,6 +70,25 @@ class ProcessAdbExecutor(private val adb: File) : AdbExecutor {
         return AdbResult(if (finished) process.exitValue() else -1, out.text(), err.text(), timedOut = !finished)
     }
 
+    override fun runBinary(args: List<String>, timeoutMs: Long): ByteArray {
+        val process = ProcessBuilder(listOf(adb.absolutePath) + args)
+            .redirectInput(ProcessBuilder.Redirect.PIPE)
+            .start()
+        process.outputStream.close()
+        val out = StreamCollector(process.inputStream).also { it.start() }
+        val err = StreamCollector(process.errorStream).also { it.start() }
+        val finished = process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
+        if (!finished) {
+            process.destroy()
+            if (!process.waitFor(500, TimeUnit.MILLISECONDS)) process.destroyForcibly()
+            throw AdbException("adb 读取设备文件超时（${timeoutMs / 1000} 秒）")
+        }
+        out.join(5000)
+        err.join(1000)
+        if (process.exitValue() != 0) throw AdbException("adb 读取设备文件失败：${err.text().trim().ifEmpty { "退出码 ${process.exitValue()}" }}")
+        return out.bytes()
+    }
+
     private class StreamCollector(private val input: java.io.InputStream) : Thread("adb-output") {
         private val buffer = java.io.ByteArrayOutputStream()
         init { isDaemon = true }
@@ -79,6 +104,7 @@ class ProcessAdbExecutor(private val adb: File) : AdbExecutor {
             }
         }
         fun text(): String = synchronized(buffer) { buffer.toString(Charsets.UTF_8) }
+        fun bytes(): ByteArray = synchronized(buffer) { buffer.toByteArray() }
     }
 }
 
@@ -102,6 +128,10 @@ class AdbClient(private val executor: AdbExecutor) {
         if (!r.ok) throw AdbException("设备命令失败（$command）：${(r.stderr + r.stdout).trim().ifEmpty { "退出码 ${r.exitCode}" }}", r)
         return r.stdout
     }
+
+    /** adb exec-out：不经过 pty，二进制安全。调用方负责命令里参数的校验。 */
+    fun execOut(serial: String, command: String, timeoutMs: Long = 120_000): ByteArray =
+        executor.runBinary(listOf("-s", serial, "exec-out", command), timeoutMs)
 
     fun getProp(serial: String, name: String): String =
         shell(serial, "getprop $name").stdout.trim()

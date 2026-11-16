@@ -27,6 +27,8 @@ class LuaDebugSettings : SimplePersistentStateComponent<LuaDebugSettings.State>(
         var adbPath by string("")
         /** 未裁剪 so 的搜索目录，分号分隔，支持 $PROJECT_DIR$。 */
         var symbolSearchDirs by string(DEFAULT_SYMBOL_DIRS)
+        /** 参考 so：同一工程以前任意一次构建的未裁剪 libUnreal.so，没有同一次构建的符号时按特征码找 Lua 函数。支持 $PROJECT_DIR$。 */
+        var referenceSo by string("")
         var logLevel by enum(LuaDebugLogLevel.RUNTIME)
 
         // 变量视图（docs/design/variable-view.md 13.5、15.3）。平铺存储，读写走 [variableView]。
@@ -63,6 +65,17 @@ class LuaDebugSettings : SimplePersistentStateComponent<LuaDebugSettings.State>(
     var symbolSearchDirs: List<String>
         get() = state.symbolSearchDirs.orEmpty().split(';').map { it.trim() }.filter { it.isNotEmpty() }
         set(value) { state.symbolSearchDirs = value.joinToString(";") }
+
+    var referenceSo: String
+        get() = state.referenceSo.orEmpty()
+        set(value) { state.referenceSo = value.trim() }
+
+    /** 展开 $PROJECT_DIR$ 后的参考 so；没设置返回 null。 */
+    fun expandedReferenceSo(project: Project?): String? {
+        val v = referenceSo.ifEmpty { return null }
+        val base = project?.basePath
+        return if (base != null) v.replace("\$PROJECT_DIR\$", base) else v
+    }
 
     var logLevel: LuaDebugLogLevel
         get() = state.logLevel
