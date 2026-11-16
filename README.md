@@ -4,7 +4,7 @@
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-EmmyLua 是一个功能强大的 Lua 语言支持插件，专为 IntelliJ IDEA 系列 IDE 设计。在原有 EmmyLua 功能基础上，本版本重写了调试部分：附加本机进程、Android 真机附加，以及给 AI Agent 用的 MCP 调试工具。
+EmmyLua 是一个功能强大的 Lua 语言支持插件，专为 IntelliJ IDEA 系列 IDE 设计。语言支持基于 EmmyLua 官方的 Rust 语言服务器 emmylua_ls（经 LSP4IJ 接入）；调试部分重写过：附加本机进程、Android 真机附加，以及给 AI Agent 用的 MCP 调试工具。
 
 > 调试部分按 [调试插件重构设计](docs/design/2026-11-debugger-redesign.md) 重写（附加调试 + Android 真机附加 + MCP），旧的 Emmy 启动 / Emmy Attach / LuaPanda 调试方式已删除。原 EmmyLuaDebugger 原生调试器已并入本仓库 `native/` 目录，不再使用子模块。开发在 `dev` 分支进行。
 
@@ -12,21 +12,25 @@ EmmyLua 是一个功能强大的 Lua 语言支持插件，专为 IntelliJ IDEA �
 
 | 目录 | 内容 |
 | --- | --- |
-| `src/`、`gen/` | IntelliJ 插件（语言支持 + 调试 IDE 侧） |
+| `src/` | IntelliJ 插件：Lua 文件类型和词法高亮、LSP 客户端接入、UE 工作区探测、调试 IDE 侧 |
 | `modules/` | 调试相关的独立 Kotlin 模块 |
 | `native/` | 原生调试 runtime（原 EmmyLuaDebugger）：调试核心 `emmy_debugger_core`、Windows 附加注入、Android agent、测试 |
 | `docs/design/` | 设计文档；`archive/` 下是历史设计 |
+| `.github/scripts/` | CI 和本地开发用的脚本（如下载 emmylua_ls） |
 
 ## ✨ 主要特性
 
-### 🔧 核心功能
-- **智能代码补全** - 基于类型推断的智能补全，支持函数、变量、字段等
-- **语法高亮** - 完整的 Lua 语法高亮支持，支持 Lua 5.0-5.4 所有版本
-- **代码导航** - 快速跳转到定义、查找引用、符号搜索
-- **代码重构** - 重命名、提取方法、内联变量等重构操作
-- **错误检测** - 实时语法错误检测和智能修复建议
-- **代码格式化** - 自动代码格式化和代码风格检查
-- **代码折叠** - 支持函数、表、注释等代码块的折叠
+### 🔧 语言支持（emmylua_ls + LSP4IJ）
+
+语言支持按 [语言支持迁移到 LSP](docs/design/lsp-migration.md) 改成了 IDE 只做编辑器外壳、语义分析交给 [emmylua_ls](https://github.com/EmmyLuaLs/emmylua-analyzer-rust)（EmmyLua 官方的 Rust 语言服务器，VS Code 版 EmmyLua 用的也是它）。IDE 里通过 [LSP4IJ](https://github.com/redhat-developer/lsp4ij) 和它通信，大项目不再在 IDE 里建 Lua 索引。
+
+- **IDE 侧**：Lua 文件类型（`.lua`、`.lua.txt`）、语法和注解标签高亮、括号匹配、注释切换、新建 Lua 文件和实时模板
+- **emmylua_ls 提供**：补全、跳转到定义 / 实现、查找引用、重命名、悬停文档、参数提示、内联提示、诊断和快速修复、格式化、语义高亮、代码折叠、结构视图、转到符号、调用层次
+- **新版注解语法**：泛型、`---@enum`、`---@overload` 等，和 VS Code / Neovim 上的 EmmyLua 行为一致
+- **标准库**：emmylua_ls 内置，按配置的 Lua 版本（5.1–5.4、LuaJIT）选择
+- **Unreal Engine / UnLua**：IDE 只打开 UE 项目里的 `Content/Script` 时，插件自动往上找 `.uproject`，把 UnLua「Generate IntelliSense」生成的目录（如 `Plugins/UnLua/Intermediate/IntelliSense`）加进库目录，蓝图类型和 `UE.xxx` 都能补全和跳转
+
+以前的 PSI 实现里这些功能**已去掉**：后缀模板、Surround With、彩虹变量、Lua SDK 和 Lua 模块类型、LuaCheck 外部工具（诊断改由 emmylua_ls 做）。
 
 ### 🐛 调试功能
 - **Lua 附加** - 附加到本机正在运行的进程（Windows），不用改游戏代码
@@ -36,62 +40,72 @@ EmmyLua 是一个功能强大的 Lua 语言支持插件，专为 IntelliJ IDEA �
 - **MCP 调试工具** - 让 Claude Code、Cursor 等 Agent 直接下断点、看栈和变量
 - **调试控制台** - 交互式调试控制台，支持表达式求值
 
-### 📚 文档支持
-- **快速文档** - 鼠标悬停显示函数文档
-- **参数提示** - 函数调用时的参数提示和类型检查
-- **类型注解** - 支持 EmmyLua 注解语法，提供更好的类型推断
-- **智能提示** - 基于上下文的智能代码提示
-
-### 🎯 高级功能
-- **多 Lua 版本支持** - 支持 Lua 5.0/5.1/5.2/5.3/5.4
-- **标准库支持** - 内置完整的 Lua 标准库定义
-- **代码检查** - 代码质量检查和最佳实践建议
-- **结构视图** - 文件结构树状视图
-- **方法分隔符** - 可视化方法分隔线
-- **Unreal Engine 支持** - 特别优化的 UE Lua 开发支持
-
-## 📸 功能预览
-
-| 功能 | 预览 |
-|------|------|
-| 代码补全与导航 | ![overview](/snapshot/overview.gif) |
-| 查找引用 | ![find_usages](/snapshot/find_usages.gif) |
-| 快速文档 | ![quick_documentation](/snapshot/quick_documentation.gif) |
-| 重命名重构 | ![rename](/snapshot/rename.gif) |
-| 跳转到类 | ![go_to_class](/snapshot/go_to_class.gif) |
-| 跳转到符号 | ![go_to_symbol](/snapshot/go_to_symbol.gif) |
-| 方法重写标记 | ![method_override](/snapshot/method_override_line_marker.gif) |
-| 参数提示 | ![param_hints](/snapshot/param_hints.png) |
-| 方法分隔符 | ![method_separators](/snapshot/method_separators.png) |
-| 结构视图 | ![structure_view](/snapshot/structure_view.jpg) |
-
 ## 🚀 安装方式
+
+本插件依赖 **LSP4IJ** 插件。从插件市场或磁盘安装本插件时，IDE 会提示同时安装 LSP4IJ，确认即可。emmylua_ls 已随插件打包（Windows x64 / arm64、macOS x64 / arm64、Linux x64 / arm64），不用另外安装。
 
 ### 方式一：通过 JetBrains 插件市场（推荐）
 1. 打开 IntelliJ IDEA 或其他支持的 JetBrains IDE
 2. 进入 `File` → `Settings` → `Plugins`（macOS: `IntelliJ IDEA` → `Preferences` → `Plugins`）
 3. 在 `Marketplace` 标签页搜索 "EmmyLua"
-4. 点击 `Install` 安装插件
+4. 点击 `Install` 安装插件，按提示一起安装 LSP4IJ
 5. 重启 IDE
 
 ### 方式二：手动安装
 1. 从 [Releases](https://github.com/fixcode-h/IntelliJ-EmmyLua/releases) 页面下载最新版本
 2. 进入 `File` → `Settings` → `Plugins`
 3. 点击齿轮图标 → `Install Plugin from Disk...`
-4. 选择下载的插件文件（.zip 格式）
+4. 选择下载的插件文件（.zip 格式），按提示下载缺少的 LSP4IJ
 5. 重启 IDE
 
 ## 🛠️ 使用指南
 
-### 基础配置
-1. **创建 Lua 项目**
-   - 新建项目时选择 "Empty Project"
-   - 确保项目中的 Lua 文件扩展名为 `.lua`
-   - 插件会自动识别并提供语言支持
+### 语言支持配置
 
-2. **配置 Lua SDK**（可选）
-   - 进入 `File` → `Project Structure` → `SDKs`
-   - 添加 Lua SDK 路径以获得更好的标准库支持
+配置写在工作区根目录的 **`.emmyrc.json`**（emmylua_ls 也认 `.luarc.json`），改了自动生效，和 VS Code 版共用同一份。常用项：
+
+```json
+{
+  "runtime": { "version": "Lua5.4" },
+  "workspace": { "library": ["../Plugins/UnLua/Intermediate/IntelliSense"] },
+  "diagnostics": { "disable": ["undefined-global"] }
+}
+```
+
+完整字段见 emmylua_ls 的配置文档。插件设置页（`Settings` → `Languages & Frameworks` → `EmmyLua`）只有这几项，作为 `.emmyrc.json` 的补充：
+
+- **emmylua_ls 路径**：留空用插件自带的；填了就用填的（自己编译的或包管理器装的）
+- **默认 Lua 版本**：`.emmyrc.json` 没写 `runtime.version` 时使用
+- **库目录**：额外加进索引的目录，和 `.emmyrc.json` 里的 `workspace.library` 叠加
+- **UE 项目自动探测**：开关 UnLua IntelliSense 目录的自动添加，并显示探测结果
+- **新建文件模板**：新建 Lua 文件时的默认内容
+
+找不到 emmylua_ls 时编辑器顶部会提示，可以直接打开设置填路径。服务器日志和报文在 LSP4IJ 的「Language Servers」工具窗口里看。
+
+### 类型注解
+
+注解语法以 emmylua_ls 为准（兼容 LuaLS 的写法）：
+
+```lua
+---@class Player
+---@field name string 玩家姓名
+---@field level integer 玩家等级
+local Player = {}
+
+---@param name string
+---@param level? integer 初始等级，默认 1
+---@return Player
+function Player.new(name, level)
+    return setmetatable({ name = name, level = level or 1 }, { __index = Player })
+end
+
+---@generic T
+---@param list T[]
+---@return T?
+local function first(list)
+    return list[1]
+end
+```
 
 ### 调试配置
 
@@ -104,63 +118,6 @@ EmmyLua 是一个功能强大的 Lua 语言支持插件，专为 IntelliJ IDEA �
    - 新建运行配置「Lua 真机附加」，选设备和进程后启动
 
 3. **调试设置**在 `Settings` → `Tools` → `EmmyLua 调试`：变量展示规则、MCP 安装等；出错时暂停在断点窗口的「Lua 错误」里打开
-
-### 类型注解使用
-
-EmmyLua 支持丰富的类型注解语法，提供更好的代码智能：
-
-```lua
----@class Player : Object
----@field name string 玩家姓名
----@field level number 玩家等级
----@field inventory table<string, Item> 物品清单
-local Player = {}
-
----创建新玩家
----@param name string 玩家姓名
----@param level number 初始等级
----@return Player 玩家实例
-function Player:new(name, level)
-    local obj = {
-        name = name,
-        level = level or 1,
-        inventory = {}
-    }
-    setmetatable(obj, self)
-    self.__index = self
-    return obj
-end
-
----@param item Item 要添加的物品
----@param count number? 数量，默认为1
-function Player:addItem(item, count)
-    count = count or 1
-    -- 实现代码...
-end
-
----@generic T
----@param list T[] 列表
----@return T? 第一个元素
-function getFirst(list)
-    return list[1]
-end
-```
-
-### 高级功能
-
-#### 代码检查配置
-1. 进入 `File` → `Settings` → `Editor` → `Inspections`
-2. 展开 `Lua` 分类
-3. 启用或禁用特定的代码检查规则
-
-#### 代码格式化配置
-1. 进入 `File` → `Settings` → `Editor` → `Code Style` → `Lua`
-2. 配置缩进、空格、换行等格式化选项
-
-#### Unreal Engine 项目配置
-1. 在项目设置中选择项目类型为 "Unreal Engine"
-2. 配置 .uproject 文件路径
-3. 享受针对 UE Lua 的特殊优化
 
 ## 🔧 支持的 IDE 版本
 
@@ -179,32 +136,14 @@ end
 - **最新版本：** 2025.2+ （推荐）
 - **最低版本：** 2025.1+
 - **Java 版本：** JDK 17+ （2025.1），JDK 21+ （2025.2）
+- **依赖插件：** LSP4IJ（安装时 IDE 自动提示）
 
 ## 📝 更新日志
 
-### 最新版本特性 (v1.3.0+)
-- ✅ **重写调试部分**
-  - 只保留「Lua 附加」和「Lua 真机附加」两种方式，删除旧的 Emmy / LuaPanda 调试
-  - 新协议 v3、新原生调试核心，运行时开销更低
-  - 内置 MCP 调试工具
-- ✅ **改进的代码补全算法**
-  - 更准确的类型推断
-  - 更快的补全响应速度
-  - 支持泛型类型推断
-- ✅ **优化的性能表现**
-  - 减少内存占用
-  - 提升大型项目的响应速度
-  - 优化索引构建过程
-- ✅ **新增功能**
-  - 支持 Lua 5.4 新语法特性
-  - 改进的 Unreal Engine 集成
-  - 更好的错误报告机制
-- ✅ **修复的已知问题**
-  - 修复了多个代码补全相关的 bug
-  - 解决了调试器连接问题
-  - 改进了插件稳定性
+- **语言支持迁到 LSP**：改用 emmylua_ls + LSP4IJ，见 [设计文档](docs/design/lsp-migration.md)
+- **重写调试部分**：只保留「Lua 附加」和「Lua 真机附加」两种方式，删除旧的 Emmy / LuaPanda 调试；新协议 v3、新原生调试核心；内置 MCP 调试工具
 
-查看完整的 [更新日志](CHANGELOG.md)
+每个版本的提交列表见 [Releases](https://github.com/fixcode-h/IntelliJ-EmmyLua/releases)。
 
 ## 🤝 贡献指南
 
@@ -218,22 +157,30 @@ end
    git switch dev
    ```
 
-2. **构建项目**
+2. **准备 emmylua_ls**（二选一）
+   - 下载到 `build/emmylua-ls/`，`runIde` / 打包时会放进插件的 `server/` 目录（版本取 `gradle.properties` 的 `emmyLuaLsVersion`；需要 `curl`、`jq`、`unzip`，被 GitHub API 限流时设置 `GITHUB_TOKEN`）：
+     ```bash
+     .github/scripts/fetch-emmylua-ls.sh                  # 全部平台
+     .github/scripts/fetch-emmylua-ls.sh "" build/emmylua-ls linux-x64   # 只要当前平台
+     ```
+   - 或者不下载，在沙箱 IDE 的 EmmyLua 设置里填本机 emmylua_ls 的路径
+
+3. **构建项目**
    ```bash
    ./gradlew build
    ```
 
-3. **运行测试**
+4. **运行测试**
    ```bash
    ./gradlew test
    ```
 
 ### 贡献流程
 1. Fork 本仓库
-2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
+2. 基于 `dev` 创建特性分支 (`git checkout -b feature/AmazingFeature`)
 3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
 4. 推送到分支 (`git push origin feature/AmazingFeature`)
-5. 创建 Pull Request
+5. 向 `dev` 创建 Pull Request
 
 ### 代码规范
 - 遵循现有的代码风格

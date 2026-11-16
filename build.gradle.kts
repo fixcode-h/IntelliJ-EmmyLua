@@ -1,25 +1,11 @@
-/*
- * Copyright (c) 2017. tangzx(love.tangzx@qq.com)
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
 plugins {
     id("org.jetbrains.intellij.platform").version("2.7.0")
     id("org.jetbrains.kotlin.jvm").version("2.1.20")
 }
 
 apply(from = "gradle/emmy-native-resources.gradle.kts")
+
+val emmyLuaLsDir = layout.buildDirectory.dir("emmylua-ls")
 
 data class BuildData(
     val ideaSDKShortVersion: String,
@@ -98,7 +84,6 @@ project(":") {
             exclude(group = "net.java.dev.jna", module = "jna")
             exclude(group = "net.java.dev.jna", module = "jna-platform")
         }
-        implementation("org.eclipse.mylyn.github:org.eclipse.egit.github.core:2.1.5")
         implementation(project(":modules:debugger-android"))
         implementation(project(":modules:debugger-mcp"))
         implementation(project(":modules:debugger-protocol"))
@@ -107,19 +92,13 @@ project(":") {
         
         intellijPlatform {
             intellijIdeaCommunity(buildVersionData.ideaMainVersion)
+            // 语言支持走 LSP：LSP4IJ 当客户端，emmylua_ls 当服务器（docs/design/lsp-migration.md）
+            plugin("com.redhat.devtools.lsp4ij", providers.gradleProperty("lsp4ijVersion").get())
             pluginVerifier()
             testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Platform)
         }
 
         testImplementation("junit:junit:4.13.2")
-    }
-
-    sourceSets {
-        main {
-            java.srcDirs("gen", "src/main/compat")
-            // 移除 debugger 文件夹的排除，确保调试器文件被包含在插件包中
-            resources.exclude("std/**")
-        }
     }
 
     java {
@@ -171,12 +150,10 @@ project(":") {
             token.set(System.getenv("IDEA_PUBLISH_TOKEN"))
         }
 
+        // emmylua_ls 各平台可执行文件放进插件目录的 server/<平台>/（出包时由 CI 下载到 build/emmylua-ls）
         prepareSandbox {
-            doLast {
-                copy {
-                    from("src/main/resources/std")
-                    into("${sandboxDirectory.get()}/plugins/${project.name}/std")
-                }
+            from(emmyLuaLsDir) {
+                into("${project.name}/server")
             }
         }
     }
