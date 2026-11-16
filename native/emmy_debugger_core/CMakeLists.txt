@@ -140,6 +140,14 @@ if(EMMY_CORE_BUILD_TESTS)
         set_target_properties(emmy_core_session_test PROPERTIES ENABLE_EXPORTS ON)
     endif()
     add_test(NAME emmy_core_session_test COMMAND emmy_core_session_test)
+
+    # IDE 端到端测试的宿主（IntelliJ 侧 debugger-engine 的 NativeRuntimeE2eTest 启动它）
+    add_executable(emmy_core_ide_host tests/ide_host.cpp)
+    target_include_directories(emmy_core_ide_host PRIVATE src)
+    target_link_libraries(emmy_core_ide_host PRIVATE emmy_debugger_core emmy_core_lua)
+    if(EMMY_CORE_LUA_MODE STREQUAL "dynamic")
+        set_target_properties(emmy_core_ide_host PROPERTIES ENABLE_EXPORTS ON)
+    endif()
 endif()
 
 if(EMMY_CORE_BUILD_BENCH)
