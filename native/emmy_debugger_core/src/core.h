@@ -41,7 +41,8 @@ struct Options {
 	std::atomic<bool> viewHideStdGlobals{true};
 	std::atomic<bool> viewShowTemporaries{false};
 	std::atomic<int> viewMaxSortKeys{10000};
-	std::atomic<int> viewToString{0}; // 0 tables / 1 all / 2 never（__tostring 还没接，先记下）
+	std::atomic<int> viewToString{0}; // 0 tables / 1 all / 2 never
+	std::atomic<int> exceptions{0}; // 0 none / 1 uncaught / 2 all
 	std::atomic<int> viewHelperBudgetMs{20}; // 11.2：每次调用 helper v2 formatter 的时间预算
 
 	bool CaseSensitive() const;

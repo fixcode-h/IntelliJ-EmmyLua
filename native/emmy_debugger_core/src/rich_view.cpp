@@ -503,6 +503,14 @@ void Inspector::RichTable(lua_State* L, int idx, VariableItem& item) {
 		item.value = std::move(out);
 	}
 	item.typeName = cn;
+	if (view_.toString != 2) {
+		std::string ts, err;
+		if (SafeToString(L, idx, ts, err)) item.value = std::move(ts);
+		else if (!err.empty()) {
+			item.attrs.push_back("helperError");
+			item.hint = "__tostring 出错：" + err;
+		}
+	}
 	// 显示规则的摘要模板 / 固定字段（11.1）：只用于实例，类表和模块表照常
 	const TypeViewRule* rule = item.kind == "class" || item.kind == "module" ? nullptr : RuleFor(cn);
 	if (rule && (rule->hasSummary || !rule->pin.empty())) item.value = RenderRuleSummary(L, idx, *rule);
@@ -571,6 +579,10 @@ void Inspector::MakeItemRich(lua_State* L, int idx, VariableItem& item, const st
 			}
 		}
 		item.value = std::move(out);
+		// 挂起 / 被别的协程唤起的协程可以展开看它的调用栈（4.6）
+		if (co != L && std::strcmp(status, "dead") != 0 && lua_getstack(co, 0, &ar)) {
+			item.ref = NewRef(RefKind::Value, 0, Anchor(L, idx), "");
+		}
 		break;
 	}
 	case LUA_TUSERDATA: {
@@ -579,6 +591,16 @@ void Inspector::MakeItemRich(lua_State* L, int idx, VariableItem& item, const st
 		std::string mn = MetaName(L, idx);
 		item.typeName = mn;
 		item.value = (mn.empty() ? std::string("userdata") : mn) + " " + item.objectId;
+		if (view_.toString == 1) {
+			// userdata 的 __tostring 默认不调：引擎对象失效后调它可能崩（第 12 节），只有选了「全部」才调
+			std::string ts, err;
+			if (SafeToString(L, idx, ts, err)) item.value = std::move(ts);
+			else if (!err.empty()) {
+				item.attrs.push_back("helperError");
+				item.hint = "__tostring 出错：" + err;
+			}
+			Truncate(item.value, view_.maxValueLength);
+		}
 		if (lua_getmetatable(L, idx)) {
 			lua_pop(L, 1);
 			item.ref = NewRef(RefKind::Value, 0, Anchor(L, idx), evaluateName);
@@ -912,7 +934,7 @@ void Inspector::BuildRichFrame(RefEntry& entry) {
 			VariableItem item;
 			item.name = names[k].first;
 			item.nameType = "string";
-			MakeItemRich(L, -1, item, shadowed ? "" : names[k].first, "", "");
+			MakeItemRich(L, -1, item, shadowed || entry.noEvalNames ? "" : names[k].first, "", "");
 			if (shadowed) {
 				item.attrs.push_back("shadowed");
 				item.hint = "被后面声明的同名局部变量遮蔽";
@@ -968,7 +990,7 @@ void Inspector::BuildRichFrame(RefEntry& entry) {
 			VariableItem item;
 			item.name = n[0] ? n : "?";
 			item.nameType = "string";
-			MakeItemRich(L, -1, item, n[0] ? n : "", "", "");
+			MakeItemRich(L, -1, item, n[0] && !entry.noEvalNames ? n : "", "", "");
 			lua_pop(L, 1);
 			entry.richChildren.push_back(std::move(item));
 		}
@@ -1051,6 +1073,51 @@ bool Inspector::RichVariables(RefEntry& entry, int start, int count, const std::
 			pageItems(entry.richChildren);
 			break;
 		}
+		if (t == LUA_TTHREAD && entry.kind == RefKind::Value) {
+			if (!entry.richBuilt) {
+				entry.richBuilt = true;
+				lua_State* co = lua_tothread(L, obj);
+				VariableItem st;
+				MakeItemRich(L, obj, st, "", "", "");
+				VariableItem status;
+				status.name = "status";
+				status.nameType = "string";
+				status.type = "string";
+				status.value = "\"" + st.value.substr(0, st.value.find(' ')) + "\"";
+				entry.richChildren.push_back(std::move(status));
+				std::vector<VariableItem> frames;
+				lua_Debug ar;
+				for (int level = 0; level < 200 && lua_getstack(co, level, &ar); ++level) {
+					lua_getinfo(co, "nSl", &ar);
+					VariableItem f;
+					f.name = "#" + std::to_string(level);
+					f.nameType = "string";
+					f.type = "table";
+					f.kind = "frame";
+					std::string fn = ar.name ? ar.name : (ar.what && std::strcmp(ar.what, "main") == 0 ? "main chunk" : "?");
+					f.value = fn;
+					if (ar.currentline > 0) {
+						f.value += "  " + BaseName(ar.short_src) + ":" + std::to_string(ar.currentline);
+						f.locationChunk = ar.source ? ar.source : "";
+						f.locationLine = ar.currentline;
+					}
+					if (!(ar.what && std::strcmp(ar.what, "C") == 0)) {
+						f.ref = NewRef(RefKind::Locals, NewFrameId(co, level), 0, "");
+						refs_[f.ref].noEvalNames = true;
+					}
+					frames.push_back(std::move(f));
+				}
+				uint64_t ref = NewRef(RefKind::Static, 0, 0, "");
+				RefEntry& g = refs_[ref];
+				const int64_t n = static_cast<int64_t>(frames.size());
+				g.richChildren = std::move(frames);
+				g.richBuilt = true;
+				entry.groups.push_back(GroupItem("调用栈", n ? entry.richChildren.front().value : "", ref, n));
+			}
+			pageItems(entry.richChildren);
+			groups = &entry.groups;
+			break;
+		}
 		if (t == LUA_TUSERDATA && entry.kind == RefKind::Value) {
 			if (!entry.keysBuilt) {
 				entry.keysBuilt = true;
@@ -1125,6 +1192,95 @@ bool Inspector::RichVariables(RefEntry& entry, int start, int count, const std::
 	body["sorted"] = sorted;
 	if (truncated) body["truncated"] = true;
 	return true;
+}
+
+// ---------------------------------------------------------------- __tostring（第 12 节）
+
+bool Inspector::SafeToString(lua_State* L, int idx, std::string& out, std::string& err) {
+	idx = lua::AbsIndex(L, idx);
+	const int top = lua_gettop(L);
+	if (!lua_getmetatable(L, idx)) return false;
+	const void* mt = lua_topointer(L, -1);
+	lua_pushstring(L, "__tostring");
+	lua_rawget(L, -2);
+	if (lua_type(L, -1) != LUA_TFUNCTION) {
+		lua_settop(L, top);
+		return false;
+	}
+	int& fails = toStringFails_[mt];
+	if (fails >= 3) {
+		lua_settop(L, top);
+		err = "连续出错 3 次，本次暂停不再调用";
+		return false;
+	}
+	lua_remove(L, -2); // 元表
+	lua_pushvalue(L, idx);
+	// 新协程 + COUNT 钩子做预算；期间 evaluating_ 屏蔽断点和单步
+	if (!RunOnEvalThread(L, 1, view_.toStringBudgetMs, err)) {
+		++fails;
+		lua_settop(L, top);
+		if (err.empty()) err = "未知错误";
+		return false;
+	}
+	if (lua_type(L, -1) == LUA_TSTRING || lua_type(L, -1) == LUA_TNUMBER) {
+		size_t len;
+		const char* s = lua_tolstring(L, -1, &len); // 栈上是副本，tolstring 改数字没关系
+		out.assign(s, len);
+		fails = 0;
+		lua_settop(L, top);
+		return true;
+	}
+	++fails;
+	err = "__tostring 没有返回字符串";
+	lua_settop(L, top);
+	return false;
+}
+
+// ---------------------------------------------------------------- expand（10.4）
+
+void Inspector::ExpandInline(json& body, const json& paths, int depth, size_t& budget) {
+	if (depth >= 8) return;
+	// 按第一段分组：{ 名字 → 剩下的路径 }
+	std::vector<std::pair<std::string, json>> heads;
+	size_t used = 0;
+	for (const json& p : paths) {
+		if (++used > 32) break;
+		if (!p.is_array() || p.empty() || !p[0].is_string()) continue;
+		const std::string head = p[0].get<std::string>();
+		json rest = json::array();
+		for (size_t i = 1; i < p.size(); ++i) rest.push_back(p[i]);
+		auto it = std::find_if(heads.begin(), heads.end(), [&](const auto& h) { return h.first == head; });
+		if (it == heads.end()) {
+			heads.emplace_back(head, json::array());
+			it = heads.end() - 1;
+		}
+		if (!rest.empty()) it->second.push_back(std::move(rest));
+	}
+	auto visit = [&](json& list) {
+		if (!list.is_array()) return;
+		for (json& v : list) {
+			if (budget == 0) return;
+			const uint64_t ref = v.value("ref", static_cast<uint64_t>(0));
+			if (!ref) continue;
+			const std::string name = v.value("name", std::string());
+			auto it = std::find_if(heads.begin(), heads.end(), [&](const auto& h) { return h.first == name; });
+			if (it == heads.end()) continue;
+			json child;
+			ProtocolError err;
+			if (!PageRef(ref, 0, 100, "", child, err)) continue;
+			if (!it->second.empty()) ExpandInline(child, it->second, depth + 1, budget);
+			const size_t sz = child.dump().size();
+			if (sz > budget) {
+				budget = 0;
+				body["truncated"] = true;
+				return;
+			}
+			budget -= sz;
+			v["children"] = std::move(child);
+		}
+	};
+	visit(body["variables"]);
+	if (body.contains("groups")) visit(body["groups"]);
 }
 
 } // namespace emmy

@@ -73,6 +73,12 @@ public:
 	void Resume(ResumeKind kind, std::function<void()> afterResumed);
 	void SetRunToLine(std::shared_ptr<Breakpoint> bp);
 	void BreakHere(lua_State* L);
+	// 出错即停：在错误处理函数里调用（栈还没展开）。msgIdx 是错误对象的绝对位置
+	void OnLuaError(lua_State* L, int msgIdx, bool uncaught);
+	// 当前正在执行的是不是 Lua 自己的 pcall / xpcall（5.1 的 luaB_pcall 也走 lua_pcall，要和宿主的区分开）
+	bool IsInsideLuaPcall(lua_State* L);
+	// 按 options.exceptions 装上 / 拆掉 pcall 包装（VM 线程；暂停中也要马上生效，所以由 setOptions 直接 Post）
+	void SyncErrorWrappers(lua_State* L);
 	void LoadHelpers(lua_State* L, json& result);
 	bool paused() const { return paused_; }
 	lua_State* pausedThread() const { return pausedL_; }
@@ -117,7 +123,9 @@ private:
 	void ReportMatch(const SourceEntry& entry);
 	void OnBreakLine(lua_State* L, lua_Debug* ar, SourceEntry* entry);
 	bool StepShouldStop(lua_State* L);
-	void EnterPause(lua_State* L, const char* reason, std::vector<std::string> bpIds, const char* description);
+	void EnterPause(lua_State* L, const char* reason, std::vector<std::string> bpIds, const char* description,
+		json exception = nullptr, int skipLevels = 0);
+	void InstallErrorWrappers(lua_State* L, bool enable);
 	void ClearStep(lua_State* L);
 	void AdaptCount();
 	void InstallOutputCapture(lua_State* L, bool enable);
@@ -168,6 +176,7 @@ private:
 	std::vector<std::function<void()>> afterResumed_;
 	std::chrono::steady_clock::time_point lastCount_{};
 	bool outputCaptured_ = false;
+	bool errorsWrapped_ = false;
 	std::unordered_map<uint64_t, int64_t> hitWindowStart_;
 	std::unordered_map<uint64_t, int> hitWindowCount_;
 	std::unordered_map<uint64_t, int> hitDropped_;
