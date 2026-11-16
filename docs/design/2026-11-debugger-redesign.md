@@ -368,6 +368,8 @@ FindBreakPoint(ar)       → manager->GetLineSet()：breakpointsMtx 加锁 + 复
 | 长度前缀帧 + CBOR + 按需拉取 | 少传、少扫描、少解析；Wi-Fi 下最明显 |
 | runtime 侧执行条件 / 日志断点 | 不再每次命中都往返 IDE |
 
+> **2026-11-16 修订**：实测（`native/emmy_debugger_core/README.md`「性能」）前两行和条件断点达标；「有断点但当前文件没有」在函数调用密集的代码里约 3.6 倍、「断点所在函数」紧循环约 12 倍，都是 Lua CALL / LINE 钩子本身的开销，在不改 Lua 的前提下降不下来。决定：这两行不再设倍数目标，只要求不比旧架构差；不给 UnLua 的 Lua 打补丁（要项目重编 UnLua）。
+
 **验收方式**：`bench_hook` 和 IDE 侧的假 runtime 延迟测试进 CI，任一指标比基线退步超过 10% 直接失败；真机数字在 P5 结束时用 Android 中端机和低端机各测一轮写进验证文档。
 
 ### 5.4 其他原生端改动

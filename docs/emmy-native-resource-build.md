@@ -1,68 +1,38 @@
-# Native 资源打包
+# 原生资源打包
 
-插件默认使用 `src/main/resources/debugger/emmy/windows` 中已验证的 x86/x64 资源。Native 源码或构建产物更新后，应先更新这八个默认资源，再构建插件；这样 `runIde`、`prepareSandbox` 和发布 ZIP 使用同一套工具。
+插件里的原生文件（Windows 附加、Android agent）不在仓库里维护，出包时由 CI 现编现放。本地要用自己编的版本时按这里做。
 
-## 覆盖资源
+## 出包时（CI）
 
-先将已验证的 Native 构建产物整理为以下目录：
+`.github/workflows/auto-release.yml`：
+
+1. Windows x86 / x64：`cmake -S native` 编 `emmy_tool.exe`、`emmy_attach.dll`、`EasyHook.dll`；`native/emmy_debugger_core` 以 `dynamic` 模式按 Lua 5.1–5.4 各编一份 `emmy_debugger_core.dll`。
+2. Android：`native/platforms/android/agent/build_agent.sh` 编 arm64-v8a / armeabi-v7a 的 `libemmylua_agent.so`。
+3. 放进插件资源：
 
 ```text
-<native-root>/x86/EasyHook.dll
-<native-root>/x86/emmy_core.dll
-<native-root>/x86/emmy_hook.dll
-<native-root>/x86/emmy_tool.exe
-<native-root>/x64/EasyHook.dll
-<native-root>/x64/emmy_core.dll
-<native-root>/x64/emmy_hook.dll
-<native-root>/x64/emmy_tool.exe
+debugger/emmy/windows/<x86|x64>/emmy_tool.exe
+debugger/emmy/windows/<x86|x64>/emmy_attach.dll
+debugger/emmy/windows/<x86|x64>/EasyHook.dll
+debugger/emmy/windows/<x86|x64>/lua5X/emmy_debugger_core.dll   （51 / 52 / 53 / 54）
+debugger/emmy/android/<abi>/libemmylua_agent.so
 ```
 
-可使用收集脚本完成复制和 SHA-256 输出：
+PDB 不进插件包，单独作为 Release 附件 `emmylua-windows-pdb-v<版本>.zip` 上传，目录结构和上面一致。
 
-```powershell
-powershell -File tools/collect-emmy-native-resources.ps1 `
-  -BuildRoot F:/path/to/native-build-output `
-  -OutputRoot F:/path/to/emmy-native-root
+## 本地用自己编的
+
+按 `auto-release.yml` 里「Build emmy_tool / emmy_attach」「Build cores」两步的命令编好，整理成：
+
+```text
+<native-root>/x86/{EasyHook.dll, emmy_tool.exe, emmy_attach.dll, lua51..lua54/emmy_debugger_core.dll}
+<native-root>/x64/...
 ```
 
-也可直接收集两个独立 CMake 构建目录，支持 Ninja 与 Visual Studio 的配置子目录：
+然后：
 
-```powershell
-./tools/collect-emmy-native-resources.ps1 `
-  -X86BuildDir ./native/build-x86-release-20260910 `
-  -X64BuildDir ./native/build-release-20260910 `
-  -Configuration Release -OutputRoot ./build/emmy-native-resources
+```bash
+./gradlew -PemmyNativeDir=<native-root> runIde      # 或 buildPlugin
 ```
 
-传入目录后，Gradle 会在 `processResources` 阶段校验八个文件都存在且非空，并覆盖构建输出中的 `debugger/emmy/windows/x86` 和 `x64` 资源：
-
-```powershell
-./gradlew.bat buildPlugin -PemmyNativeDir=F:/path/to/emmy-native-root
-```
-
-本地直接启动带该资源的 IDEA sandbox，可使用 `runIde`，参数必须放在同一次 Gradle 调用中：
-
-```powershell
-$env:JAVA_HOME='C:/Users/<user>/.jdks/jbr-21.0.11'
-.\gradlew.bat --no-daemon runIde -DIDEA_VER=252 `
-  -PemmyNativeDir=F:/path/to/emmy-native-root
-```
-
-仅更新 sandbox、不启动 IDEA：
-
-```powershell
-.\gradlew.bat --no-daemon prepareSandbox -DIDEA_VER=252 `
-  -PemmyNativeDir=F:/path/to/emmy-native-root
-```
-
-不传 `-PemmyNativeDir` 时直接使用仓库默认资源；传入参数时才用指定目录覆盖。两种路径都应保存 `Get-FileHash -Algorithm SHA256` 输出，用于确认 sandbox、打包输入与最终产物一致。不要只重启 IDEA 期待旧 sandbox 自动刷新；资源变更后必须重新执行 `prepareSandbox` 或重新安装插件 ZIP。
-
-校验最终插件 ZIP 内八个资源，缺失、重复或 SHA-256 不一致均返回失败：
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File tools/verify-emmy-native-resources.ps1 `
-  -PluginZip ./build/distributions/<实际插件包名>.zip `
-  -NativeRoot ./build/emmy-native-resources
-```
-
-本机禁用脚本执行时，收集脚本也可采用上述 `powershell -NoProfile -ExecutionPolicy Bypass -File` 调用方式；该参数仅作用于这次子进程，不修改系统执行策略。
+`gradle/emmy-native-resources.gradle.kts` 会先检查文件齐全（缺一个就失败），再用它们替换 `debugger/emmy/windows`。`tools/collect-emmy-native-resources.ps1` 可以从两个 CMake 构建目录收集 `emmy_tool` / `emmy_attach` / `EasyHook`，核心 DLL 要另外拷。

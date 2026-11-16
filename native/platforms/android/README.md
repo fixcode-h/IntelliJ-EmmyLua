@@ -53,6 +53,8 @@ cmake --build build/agent-host && ctest --test-dir build/agent-host --output-on-
 
 ## 真机验收（需要设备，云端 CI 跑不了）
 
+完整清单（含 Windows 和通用项）见 [docs/acceptance-checklist.md](../../../docs/acceptance-checklist.md)。
+
 1. 装一个 UE Development 包（UnLua），进入有 Lua 逻辑的界面。
 2. IDE 里「检查环境」全部通过：adb、设备授权、系统版本、符号、ABI、可调试、Build ID。
 3. 附加后 `adb logcat -s EmmyLuaAgent` 能看到"监听 localabstract:emmylua-<pid>"和"登记 VM"，3 秒后"抓取窗口结束"。

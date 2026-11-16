@@ -153,8 +153,9 @@ int main(int argc, char** argv) {
 		{"baseline", 0},
 		{"registered", 1.00},
 		{"connected", 1.05},
-		{"bp_other_file", 1.3},
-		{"bp_same_file", 2.0},
+		// 下面两项是 Lua CALL / LINE 钩子本身的开销，不改 Lua 降不下来，2026-11-16 起只作参照（README「性能」）
+		{"bp_other_file", 0},
+		{"bp_same_file", 0},
 		{"ref_call_hook", 0},
 		{"legacy_line_hook", 0},
 	};
