@@ -50,7 +50,9 @@ import java.util.concurrent.CopyOnWriteArrayList
 class LuaV3DebugProcess(
     session: XDebugSession,
     val engine: DebugSession,
-    val target: LuaDebugTarget
+    val target: LuaDebugTarget,
+    /** 会话结束后要清理的建连资源（例如 adb 转发），在后台线程调用。 */
+    private val onClosed: () -> Unit = {}
 ) : XDebugProcess(session), LuaDebugSessionModel {
     private val editorsProvider = LuaDebuggerEditorsProvider()
     private val breakpointIds = ConcurrentHashMap<XLineBreakpoint<*>, CompletableFuture<String>>()
@@ -114,7 +116,13 @@ class LuaV3DebugProcess(
         subscription.close()
         breakpointIds.clear()
         if (!session.project.isDisposed) LuaDebugSessionManager.getInstance(session.project).unregister(engine.id)
-        ApplicationManager.getApplication().executeOnPooledThread { engine.close() }
+        ApplicationManager.getApplication().executeOnPooledThread {
+            try {
+                engine.close()
+            } finally {
+                onClosed()
+            }
+        }
     }
 
     /**
@@ -185,6 +193,9 @@ class LuaV3DebugProcess(
         }
         print(event.output.text, type)
     }
+
+    /** 建连过程的日志（注入、转发每一步），显示在调试控制台。任意线程可调。 */
+    fun log(text: String) = print("[EmmyLua] $text\n", ConsoleViewContentType.SYSTEM_OUTPUT)
 
     private fun print(text: String, type: ConsoleViewContentType) {
         session.consoleView?.print(text, type)

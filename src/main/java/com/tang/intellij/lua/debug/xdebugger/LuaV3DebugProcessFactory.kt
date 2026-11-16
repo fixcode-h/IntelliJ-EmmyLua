@@ -16,9 +16,9 @@ import com.tang.intellij.lua.debug.engine.transport.TcpConnector
 import com.tang.intellij.lua.debug.protocol.HelperScript
 
 /**
- * 新引擎的 [LuaDebugProcessFactory]。这里只直接处理「手动地址」；本机注入、Android 真机由各自的模块
- * 负责「怎么连上」，再调 [createProcess] 交给同一个引擎（设计文档 3.1：目标适配只负责建连）。
- * 那些模块各自注册一个 factory，`supports` 只认自己的目标类型。
+ * 新引擎的 [LuaDebugProcessFactory]，处理「手动地址」。其他目标各有一个 factory，只负责「怎么连上」，
+ * 再调 [createProcess] 交给同一个引擎（设计文档 3.1）：Android 真机见 [AndroidDebugProcessFactory]；
+ * 本机注入等 native runtime 就绪后同样接入。
  */
 class LuaV3DebugProcessFactory : LuaDebugProcessFactory {
     override fun supports(target: LuaDebugTarget): Boolean = target is LuaDebugTarget.Address
@@ -47,6 +47,7 @@ class LuaV3DebugProcessFactory : LuaDebugProcessFactory {
             connector: Connector,
             mapping: SourceMappingConfig = SourceMappingConfig(),
             token: String? = null,
+            onClosed: () -> Unit = {},
             configure: (SessionConfig) -> SessionConfig = { it }
         ): LuaV3DebugProcess {
             val mapper = SourceMapper(
@@ -57,7 +58,7 @@ class LuaV3DebugProcessFactory : LuaDebugProcessFactory {
             )
             val config = configure(SessionConfig(name = target.displayName, token = token, helpers = helpers()))
             val engine = DebugSession(config, connector, mapper)
-            return LuaV3DebugProcess(session, engine, target)
+            return LuaV3DebugProcess(session, engine, target, onClosed)
         }
 
         /** 类型显示脚本：和旧实现同一份 emmyHelper.lua，runtime 有 helpers 能力时下发内容（不传路径）。 */

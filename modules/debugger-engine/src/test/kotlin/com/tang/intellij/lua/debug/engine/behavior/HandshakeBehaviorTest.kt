@@ -96,6 +96,17 @@ class HandshakeBehaviorTest : BehaviorTestBase() {
     }
 
     @Test
+    fun `建连时才拿到的 token 优先于配置 真机附加注入后才生成`() {
+        startRuntime(token = "AGENT-TOKEN")
+        runtime.addVm()
+        val session = DebugSession(testConfig().copy(token = "STALE"), TcpConnector("127.0.0.1", runtime.port, token = "AGENT-TOKEN"))
+        session.use {
+            it.start().await()
+            assertEquals(SessionState.RUNNING, it.state)
+        }
+    }
+
+    @Test
     fun `连不上时给出地址和原因`() {
         val port = ServerSocket(0).use { it.localPort }
         val session = DebugSession(testConfig(), TcpConnector("127.0.0.1", port, 500))
