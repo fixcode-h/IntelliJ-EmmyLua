@@ -24,10 +24,8 @@
         <errorHandler implementation="com.tang.intellij.lua.errorreporting.GitHubErrorReporter"/>
 
         <!-- Debugger inline values (行旁值预览) -->
-        <editor.linePainter implementation="com.tang.intellij.lua.debugger.LuaEditorLinePainter"/>
         
         <!-- notification groups -->
-        <notificationGroup id="LuaPanda Version Check" displayType="BALLOON" key="notification.group.luapanda.version.check"/>
 
         <!-- file template provider -->
         <fileTemplateGroup implementation="com.tang.intellij.lua.actions.LuaFileTemplateProvider"/>
@@ -136,13 +134,7 @@
         <codeStyleSettingsProvider implementation="com.tang.intellij.lua.editor.formatter.LuaCodeStyleSettingsProvider"/>
         <langCodeStyleSettingsProvider implementation="com.tang.intellij.lua.editor.formatter.LuaLanguageCodeStyleSettingsProvider"/>
 
-        <!-- runner & debugger -->
-        <programRunner implementation="com.tang.intellij.lua.debugger.emmy.EmmyDebuggerRunner"/>
-        <configurationType implementation="com.tang.intellij.lua.debugger.emmy.EmmyDebugConfigurationType"/>
-        <programRunner implementation="com.tang.intellij.lua.debugger.emmy.attach.EmmyAttachDebugRunner"/>
-        <configurationType implementation="com.tang.intellij.lua.debugger.emmy.attach.EmmyAttachConfigurationType"/>
-        <programRunner implementation="com.tang.intellij.lua.debugger.luapanda.LuaPandaDebuggerRunner"/>
-        <configurationType implementation="com.tang.intellij.lua.debugger.luapanda.LuaPandaConfigurationType"/>
+        <!-- 调试：运行配置和调试进程都在 emmylua-debug.xml（新调试链路），这里只留行断点类型 -->
         <xdebugger.breakpointType implementation="com.tang.intellij.lua.debugger.LuaLineBreakpointType"/>
         <!--templates-->
         <defaultLiveTemplates file="/liveTemplates/lua.xml"/>
@@ -156,7 +148,6 @@
 
         <!--lua settings-->
         <applicationService serviceImplementation="com.tang.intellij.lua.project.LuaSettings"/>
-        <postStartupActivity implementation="com.tang.intellij.lua.project.LuaPandaVersionChecker"/>
         <projectConfigurable groupId="language"
                                  displayName="EmmyLua"
                                  id="preferences.Lua"

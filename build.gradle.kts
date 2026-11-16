@@ -99,14 +99,8 @@ project(":") {
             exclude(group = "net.java.dev.jna", module = "jna-platform")
         }
         implementation("org.eclipse.mylyn.github:org.eclipse.egit.github.core:2.1.5")
-        implementation(project(":modules:debugger-core"))
-        implementation(project(":modules:debugger-transport"))
         implementation(project(":modules:debugger-android"))
-        implementation(project(":modules:debugger-emmy-protocol"))
-        implementation(project(":modules:debugger-cli-protocol"))
-        implementation(project(":modules:debugger-luapanda-protocol"))
         implementation(project(":modules:debugger-mcp"))
-        // 新调试链路（P8 前不注册到 plugin.xml）
         implementation(project(":modules:debugger-protocol"))
         implementation(project(":modules:debugger-engine"))
         testImplementation(testFixtures(project(":modules:debugger-engine")))
@@ -118,33 +112,6 @@ project(":") {
         }
 
         testImplementation("junit:junit:4.13.2")
-    }
-
-    tasks.withType<Test>().configureEach {
-        // Native IDE fixture tests require an explicitly supplied executable.
-        val fixtureExecutable = System.getenv("EMMY_IDE_FIXTURE_EXE")
-            ?.takeIf { it.isNotBlank() }
-            ?: System.getProperty("emmy.fixture.exe")?.takeIf { it.isNotBlank() }
-        val attachFixtureExecutable = System.getenv("EMMY_ATTACH_FIXTURE_EXE")
-            ?.takeIf { it.isNotBlank() }
-            ?: System.getProperty("emmy.attach.fixture.exe")?.takeIf { it.isNotBlank() }
-        inputs.property("emmyFixtureExecutable", fixtureExecutable ?: "")
-        inputs.property("emmyAttachFixtureExecutable", attachFixtureExecutable ?: "")
-        if (fixtureExecutable != null) {
-            systemProperty("emmy.fixture.exe", fixtureExecutable)
-            inputs.file(fixtureExecutable)
-        } else {
-            exclude("**/EmmyNativeIdeFixtureIntegrationTest.class")
-        }
-        if (attachFixtureExecutable != null) {
-            systemProperty("emmy.attach.fixture.exe", attachFixtureExecutable)
-            inputs.file(attachFixtureExecutable)
-        } else {
-            exclude("**/EmmyNativeAttachIntegrationTest.class")
-        }
-        if (fixtureExecutable == null && attachFixtureExecutable == null) {
-            logger.lifecycle("未设置 Native/IDE fixture：普通测试任务排除 Native/IDE 集成套件；专用 Windows CI 必须提供测试宿主。")
-        }
     }
 
     sourceSets {
