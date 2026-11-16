@@ -81,5 +81,6 @@ class UnrealDeclWatcher(private val project: Project) : Disposable {
 class UnrealDeclWatcherActivity : ProjectActivity {
     override suspend fun execute(project: Project) {
         UnrealDeclWatcher.getInstance(project).start()
+        LuaLibraryRoots.getInstance(project).refresh()
     }
 }

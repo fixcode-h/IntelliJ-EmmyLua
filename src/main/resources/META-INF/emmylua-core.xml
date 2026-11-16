@@ -39,6 +39,8 @@
         <projectService serviceImplementation="com.fixcode.intellij.lua.project.LuaProjectSettings"/>
         <!-- UE 声明目录（UELink 后台生成 / UnLua）出现或换了时重启 emmylua_ls -->
         <postStartupActivity implementation="com.fixcode.intellij.lua.project.UnrealDeclWatcherActivity"/>
+        <!-- 项目树「外部库」里显示 UE 声明和额外库目录（只为浏览，语义仍由 emmylua_ls 做） -->
+        <additionalLibraryRootsProvider implementation="com.fixcode.intellij.lua.project.LuaLibraryRootsProvider"/>
         <notificationGroup id="EmmyLua UE Declarations" displayType="BALLOON"/>
         <projectConfigurable groupId="language" id="preferences.Lua" displayName="EmmyLua"
                              instance="com.fixcode.intellij.lua.project.LuaSettingsConfigurable"/>

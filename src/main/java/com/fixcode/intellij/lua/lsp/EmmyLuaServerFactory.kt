@@ -1,5 +1,7 @@
 package com.fixcode.intellij.lua.lsp
 
+import com.fixcode.intellij.lua.project.LuaLibraryRoots
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import com.redhat.devtools.lsp4ij.LanguageServerFactory
 import com.redhat.devtools.lsp4ij.LanguageServerManager
@@ -21,5 +23,7 @@ object EmmyLuaServer {
         val manager = LanguageServerManager.getInstance(project)
         manager.stop(ID)
         manager.start(ID)
+        // 库目录可能跟着变了：项目树「外部库」一起刷新（要碰磁盘和 VFS，放后台）
+        ApplicationManager.getApplication().executeOnPooledThread { LuaLibraryRoots.getInstance(project).refresh() }
     }
 }
