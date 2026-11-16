@@ -128,9 +128,9 @@ class DebugUiSmokeTest : BasePlatformTestCase() {
             .configurationFactories[0].createTemplateConfiguration(project) as com.tang.intellij.lua.debug.ui.attach.LuaAttachConfiguration
         val ae = a.configurationEditor as com.intellij.openapi.options.SettingsEditor<com.tang.intellij.lua.debug.ui.attach.LuaAttachConfiguration>
         ae.component
-        a.options.processName = "UnrealEditor"
+        a.options.onlyLuaProcesses = false
         ae.resetFrom(a); ae.applyTo(a)
-        assertEquals("UnrealEditor", a.options.processName)
+        assertFalse(a.options.onlyLuaProcesses)
         com.intellij.openapi.util.Disposer.dispose(ae)
     }
 }

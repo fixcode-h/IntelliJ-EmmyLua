@@ -24,7 +24,6 @@ import com.intellij.execution.configurations.RunConfiguration
 import com.intellij.execution.configurations.RunConfigurationBase
 import com.intellij.execution.configurations.RunConfigurationOptions
 import com.intellij.execution.configurations.RunProfileState
-import com.intellij.execution.configurations.RuntimeConfigurationError
 import com.intellij.execution.runners.ExecutionEnvironment
 import com.intellij.openapi.options.SettingsEditor
 import com.intellij.openapi.progress.ProcessCanceledException
@@ -36,6 +35,7 @@ import com.tang.intellij.lua.debug.api.LuaLocalProcess
 import com.tang.intellij.lua.debug.ui.LuaDebugBundle
 import com.tang.intellij.lua.debug.ui.LuaDebugIcons
 import com.tang.intellij.lua.debug.ui.process.LuaLocalProcessScanner
+import com.tang.intellij.lua.debug.ui.session.LuaDebugSessionStarter
 import com.tang.intellij.lua.debug.ui.session.LuaDebugTargetConfiguration
 import com.tang.intellij.lua.debug.ui.session.NoProcessState
 import com.tang.intellij.lua.debug.ui.settings.LuaDebugProjectState
@@ -65,78 +65,85 @@ class LuaAttachConfigurationType : ConfigurationTypeBase(
 }
 
 class LuaAttachOptions : RunConfigurationOptions() {
-    /** 进程名或可执行文件名，不区分大小写，可以只写一部分。 */
-    var processName by string("")
-    /** 进程还没起来时等它启动再附加。 */
+    /** 只有一个候选进程时直接附加，不弹列表。 */
+    var autoAttachSingleProcess by property(true)
+    /** 只列检测到 Lua 的进程和 UE 编辑器/游戏进程；关掉后列出全部进程（Lua 的排前面）。 */
+    var onlyLuaProcesses by property(true)
+    /** 已经在调试的进程不再列出，避免重复注入。 */
+    var skipAttachedProcesses by property(true)
+    /** 一个候选都没有时等进程启动。 */
     var waitForProcess by property(false)
     var waitSeconds by property(60)
     var captureOutput by property(true)
 }
 
+/**
+ * 「Lua 附加」运行配置：不用填进程，运行时列出候选进程让人选（和旧版 Emmy Attach 一样），
+ * 只有一个候选时直接附加。
+ */
 class LuaAttachConfiguration(project: Project, factory: ConfigurationFactory) :
     RunConfigurationBase<LuaAttachOptions>(project, factory, null), LuaDebugTargetConfiguration {
 
     public override fun getOptions(): LuaAttachOptions = super.getOptions() as LuaAttachOptions
 
-    override fun getConfigurationEditor(): SettingsEditor<out RunConfiguration> = LuaAttachSettingsEditor(project)
+    override fun getConfigurationEditor(): SettingsEditor<out RunConfiguration> = LuaAttachSettingsEditor()
 
     override fun getState(executor: Executor, environment: ExecutionEnvironment): RunProfileState = NoProcessState
 
-    override fun checkConfiguration() {
-        if (options.processName.isNullOrBlank()) {
-            throw RuntimeConfigurationError(LuaDebugBundle.message("attach.config.error.noProcess"))
-        }
-    }
-
     override fun resolveTarget(env: ExecutionEnvironment): LuaDebugTarget {
-        val wanted = options.processName.orEmpty().trim()
-        if (wanted.isEmpty()) throw ExecutionException(LuaDebugBundle.message("attach.config.error.noProcess"))
-
-        val found = try {
-            ProgressManager.getInstance().runProcessWithProgressSynchronously<LuaLocalProcess?, Exception>(
-                { findProcess(wanted) },
-                LuaDebugBundle.message("attach.config.progress.finding", wanted),
+        val candidates = try {
+            ProgressManager.getInstance().runProcessWithProgressSynchronously<List<LuaLocalProcess>, Exception>(
+                { findCandidates() },
+                LuaDebugBundle.message("attach.config.progress.finding"),
                 true,
                 project,
             )
         } catch (_: ProcessCanceledException) {
             throw ExecutionException(LuaDebugBundle.message("attach.config.error.cancelled"))
         }
-            ?: throw ExecutionException(
-                if (options.waitForProcess) LuaDebugBundle.message("attach.config.error.timeout", wanted, options.waitSeconds)
-                else LuaDebugBundle.message("attach.config.error.notFound", wanted)
+        if (candidates.isEmpty()) {
+            throw ExecutionException(
+                if (options.waitForProcess) LuaDebugBundle.message("attach.config.error.timeout", options.waitSeconds)
+                else LuaDebugBundle.message("attach.config.error.notFound")
             )
+        }
+        val chosen = if (candidates.size == 1 && options.autoAttachSingleProcess) candidates.single()
+        else LuaProcessChooser.choose(project, candidates)
+            ?: throw ExecutionException(LuaDebugBundle.message("attach.config.error.cancelled"))
 
-        LuaDebugProjectState.getInstance(project).rememberAttach(found.executablePath ?: found.name)
+        LuaDebugProjectState.getInstance(project).rememberAttach(chosen.executablePath ?: chosen.name)
         return LuaDebugTarget.LocalProcess(
-            pid = found.pid,
-            processName = found.name,
-            executablePath = found.executablePath,
+            pid = chosen.pid,
+            processName = chosen.name,
+            executablePath = chosen.executablePath,
             captureOutput = options.captureOutput,
         )
     }
 
     /**
-     * 按名字找进程；多个匹配时优先检测到 Lua 的、再优先最近启动的（pid 大的不一定新，
-     * 但同名多开时通常是想调新开的那个）。
+     * 候选进程：Lua / UE 进程（或全部），去掉已附加的。顺序：最近附加过的程序、Lua 进程、名字。
+     * 勾了等待时，一个都没有就每 0.5 秒再找一次。
      */
-    private fun findProcess(wanted: String): LuaLocalProcess? {
+    private fun findCandidates(): List<LuaLocalProcess> {
         val indicator = ProgressManager.getInstance().progressIndicator
         val deadline = System.currentTimeMillis() + options.waitSeconds.coerceIn(1, 3600) * 1000L
+        val recent = LuaDebugProjectState.getInstance(project).recentAttachTargets
+        val self = ProcessHandle.current().pid().toInt()
         while (true) {
             indicator?.checkCanceled()
-            val candidates = LuaLocalProcessScanner.listProcesses().filter {
-                it.executableName.contains(wanted, ignoreCase = true) ||
-                    it.executableDisplayName.contains(wanted, ignoreCase = true)
-            }
+            val all = LuaLocalProcessScanner.scan(LuaLocalProcessScanner.listProcesses()).values
+                .filter { it.pid != self }
+                .filter { !options.skipAttachedProcesses || !LuaDebugSessionStarter.isAttached(it.pid) }
+            val candidates = if (options.onlyLuaProcesses) all.filter { LuaLocalProcessScanner.isLuaCandidate(it) } else all
             if (candidates.isNotEmpty()) {
-                val scanned = LuaLocalProcessScanner.scan(candidates).values
-                return scanned.sortedWith(
-                    compareByDescending<LuaLocalProcess> { LuaLocalProcessScanner.isLuaCandidate(it) }
+                return candidates.sortedWith(
+                    compareBy<LuaLocalProcess> { p -> recent.indexOfFirst { it == p.executablePath || it == p.name }.let { if (it < 0) Int.MAX_VALUE else it } }
+                        .thenByDescending { LuaLocalProcessScanner.isLuaCandidate(it) }
+                        .thenBy { it.name.lowercase() }
                         .thenByDescending { it.pid }
-                ).first()
+                )
             }
-            if (!options.waitForProcess || System.currentTimeMillis() > deadline) return null
+            if (!options.waitForProcess || System.currentTimeMillis() > deadline) return emptyList()
             Thread.sleep(500)
         }
     }
