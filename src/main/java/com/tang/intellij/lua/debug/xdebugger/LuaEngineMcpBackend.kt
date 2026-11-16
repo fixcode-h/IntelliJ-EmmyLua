@@ -168,13 +168,33 @@ class LuaEngineMcpBackend(private val project: Project) : LuaDebugBackend, Dispo
                 }
             }
         }
-        // 本机进程附加要等新的 native runtime（注入 + 协议 v3）接入，这里先不列，避免 Agent 选了附加不上的进程
+        // 本机进程：判断是否加载了 Lua 要读模块列表，代价大且容易误判，这里不列；Agent 按 pid 或进程名附加
         targets
     }
 
-    override fun attachProcess(request: AttachProcessRequest): CompletableFuture<String> = CompletableFuture.failedFuture(
-        LuaDebugBackendException(ErrorCode.NOT_SUPPORTED, "新调试引擎还不支持本机进程附加（native runtime 接入中）；真机用 attach 的设备目标，或请用户在 IDE 里附加。")
-    )
+    override fun attachProcess(request: AttachProcessRequest): CompletableFuture<String> {
+        if (!com.intellij.openapi.util.SystemInfo.isWindows) {
+            return CompletableFuture.failedFuture(LuaDebugBackendException(ErrorCode.NOT_SUPPORTED, "本机进程附加目前只支持 Windows；真机用设备目标附加。"))
+        }
+        val handle = request.pid?.let { ProcessHandle.of(it.toLong()).orElse(null) }
+            ?: request.processName?.let { name -> findProcess(name) }
+            ?: return CompletableFuture.failedFuture(LuaDebugBackendException(ErrorCode.TARGET_NOT_FOUND,
+                "找不到进程 ${request.pid ?: request.processName}：确认游戏在运行，或给出 pid。"))
+        val name = handle.info().command().map { File(it).name }.orElse(request.processName ?: "pid ${handle.pid()}")
+        return startSession(LuaDebugTarget.LocalProcess(handle.pid().toInt(), name, handle.info().command().orElse(null), request.captureOutput))
+    }
+
+    /** 按可执行文件名找进程（不区分大小写、可省略 .exe）；多个同名时要 Agent 给 pid。 */
+    private fun findProcess(name: String): ProcessHandle? {
+        val wanted = name.lowercase().removeSuffix(".exe")
+        val matches = ProcessHandle.allProcesses().filter { p ->
+            p.info().command().map { File(it).name.lowercase().removeSuffix(".exe") == wanted }.orElse(false)
+        }.toList()
+        if (matches.size > 1) {
+            throw LuaDebugBackendException(ErrorCode.INVALID_ARGUMENT, "有 ${matches.size} 个 $name 进程（pid ${matches.joinToString { it.pid().toString() }}），请用 pid 指定。")
+        }
+        return matches.firstOrNull()
+    }
 
     override fun attachDevice(request: AttachDeviceRequest): CompletableFuture<String> {
         val packageName = request.packageName

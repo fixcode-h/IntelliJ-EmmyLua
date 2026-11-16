@@ -17,8 +17,8 @@ import com.tang.intellij.lua.debug.protocol.HelperScript
 
 /**
  * 新引擎的 [LuaDebugProcessFactory]，处理「手动地址」。其他目标各有一个 factory，只负责「怎么连上」，
- * 再调 [createProcess] 交给同一个引擎（设计文档 3.1）：Android 真机见 [AndroidDebugProcessFactory]；
- * 本机注入等 native runtime 就绪后同样接入。
+ * 再调 [createProcess] 交给同一个引擎（设计文档 3.1）：Android 真机见 [AndroidDebugProcessFactory]，
+ * Windows 本机注入见 [LocalProcessDebugProcessFactory]。
  */
 class LuaV3DebugProcessFactory : LuaDebugProcessFactory {
     override fun supports(target: LuaDebugTarget): Boolean = target is LuaDebugTarget.Address
