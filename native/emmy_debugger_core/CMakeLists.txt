@@ -3,6 +3,13 @@
 # 设计见 docs/design/2026-11-debugger-redesign.md 第 5 节，协议见 docs/design/protocol-v3.md。
 cmake_minimum_required(VERSION 3.14)
 project(emmy_debugger_core CXX C)
+
+# Release 也生成 PDB（/Z7 把调试信息放进 .obj，并行编译不抢同一个 .pdb；/DEBUG 让链接器输出 .pdb）。
+# 注入到别人进程里崩溃时，用户在 VS 里加载这些 PDB 才看得到函数名和行号。/OPT 两项恢复 /DEBUG 默认关掉的裁剪。
+if(MSVC)
+    add_compile_options($<$<CONFIG:Release>:/Z7>)
+    add_link_options($<$<CONFIG:Release>:/DEBUG> $<$<CONFIG:Release>:/OPT:REF> $<$<CONFIG:Release>:/OPT:ICF>)
+endif()
 if(POLICY CMP0091)
     cmake_policy(SET CMP0091 NEW) # MSVC_RUNTIME_LIBRARY
 endif()
