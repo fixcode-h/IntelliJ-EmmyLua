@@ -104,6 +104,7 @@ set(EMMY_CORE_SOURCES
     src/lua_internal.cpp
     src/hook_mux.cpp
     src/inspector.cpp
+    src/host_value.cpp
     src/vm.cpp
     src/session.cpp
     src/transport.cpp

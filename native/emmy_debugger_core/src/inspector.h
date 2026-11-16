@@ -40,6 +40,11 @@ struct VariableItem {
 	int64_t indexedCount = -1;
 	std::string evaluateName;
 	bool indexed = false;
+	// variable-view 13.2 的附加字段（宿主值提供者会填）；空的不输出
+	std::string kind;
+	std::string hint;
+	std::vector<std::string> attrs;
+	int64_t length = -1;
 
 	json ToJson() const;
 };
@@ -82,7 +87,8 @@ private:
 		lua_State* thread = nullptr;
 		int level = 0;
 	};
-	enum class RefKind { Locals, Upvalues, Varargs, Globals, Value };
+	// HostList：子项来自宿主值提供者（slot 处的值，或 hostRef 句柄）
+	enum class RefKind { Locals, Upvalues, Varargs, Globals, Value, HostList };
 	struct RefEntry {
 		RefKind kind = RefKind::Value;
 		uint64_t frameId = 0;
@@ -90,6 +96,9 @@ private:
 		std::string evaluateName;
 		bool materialized = false;
 		std::vector<VariableItem> children;
+		uint64_t providerId = 0; // 被宿主值提供者认领的值
+		std::string hostRef;
+		std::string hostSummary;
 	};
 
 	uint64_t NewFrameId(lua_State* thread, int level);
@@ -98,6 +107,8 @@ private:
 	void PushAnchored(lua_State* L, int slot);
 	bool GetFrame(uint64_t frameId, FrameRef& out, lua_Debug& ar, ProtocolError& err);
 	void Materialize(RefEntry& entry);
+	bool HostDescribe(lua_State* L, int idx, VariableItem& item, const std::string& evaluateName);
+	void HostChildren(lua_State* L, int idx, const RefEntry& entry, std::vector<VariableItem>& out);
 	void MakeItem(lua_State* L, int idx, VariableItem& item, const std::string& evaluateName);
 	void PushFrameEnv(lua_State* L, lua_State* thread, lua_Debug& ar); // 压入帧的 _ENV / 函数环境
 	bool BuildEvalEnv(lua_State* L, lua_State* thread, int level);    // 压入求值环境表
@@ -118,6 +129,8 @@ private:
 	int condCacheRef_ = LUA_NOREF;
 	bool evaluating_ = false;
 	int64_t evalDeadlineMs_ = 0;
+	std::vector<uint64_t> usedProviders_; // 本次暂停里调用过的宿主值提供者，暂停结束时通知释放
+	uint64_t pauseIdForHost_ = 0;
 };
 
 } // namespace emmy

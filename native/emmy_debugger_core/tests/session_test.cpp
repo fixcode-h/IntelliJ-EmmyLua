@@ -1,6 +1,7 @@
 // 端到端测试：进程内起一个「游戏线程」跑 Lua，测试客户端扮演 IDE 走完整的协议 v3。
 #include "check.h"
 #include "emmy/emmy_core.h"
+#include "emmy/emmy_host_value.h"
 #include "frame.h"
 #include "lua_shim.h"
 #include "test_client.h"
@@ -358,6 +359,116 @@ TEST_CASE("session.pause_runToLine_output_disconnect") {
 	c2.Request("disconnect");
 }
 
+
+
+// ---- 宿主值提供者 v2：认领 {1, 2, 3} 这张表（t.list），像 UnLua 实例表一样加「UE 对象」分组 ----
+namespace {
+std::atomic<int> g_hostReleases{0};
+std::atomic<int> g_hostDescribes{0};
+
+void HostWrite(const EmmyHostValueQuery* q, const char* s) {
+	// 分两次写，验证 runtime 会拼接
+	size_t n = std::strlen(s);
+	q->write(q->sink, s, n / 2);
+	q->write(q->sink, s + n / 2, n - n / 2);
+}
+
+bool IsList(const EmmyHostValueQuery* q) {
+	lua_State* L = q->L;
+	if (!L || lua_type(L, q->index) != LUA_TTABLE || lua::RawLen(L, q->index) != 3) return false;
+	lua_rawgeti(L, q->index, 1);
+	bool one = lua_tointeger(L, -1) == 1;
+	lua_pop(L, 1);
+	return one;
+}
+
+int EMMY_HOST_API_CALL HostDescribe(void*, const EmmyHostValueQuery* q) {
+	if (!IsList(q)) return EMMY_HOST_VALUE_UNAVAILABLE;
+	++g_hostDescribes;
+	HostWrite(q, R"({"valid":true,"typeName":"BP_Bag_C","summary":"BP_Bag_C /Game/Bag","kind":"ueObject","expandable":true})");
+	return EMMY_HOST_VALUE_OK;
+}
+
+int EMMY_HOST_API_CALL HostList(void*, const EmmyHostValueQuery* q) {
+	if (q->hostRef && std::strcmp(q->hostRef, "c1") == 0) {
+		HostWrite(q, R"({"total":1,"children":[{"name":"X","type":"number","value":"1.5"}]})");
+		return EMMY_HOST_VALUE_OK;
+	}
+	if (q->hostRef) return EMMY_HOST_VALUE_UNAVAILABLE;
+	HostWrite(q, R"J({"total":2,"children":[{"name":"Capacity","type":"number","value":"20","typeName":"int32"},)J"
+		R"J({"name":"Location","type":"userdata","value":"(X=1.5)","kind":"ueStruct","expandable":true,"childRef":"c1"}]})J");
+	return EMMY_HOST_VALUE_OK;
+}
+
+void EMMY_HOST_API_CALL HostRelease(void*, uint64_t, uint64_t) {
+	++g_hostReleases;
+}
+} // namespace
+
+TEST_CASE("session.host_value_provider") {
+	EmmyHostValueProviderV2 p{};
+	p.size = sizeof(p);
+	p.version = EMMY_HOST_VALUE_ABI_VERSION;
+	p.name = "test-host";
+	p.describe = &HostDescribe;
+	p.listChildren = &HostList;
+	p.releasePause = &HostRelease;
+	uint64_t pid = Emmy_RegisterHostValueProviderV2(&p);
+	CHECK(pid != 0);
+
+	TestClient c;
+	CHECK(c.Connect("127.0.0.1", g_port));
+	CHECK(Ok(Hello(c)));
+	g_rev = 0;
+	CHECK(Ok(SetBps(c, json::array({Bp("hv", 9)}))));
+	CHECK(Ok(c.Request("configurationDone")));
+	json pz = c.WaitEvent("paused");
+	CHECK(pz.is_object());
+	if (!pz.is_object()) { Emmy_UnregisterHostValueProviderV2(pid); return; }
+	uint64_t vmId = pz["body"]["vmId"], pauseId = pz["body"]["pauseId"];
+	json stack = c.Request("stackTrace", {{"vmId", vmId}, {"pauseId", pauseId}});
+	uint64_t frameId = stack["body"]["frames"][0]["frameId"];
+	json scopes = c.Request("scopes", {{"frameId", frameId}});
+	uint64_t localsRef = 0;
+	for (auto& s : scopes["body"]["scopes"]) if (s["name"] == "locals") localsRef = s["ref"];
+	uint64_t tRef = 0;
+	json lv = c.Request("variables", {{"ref", localsRef}});
+	for (auto& v : lv["body"]["variables"]) if (v["name"] == "t") tRef = v["ref"];
+	uint64_t listRef = 0;
+	json tv = c.Request("variables", {{"ref", tRef}});
+	for (auto& v : tv["body"]["variables"]) {
+		if (v["name"] != "list") continue;
+		CHECK_EQ(v["value"].get<std::string>(), std::string("BP_Bag_C /Game/Bag"));
+		CHECK_EQ(v["typeName"].get<std::string>(), std::string("BP_Bag_C"));
+		CHECK_EQ(v["kind"].get<std::string>(), std::string("ueObject"));
+		listRef = v["ref"];
+	}
+	CHECK(listRef != 0);
+	json listVars = c.Request("variables", {{"ref", listRef}});
+	uint64_t groupRef = 0;
+	int luaItems = 0;
+	for (auto& v : listVars["body"]["variables"]) {
+		if (v.value("kind", "") == "group") groupRef = v["ref"];
+		else if (v.value("indexedCount", -1) == -1 && v["name"].get<std::string>()[0] == '[') ++luaItems;
+	}
+	CHECK_EQ(luaItems, 3);
+	CHECK(groupRef != 0);
+	json ue = c.Request("variables", {{"ref", groupRef}});
+	CHECK(Ok(ue));
+	CHECK_EQ(ue["body"]["total"].get<int>(), 2);
+	uint64_t locRef = 0;
+	for (auto& v : ue["body"]["variables"]) if (v["name"] == "Location") locRef = v["ref"];
+	CHECK(locRef != 0);
+	json loc = c.Request("variables", {{"ref", locRef}});
+	CHECK(Ok(loc));
+	CHECK_EQ(loc["body"]["variables"][0]["name"].get<std::string>(), std::string("X"));
+
+	CHECK(Ok(SetBps(c, json::array())));
+	CHECK(Ok(Continue(c, pz)));
+	CHECK(g_hostReleases.load() >= 1);
+	CHECK_EQ(Emmy_UnregisterHostValueProviderV2(pid), 0);
+	c.Request("disconnect");
+}
 
 int main() {
 	g_port = 39000 + static_cast<int>(std::chrono::steady_clock::now().time_since_epoch().count() % 2000);

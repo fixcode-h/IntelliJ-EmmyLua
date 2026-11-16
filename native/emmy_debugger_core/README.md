@@ -44,6 +44,9 @@ Emmy_WaitIDE(5000);                           // 可选：等 IDE 发 configurat
 Emmy_UnregisterLuaVm(L);                      // lua_close 之前
 ```
 
+引擎对象的显示由宿主值提供者 v2 提供（[include/emmy/emmy_host_value.h](include/emmy/emmy_host_value.h)，`Emmy_RegisterHostValueProviderV2`，约定见 variable-view.md 13.6）：
+被认领的 userdata 的摘要和子项全部来自宿主，被认领的表在 Lua 字段之后加一个「UE 对象」分组；`valid=false` 显示 `<已失效>`，不再调 `__tostring`。
+
 其他工具要挂钩子时用 `Emmy_HookMux_Register` 共享，不要直接 `lua_sethook`（会把调试器的钩子顶掉）。
 
 ## 性能
@@ -68,4 +71,4 @@ Emmy_UnregisterLuaVm(L);                      // lua_close 之前
 
 - `exceptions` 能力（错误时暂停）；`setOptions.exceptions` 只接受 `none`。
 - helper（`emmyHelper.queryVariable`）参与变量展示：脚本已能加载执行，还没接到 `variables`。
-- 变量视图扩展字段（[docs/design/variable-view.md](../../docs/design/variable-view.md)）。
+- 变量视图的 `richVariables` / `viewRules`（[docs/design/variable-view.md](../../docs/design/variable-view.md) 13.1–13.5：智能排序、分组、继承成员、显示规则）。宿主值提供者已做，子项里的 `kind` / `hint` / `attrs` / `length` 已经输出。

@@ -1,6 +1,7 @@
 #include "inspector.h"
 
 #include "core.h"
+#include "host_value.h"
 #include "lua_internal.h"
 #include "value_path.h"
 #include "vm.h"
@@ -87,6 +88,10 @@ json VariableItem::ToJson() const {
 	if (namedCount >= 0) j["namedCount"] = namedCount;
 	if (indexedCount >= 0) j["indexedCount"] = indexedCount;
 	if (!evaluateName.empty()) j["evaluateName"] = evaluateName;
+	if (!kind.empty()) j["kind"] = kind;
+	if (!hint.empty()) j["hint"] = hint;
+	if (!attrs.empty()) j["attrs"] = attrs;
+	if (length >= 0) j["length"] = length;
 	return j;
 }
 
@@ -96,6 +101,8 @@ Inspector::Inspector(Vm& vm) : vm_(vm) {}
 
 void Inspector::BeginPause(lua_State* L) {
 	pausedL_ = L;
+	usedProviders_.clear();
+	pauseIdForHost_ = vm_.currentPauseId();
 	lua_newtable(L);
 	anchorRef_ = luaL_ref(L, LUA_REGISTRYINDEX);
 	nextSlot_ = 1;
@@ -106,6 +113,10 @@ void Inspector::BeginPause(lua_State* L) {
 }
 
 void Inspector::EndPause(lua_State* L) {
+	if (!usedProviders_.empty()) {
+		host::ReleasePause(vm_.id(), pauseIdForHost_, usedProviders_);
+		usedProviders_.clear();
+	}
 	if (anchorRef_ != LUA_NOREF) {
 		luaL_unref(L, LUA_REGISTRYINDEX, anchorRef_);
 		anchorRef_ = LUA_NOREF;
@@ -403,6 +414,8 @@ void Inspector::MakeItem(lua_State* L, int idx, VariableItem& item, const std::s
 	idx = lua::AbsIndex(L, idx);
 	int t = lua_type(L, idx);
 	item.type = lua_typename(L, t);
+	// 宿主（引擎）认领的对象：摘要和子项都听宿主的，失效对象也不再调 __tostring
+	if ((t == LUA_TUSERDATA || t == LUA_TTABLE) && host::HasProviders() && HostDescribe(L, idx, item, evaluateName)) return;
 	item.value = Summarize(L, idx, 1024, &item.typeName);
 	item.evaluateName = evaluateName;
 	bool expandable = false;
@@ -528,9 +541,20 @@ void Inspector::Materialize(RefEntry& entry) {
 		return;
 	}
 
+	if (entry.kind == RefKind::HostList) {
+		if (entry.hostRef.empty()) PushAnchored(L, entry.slot);
+		HostChildren(L, entry.hostRef.empty() ? lua_gettop(L) : 0, entry, entry.children);
+		lua_settop(L, top);
+		return;
+	}
 	PushAnchored(L, entry.slot);
 	int obj = lua_gettop(L);
 	int t = lua_type(L, obj);
+	if (t == LUA_TUSERDATA && entry.providerId) {
+		HostChildren(L, obj, entry, entry.children);
+		lua_settop(L, top);
+		return;
+	}
 	if (t == LUA_TTABLE) {
 		size_t n = lua::RawLen(L, obj);
 		for (size_t i = 1; i <= n; ++i) {
@@ -582,6 +606,18 @@ void Inspector::Materialize(RefEntry& entry) {
 			entry.children.push_back(std::move(item));
 		}
 	}
+	if (t == LUA_TTABLE && entry.providerId) {
+		// 宿主认领的表（例如 UnLua 实例表）：自己的 Lua 字段照常列，再加一个分组放引擎对象的成员
+		VariableItem group;
+		group.name = "UE 对象";
+		group.nameType = "string";
+		group.type = "table";
+		group.kind = "group";
+		group.value = entry.hostSummary;
+		group.ref = NewRef(RefKind::HostList, 0, entry.slot, "");
+		refs_[group.ref].providerId = entry.providerId;
+		entry.children.push_back(std::move(group));
+	}
 	if (t == LUA_TTABLE || t == LUA_TUSERDATA) {
 		if (lua_getmetatable(L, obj)) {
 			VariableItem item;
@@ -593,6 +629,118 @@ void Inspector::Materialize(RefEntry& entry) {
 		}
 	}
 	lua_settop(L, top);
+}
+
+// ---------------------------------------------------------------- 宿主值提供者（variable-view 13.6）
+
+namespace {
+// 调宿主期间屏蔽断点和单步：宿主可能回调 Lua（例如 UnLua 取实例表），不能在里面再停下来
+struct HostCallGuard {
+	bool& flag;
+	bool prev;
+	explicit HostCallGuard(bool& f) : flag(f), prev(f) { flag = true; }
+	~HostCallGuard() { flag = prev; }
+};
+
+void NoteProvider(std::vector<uint64_t>& used, uint64_t id) {
+	if (std::find(used.begin(), used.end(), id) == used.end()) used.push_back(id);
+}
+} // namespace
+
+bool Inspector::HostDescribe(lua_State* L, int idx, VariableItem& item, const std::string& evaluateName) {
+	host::Described d;
+	bool claimed;
+	{
+		HostCallGuard guard(evaluating_);
+		const int64_t prevDeadline = evalDeadlineMs_;
+		evalDeadlineMs_ = 0; // 宿主是 C++，不能从钩子里抛 Lua 错误穿过它
+		claimed = host::Describe(L, idx, vm_.id(), pauseIdForHost_, 1024, d);
+		evalDeadlineMs_ = prevDeadline;
+	}
+	if (!claimed) return false;
+	NoteProvider(usedProviders_, d.providerId);
+	item.typeName = d.typeName;
+	item.kind = d.kind;
+	item.hint = d.hint;
+	if (!d.valid) {
+		item.value = "<已失效>";
+		item.attrs.push_back("invalid");
+		return true;
+	}
+	item.value = d.summary.size() > 1024 ? d.summary.substr(0, 1024) : d.summary;
+	const bool isTable = lua_type(L, idx) == LUA_TTABLE;
+	if (isTable || d.expandable) {
+		int slot = Anchor(L, idx);
+		item.ref = NewRef(RefKind::Value, 0, slot, evaluateName);
+		RefEntry& e = refs_[item.ref];
+		e.providerId = d.providerId;
+		e.hostSummary = item.value;
+	}
+	return true;
+}
+
+void Inspector::HostChildren(lua_State* L, int idx, const RefEntry& entry, std::vector<VariableItem>& out) {
+	json result;
+	std::string err;
+	bool ok;
+	{
+		HostCallGuard guard(evaluating_);
+		const int64_t prevDeadline = evalDeadlineMs_;
+		evalDeadlineMs_ = 0;
+		ok = host::ListChildren(entry.providerId, L, idx, entry.hostRef, vm_.id(), pauseIdForHost_, 1024, result, err);
+		evalDeadlineMs_ = prevDeadline;
+	}
+	NoteProvider(usedProviders_, entry.providerId);
+	if (!ok) {
+		VariableItem e;
+		e.name = "(错误)";
+		e.nameType = "string";
+		e.type = "string";
+		e.value = err;
+		e.attrs.push_back("helperError");
+		out.push_back(std::move(e));
+		return;
+	}
+	if (!result.value("valid", true)) {
+		VariableItem e;
+		e.name = "(已失效)";
+		e.nameType = "string";
+		e.type = "nil";
+		e.value = "<已失效>";
+		e.attrs.push_back("invalid");
+		out.push_back(std::move(e));
+		return;
+	}
+	auto str = [](const json& j, const char* k) {
+		auto it = j.find(k);
+		return it != j.end() && it->is_string() ? it->get<std::string>() : std::string();
+	};
+	const json& children = result.contains("children") && result["children"].is_array() ? result["children"] : json::array();
+	for (const json& c : children) {
+		if (!c.is_object()) continue;
+		VariableItem item;
+		item.name = str(c, "name");
+		item.nameType = "string";
+		item.type = str(c, "type");
+		if (item.type.empty()) item.type = "userdata";
+		item.value = str(c, "value");
+		item.typeName = str(c, "typeName");
+		item.kind = str(c, "kind");
+		item.hint = str(c, "hint");
+		if (c.contains("attrs") && c["attrs"].is_array()) {
+			for (const json& a : c["attrs"]) if (a.is_string()) item.attrs.push_back(a.get<std::string>());
+		}
+		if (c.contains("length") && c["length"].is_number_integer()) item.length = c["length"].get<int64_t>();
+		const std::string childRef = str(c, "childRef");
+		const bool expandable = c.value("expandable", false) || item.kind == "group";
+		if (expandable && !childRef.empty()) {
+			item.ref = NewRef(RefKind::HostList, 0, 0, "");
+			RefEntry& e = refs_[item.ref];
+			e.providerId = entry.providerId;
+			e.hostRef = childRef;
+		}
+		out.push_back(std::move(item));
+	}
 }
 
 bool Inspector::Variables(uint64_t ref, int start, int count, const std::string& filter, json& body, ProtocolError& err) {
