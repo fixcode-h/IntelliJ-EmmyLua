@@ -173,4 +173,37 @@ class McpInstallerTest {
             p4.toFile().deleteRecursively()
         }
     }
+
+    @Test
+    fun `IDE 打开 UE 项目的脚本目录：装到版本管理根或 UE 项目根`() {
+        val ue = Files.createTempDirectory("ue")
+        try {
+            val script = Files.createDirectories(ue.resolve("Game/Content/Script"))
+            Files.writeString(ue.resolve("Game/Game.uproject"), "{}")
+            // 没有版本管理：UE 项目根（含 .uproject），而不是打开的 Content/Script
+            assertEquals(ue.resolve("Game"), VcsRoot.installRoot(script))
+            assertEquals(ue.resolve("Game"), VcsRoot.findUnrealProject(script))
+
+            // 脚本目录自己是个仓库（子模块），UE 项目没有版本管理：仍以 UE 项目根为准
+            Files.writeString(script.resolve(".git"), "gitdir: ../../.git/modules/Script")
+            assertEquals(ue.resolve("Game"), VcsRoot.installRoot(script))
+
+            // UE 项目在仓库的子目录里：装到仓库根
+            Files.createDirectories(ue.resolve(".git"))
+            assertEquals(ue, VcsRoot.installRoot(script))
+            Files.delete(script.resolve(".git"))
+            assertEquals(ue, VcsRoot.installRoot(script))
+        } finally {
+            ue.toFile().deleteRecursively()
+        }
+
+        // 不是 UE 项目、也没有版本管理：项目目录本身
+        val plain = Files.createTempDirectory("plain")
+        try {
+            val lua = Files.createDirectories(plain.resolve("lua"))
+            assertEquals(lua, VcsRoot.installRoot(lua))
+        } finally {
+            plain.toFile().deleteRecursively()
+        }
+    }
 }

@@ -68,8 +68,8 @@ class LuaMcpServiceImpl : LuaMcpService {
     }
 
     /**
-     * 版本管理根目录：IDE 已识别的 VCS 根里包含项目目录的那些（最外层在前，通常就是 .git 所在目录）；
-     * 再加上按 UEToVS 规则往上找到的根（IDE 没配 VCS 映射、或 P4 只有 P4CONFIG 文件时）；都没有就是项目目录。
+     * 安装位置，第一个是推荐的：[VcsRoot.installRoot] 算出来的根（版本管理根；没有版本管理的 UE 项目用含 .uproject 的目录），
+     * 然后是 IDE 已识别的、包含项目目录的 VCS 根（IDE 配了 VCS 映射但目录里没有标记文件时），最后是项目里的其他 VCS 根（多仓库项目）。
      */
     override fun installRoots(project: Project): List<Path> {
         val base = project.basePath?.let { Path.of(it).toAbsolutePath().normalize() }
@@ -80,13 +80,11 @@ class LuaMcpServiceImpl : LuaMcpService {
         }.getOrDefault(emptyList())
         val roots = LinkedHashSet<Path>()
         if (base != null) {
-            // 包含项目目录的根优先（项目在仓库子目录里时，配置要写到仓库根，Agent 一般在那里启动）
-            vcsRoots.filter { base.startsWith(it) }.sortedBy { it.nameCount }.forEach { roots.add(it) }
             roots.add(VcsRoot.installRoot(base) { p4ClientRoot(base) })
+            vcsRoots.filter { base.startsWith(it) }.sortedBy { it.nameCount }.forEach { roots.add(it) }
         }
-        // 项目里面的其他 VCS 根（多仓库项目）
         vcsRoots.filter { base == null || !base.startsWith(it) }.forEach { roots.add(it) }
-        if (roots.isEmpty() && base != null) roots.add(base)
+        if (base != null) roots.add(base)
         return roots.toList()
     }
 

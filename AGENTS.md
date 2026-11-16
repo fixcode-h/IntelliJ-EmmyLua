@@ -60,7 +60,7 @@
 ### 传输和安装（和 UEToVS 的差别）
 
 - UEToVS 用 stdio（每个 Agent 会话一个进程，读磁盘索引）。我们用 **IDE 内置的 Streamable HTTP**：`http://127.0.0.1:<端口>/mcp`，默认端口 9330，被占用时顺延。原因：调试状态（会话、断点、暂停）只在 IDE 进程里，stdio 还要再起一个转发进程，并且要在共享配置里写本机路径。
-- 安装位置和 UEToVS 一致：项目目录往上找**版本管理根目录**（`.git` 目录或文件、`.hg`、`.svn` 取连续的最外层、`.plastic`、P4CONFIG 文件；都没有时问 `p4 info` 的 client root，包含项目才用），找不到就用项目目录（`install/VcsRoot.kt`）。
+- 安装位置和 UEToVS 一致：项目目录往上找**版本管理根目录**（`.git` 目录或文件、`.hg`、`.svn` 取连续的最外层、`.plastic`、P4CONFIG 文件；都没有时问 `p4 info` 的 client root，包含项目才用），找不到就往上找 UE 项目根（含 `.uproject` 的目录），再没有才用项目目录（`install/VcsRoot.kt`）。IDE 常常只打开 UE 项目里的 `Content/Script`，所以一定要往上找；脚本目录自己是嵌套仓库时以 UE 项目为准。
 - 写入规则和 UEToVS 一致：**只合并 `emmylua-debug` 这一项**，别的服务器、未知字段、用户在这一项里加的字段原样保留；文件不是严格 JSON（有注释、尾逗号）时不写，给出手动粘贴的片段；跟随原文件的缩进和换行符；临时文件 + 原子替换。配置里只有回环地址，可以提交进版本库。
 - 每个客户端一个 `McpClientConfigWriter`，格式变了只改对应的那个：
 
