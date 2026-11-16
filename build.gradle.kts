@@ -105,6 +105,7 @@ project(":") {
         implementation(project(":modules:debugger-emmy-protocol"))
         implementation(project(":modules:debugger-cli-protocol"))
         implementation(project(":modules:debugger-luapanda-protocol"))
+        implementation(project(":modules:debugger-mcp"))
         
         intellijPlatform {
             intellijIdeaCommunity(buildVersionData.ideaMainVersion)
