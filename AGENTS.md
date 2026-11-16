@@ -20,7 +20,7 @@
 
 - 工具名 `lua_debug_<领域>`，snake_case。按领域合并成少数几个工具，用 `action` 区分动作（对应 UEToVS 的 `debug_session` / `debug_breakpoints` / `debug_inspect`），不为每个动作单开一个工具：工具多了 Agent 选不准，延迟加载工具说明时也更贵。
 - 现有三个：
-  - `lua_debug_session`：`status` / `targets` / `attach` / `stop` / `pause` / `continue` / `step` / `wait`
+  - `lua_debug_session`：`status` / `targets` / `attach` / `stop` / `pause` / `continue` / `step` / `wait` / `reload`（经 UELink 热重载 UE 里的 Lua，不需要会话）
   - `lua_debug_breakpoints`：`list` / `add` / `remove` / `enable` / `clear`
   - `lua_debug_inspect`：`stack` / `vms` / `locals` / `eval` / `output` / `probes`
 - `lua_` 前缀是为了和 UEToVS 的 `debug_*`、面板的 `ue_*` 不撞名。工具名一旦发布就不改：Agent 和用户的提示词里写死了它。改名或删掉时，旧名字保留一版，调用时返回「改用哪个」的错误。
@@ -62,7 +62,7 @@
 ### 权限
 
 - 只读（`status`、`list`、`stack`、`locals`、`output`……）默认允许。
-- 控制（断点增删改、继续、单步、暂停、结束会话）：每个调试会话**第一次**控制时在 IDE 里弹通知「允许一次 / 本次会话总是允许 / 拒绝」；拒绝或超时返回 `permission_denied`，说明里让 Agent 去问用户，不要重试。「撤销 Agent 控制」清掉所有授权。
+- 控制（断点增删改、继续、单步、暂停、结束会话、UE 热重载 `reload`）：每个调试会话**第一次**控制时在 IDE 里弹通知「允许一次 / 本次会话总是允许 / 拒绝」；拒绝或超时返回 `permission_denied`，说明里让 Agent 去问用户，不要重试。「撤销 Agent 控制」清掉所有授权。
 - `attach` 每次都确认。
 - `eval` 默认 `mode=value_path`（只读变量路径）；`mode=lua` 执行任意 Lua，要用户在设置里打开，并且按控制处理。runtime 侧的 `allowLuaEval` 也由引擎按设置下发，作为第二道保险。
 - 不要求、也不写任何令牌：只绑 `127.0.0.1`，校验 `Host` / `Origin` 头防 DNS rebinding 和网页跨站调用。

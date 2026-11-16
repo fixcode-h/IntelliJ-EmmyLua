@@ -17,7 +17,7 @@ import java.util.concurrent.TimeoutException
  * Lua 调试的三个 MCP 工具，形状照 UEToVS 的 `debug_session / debug_breakpoints / debug_inspect`
  * （规范见 AGENTS.md「MCP 工具规范」）：
  *
- * - `lua_debug_session`：status / targets / attach / stop / pause / continue / step / wait
+ * - `lua_debug_session`：status / targets / attach / stop / pause / continue / step / wait / reload
  * - `lua_debug_breakpoints`：list / add / remove / enable / clear
  * - `lua_debug_inspect`：stack / vms / locals / eval / output / probes
  *
@@ -39,24 +39,24 @@ class LuaDebugTools(
 
     // ======================================================================= lua_debug_session
 
-    private val sessionActions = arrayOf("status", "targets", "attach", "stop", "pause", "continue", "step", "wait")
+    private val sessionActions = arrayOf("status", "targets", "attach", "stop", "pause", "continue", "step", "wait", "reload")
 
     private fun sessionTool() = McpTool(
         name = SESSION,
         title = "Start / step / wait in the Lua debugger",
         titleZh = "Lua 调试：会话与单步",
         description = ToolGuide(
-            what = "Drives the EmmyLua debugger in the IDE on a running Lua program (UE/UnLua, Unity, own engine, Android device): " +
-                "list sessions and attachable targets, attach to a local process or an Android app (no change to the game package), " +
-                "pause, continue, step over/into/out/to line, and wait until it stops.",
-            useWhen = "you need to see Lua run: reproduce a bug and stop where a suspect line runs, catch a Lua error where it is raised, " +
-                "or follow the code step by step. Typical: status (or targets -> attach) -> $BREAKPOINTS add -> trigger the code -> " +
-                "wait -> $INSPECT -> step / continue.",
-            insteadOf = "adding print() calls and reloading to guess values: breakpoints show the real state without editing scripts.",
-            notFor = "C++ or Blueprint (use the VS debugger tools). attach and the first control of a session ask the user in the IDE; " +
-                "on permission_denied ask the user instead of retrying. While a VM is stopped the game thread is frozen.",
-            results = "status: sessions[{sessionId,state,pausedVms}] and the stop location; pause/step/wait: event = break / probe / " +
-                "resumed / exited / timeout / idle, on break with location, stack (8 frames) and locals of frame 0.",
+            what = "Drives the IDE's EmmyLua debugger on running Lua (UE/UnLua, Unity, own engine, Android device): list sessions and " +
+                "targets, attach to a local process or Android app, pause, continue, step over/into/out/to line, wait until it stops. " +
+                "reload: hot-reload Lua modules into the open UE editor/game via UELink (no session needed).",
+            useWhen = "you need to see Lua run: stop where a suspect line runs, catch a Lua error where raised, step through code. " +
+                "Typical: status (or targets -> attach) -> $BREAKPOINTS add -> trigger the code -> wait -> $INSPECT -> step / continue. " +
+                "After editing UnLua scripts: reload files=[...] or changed=true instead of restarting PIE.",
+            insteadOf = "adding print() calls to guess values: breakpoints show the real state without editing scripts.",
+            notFor = "C++ or Blueprint (use the VS debugger tools). attach, reload and the first control of a session ask the user in " +
+                "the IDE; on permission_denied ask the user. A stopped VM freezes the game thread.",
+            results = "status: sessions + stop location; pause/step/wait: event = break / probe / resumed / exited / timeout / idle, " +
+                "break has location, stack, locals; reload: targets[{pid,kind,items[{module,ok|error}]}].",
         ).render(),
         inputSchema = schema {
             string("action", "What to do.", required = true, enum = sessionActions.toList())
@@ -76,6 +76,9 @@ class LuaDebugTools(
                 minimum = 0, maximum = 120000)
             integer("timeout_ms", "wait: max wait (default 30000).", minimum = 0, maximum = 120000)
             boolean("include_probes", "wait: also return on a probe hit (breakpoint with capture + auto_continue). Default true.")
+            stringArray("modules", "reload: Lua module names relative to Content/Script, e.g. ['UI.BagPanel'].", 200)
+            stringArray("files", "reload: Lua files (absolute or relative to the project) under Content/Script; converted to module names.", 200)
+            boolean("changed", "reload: true = reload every module whose file changed since it was loaded (UELink lua.modules stale).")
         },
         level = PermissionLevel.CONTROL,
         destructive = false,
@@ -91,6 +94,7 @@ class LuaDebugTools(
             "continue" -> control(requireBackend(b), call, "continue", 0) { s, vm -> resume(s, vm) }
             "step" -> step(requireBackend(b), call)
             "wait" -> wait(b, call)
+            "reload" -> reload(requireBackend(b), call)
             else -> throw ToolArgumentException("缺少参数 'action'")
         }
         }
@@ -207,6 +211,61 @@ class LuaDebugTools(
             return outcome(b, call.client, waiter.await(sessionId, timeout, includeProbes, stopOnResume = true))
         }
     }
+
+    /**
+     * UE 热重载：经 UELink 的 lua.reload，不需要调试会话。会改游戏里的 Lua 状态，按控制处理（首次确认）。
+     * 模块名宽松：`UI/BagPanel.lua` 也当 `UI.BagPanel`。
+     */
+    private fun reload(b: LuaDebugBackend, call: ToolCall): Map<String, Any?> {
+        val a = call.args
+        val modules = a.stringList("modules", 200).map { normalizeModule(it) }
+        val files = a.stringList("files", 200)
+        val changed = a.bool("changed", false)
+        if (modules.isEmpty() && files.isEmpty() && !changed) {
+            throw ToolArgumentException("reload 要给 'modules'（模块名，如 UI.BagPanel）、'files'（Content/Script 下的 Lua 文件）或 changed=true（重载所有改过的）")
+        }
+        if (changed && (modules.isNotEmpty() || files.isNotEmpty())) throw ToolArgumentException("changed=true 不和 'modules' / 'files' 一起用")
+        modules.firstOrNull { !MODULE_NAME.matches(it) }?.let {
+            throw ToolArgumentException("模块名 '$it' 不合法：相对 Content/Script、用点分隔，例如 UI.BagPanel")
+        }
+        policy.checkControl(McpPermissionPolicy.RELOAD_KEY, "UE 里的 Lua（热重载）", call.client.clientName)?.let { throw denied(it) }
+        val future = b.reloadModules(ReloadRequest(modules, files, changed)).exceptionallyCompose { e ->
+            // 不支持时不要附带「升级调试 runtime」的通用提示：缺的是 UE 那边的 UELink / UnLua
+            val cause = (e as? java.util.concurrent.CompletionException)?.cause ?: e
+            if (cause is LuaDebugBackendException && cause.code == ErrorCode.NOT_SUPPORTED) {
+                CompletableFuture.failedFuture(ToolException("not_supported", cause.message.orEmpty()))
+            } else {
+                CompletableFuture.failedFuture(cause)
+            }
+        }
+        val r = await(future, timeouts.requestMillis)
+        var reloaded = 0
+        var failed = 0
+        val budget = ResultJson.BUDGET / r.targets.size.coerceAtLeast(1)
+        var truncated = false
+        val targets = r.targets.map { t ->
+            reloaded += t.items.count { it.ok }
+            failed += t.items.count { !it.ok }
+            // 失败的排前面：截断时先丢成功的
+            val (items, cut) = ResultJson.fit(t.items.sortedBy { it.ok }, budget) { i ->
+                obj("module" to i.module, "ok" to i.ok, "mode" to i.mode, "error" to i.error)
+            }
+            if (cut) truncated = true
+            val m = obj("pid" to t.pid, "kind" to t.kind, "error" to t.error, "note" to t.note)
+            put(m, "items", items)
+            m
+        }
+        val m = obj("reloaded" to reloaded, "failed" to failed, "truncated" to truncated)
+        m["targets"] = targets
+        if (r.skipped.isNotEmpty()) m["skipped"] = r.skipped
+        if (reloaded == 0 && failed == 0 && r.targets.none { it.error != null }) {
+            m["note"] = if (changed) "没有改过的模块（UE 里加载的模块都是最新的）。" else "没有重载任何模块：检查模块名或文件是否在 Content/Script 下。"
+        }
+        return m
+    }
+
+    private fun normalizeModule(raw: String): String =
+        raw.trim().replace('\\', '/').removeSuffix(".lua").trim('/').replace('/', '.')
 
     /** 先订阅事件再发命令，避免"很快就停下、事件先于订阅到达"的竞态。 */
     private fun runAndWait(
@@ -712,6 +771,8 @@ class LuaDebugTools(
         const val SESSION = "lua_debug_session"
         const val BREAKPOINTS = "lua_debug_breakpoints"
         const val INSPECT = "lua_debug_inspect"
+
+        private val MODULE_NAME = Regex("[A-Za-z0-9_\\-]+(\\.[A-Za-z0-9_\\-]+)*")
 
         const val ENGINE_UNAVAILABLE = "IDE 里的 Lua 调试引擎还没准备好（没有打开的项目或插件版本过旧）。请用户打开 Lua 项目后重试。"
     }

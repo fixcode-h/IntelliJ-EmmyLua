@@ -85,6 +85,16 @@ interface LuaDebugBackend {
 
     /** 读本地源码片段（[line] 前后 [radius] 行），给栈帧附源码；拿不到返回 null。 */
     fun sourceSnippet(file: String, line: Int, radius: Int): List<SourceLine>? = null
+
+    // ---- UE 热重载（不走调试连接，经 UELink 的 lua.reload；没附加也能用） ----
+
+    /**
+     * 让开着的 UE 编辑器 / 游戏重新加载 Lua 模块。找不到 UE 实例时抛 [ErrorCode.TARGET_NOT_FOUND]，
+     * UE 那边没有 lua.reload（UELink 太旧或没装 UnLua）时抛 [ErrorCode.NOT_SUPPORTED]。
+     * 默认不支持：非 UE 宿主的引擎实现不用管。
+     */
+    fun reloadModules(request: ReloadRequest): CompletableFuture<ReloadResult> =
+        CompletableFuture.failedFuture(LuaDebugBackendException(ErrorCode.NOT_SUPPORTED, "这个 IDE 版本不支持 UE 热重载。"))
 }
 
 class LuaDebugBackendException(
@@ -303,6 +313,39 @@ data class ProbeHit(
 data class ProbeHitPage(val hits: List<ProbeHit>, val nextSeq: Long)
 
 data class SourceLine(val line: Int, val text: String)
+
+/** 热重载要什么：模块名、本地文件（由 IDE 换算成模块名）或「所有改过的」，三选一（[changed] 时另两个为空）。 */
+data class ReloadRequest(
+    val modules: List<String> = emptyList(),
+    val files: List<String> = emptyList(),
+    val changed: Boolean = false,
+)
+
+data class ReloadItem(
+    val module: String,
+    val ok: Boolean,
+    /** UELink 用的方式：reloader（项目接的热重载入口）/ require（兜底）。 */
+    val mode: String? = null,
+    val error: String? = null,
+)
+
+/** 一个 UE 实例（名片）上的结果。 */
+data class ReloadTargetResult(
+    val pid: Long,
+    /** 名片的 kind：editor / game / server。 */
+    val kind: String,
+    val items: List<ReloadItem> = emptyList(),
+    /** UELink 回包的 note（例如 require 兜底时模块顶部 local 会重新初始化）。 */
+    val note: String? = null,
+    /** 整个实例调用失败（连不上、没有 lua.reload）时的原因；这时 items 为空。 */
+    val error: String? = null,
+)
+
+data class ReloadResult(
+    val targets: List<ReloadTargetResult>,
+    /** files 里换算不出模块名的（不在 Content/Script 下）：文件 → 原因。 */
+    val skipped: Map<String, String> = emptyMap(),
+)
 
 /** 引擎事件：MCP 只关心这几种。 */
 sealed class DebugEvent {

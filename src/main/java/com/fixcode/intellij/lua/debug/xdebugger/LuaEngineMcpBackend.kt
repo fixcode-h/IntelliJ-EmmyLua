@@ -54,6 +54,11 @@ import com.fixcode.intellij.lua.debugger.mcp.PauseInfo
 import com.fixcode.intellij.lua.debugger.mcp.PauseReason
 import com.fixcode.intellij.lua.debugger.mcp.ProbeHit
 import com.fixcode.intellij.lua.debugger.mcp.ProbeHitPage
+import com.fixcode.intellij.lua.debugger.mcp.ReloadItem
+import com.fixcode.intellij.lua.debugger.mcp.ReloadRequest
+import com.fixcode.intellij.lua.debugger.mcp.ReloadResult
+import com.fixcode.intellij.lua.debugger.mcp.ReloadTargetResult
+import com.fixcode.intellij.lua.debug.ue.UnrealLuaReloader
 import com.fixcode.intellij.lua.debugger.mcp.SessionInfo
 import com.fixcode.intellij.lua.debugger.mcp.SessionKind
 import com.fixcode.intellij.lua.debugger.mcp.SessionState
@@ -635,6 +640,36 @@ class LuaEngineMcpBackend(private val project: Project) : LuaDebugBackend, Dispo
             null
         }
     }
+
+    // =====================================================================
+    // UE 热重载（经 UELink，不走调试连接）
+    // =====================================================================
+
+    override fun reloadModules(request: ReloadRequest): CompletableFuture<ReloadResult> =
+        CompletableFuture.supplyAsync({
+            val files = request.files.map { java.nio.file.Path.of(resolveFile(it)) }
+            val outcome = try {
+                UnrealLuaReloader.getInstance(project).reload(request.modules, files, request.changed)
+            } catch (e: UnrealLuaReloader.ReloadException) {
+                val code = when (e.reason) {
+                    UnrealLuaReloader.Reason.NOT_SUPPORTED -> ErrorCode.NOT_SUPPORTED
+                    UnrealLuaReloader.Reason.NO_UE_PROJECT, UnrealLuaReloader.Reason.NO_INSTANCE -> ErrorCode.TARGET_NOT_FOUND
+                }
+                throw LuaDebugBackendException(code, e.message.orEmpty())
+            }
+            ReloadResult(
+                targets = outcome.targets.map { t ->
+                    ReloadTargetResult(
+                        pid = t.instance.pid,
+                        kind = t.instance.kind,
+                        items = t.items.map { ReloadItem(it.module, it.ok, it.mode, it.error) },
+                        note = t.note,
+                        error = t.error,
+                    )
+                },
+                skipped = outcome.skipped,
+            )
+        }, AppExecutorUtil.getAppExecutorService())
 
     // =====================================================================
     // id 编解码

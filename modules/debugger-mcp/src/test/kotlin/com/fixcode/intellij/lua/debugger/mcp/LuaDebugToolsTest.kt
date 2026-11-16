@@ -285,4 +285,47 @@ class LuaDebugToolsTest {
         assertEquals("hello", ((r["items"] as List<*>)[0] as Map<*, *>)["text"])
         assertEquals(0L, client.call(I, mapOf("action" to "output", "cursor" to 1))["count"])
     }
+
+    @Test
+    fun `reload 按控制确认，模块名宽松，结果按 UE 进程给出`() {
+        val r = client.call(S, mapOf("action" to "reload", "modules" to listOf("UI/BagPanel.lua", "Broken")))
+        assertFalse(r.raw, r.isError)
+        assertEquals(listOf("control:UE 里的 Lua（热重载）"), confirmer.asked.toList())
+        assertEquals(listOf("UI.BagPanel", "Broken"), backend.reloads.single().modules)
+        assertEquals(1L, r["reloaded"])
+        assertEquals(1L, r["failed"])
+        val target = (r["targets"] as List<*>).single() as Map<*, *>
+        assertEquals("editor", target["kind"])
+        val items = target["items"] as List<*>
+        // 失败的排前面，成功的不写 error，失败的不写 ok
+        assertEquals("Broken", (items[0] as Map<*, *>)["module"])
+        assertFalse((items[0] as Map<*, *>).containsKey("ok"))
+        assertEquals(true, (items[1] as Map<*, *>)["ok"])
+        // 本次会话总是允许后不再问
+        client.call(S, mapOf("action" to "reload", "changed" to true))
+        assertEquals(1, confirmer.asked.size)
+        assertTrue(backend.reloads[1].changed)
+    }
+
+    @Test
+    fun `reload 参数校验`() {
+        assertEquals("invalid_argument", client.call(S, mapOf("action" to "reload")).code)
+        assertEquals("invalid_argument", client.call(S, mapOf("action" to "reload", "changed" to true, "modules" to "A")).code)
+        assertEquals("invalid_argument", client.call(S, mapOf("action" to "reload", "modules" to listOf("a b"))).code)
+        assertEquals("invalid_argument", client.call(S, mapOf("action" to "reload", "module" to "A")).code)
+        assertTrue(backend.reloads.isEmpty())
+        assertTrue("参数错不应弹确认", confirmer.asked.isEmpty())
+    }
+
+    @Test
+    fun `reload 被拒绝时不执行，没有 UE 实例时报 target_not_found`() {
+        confirmer.control = ControlDecision.DENY
+        assertEquals("permission_denied", client.call(S, mapOf("action" to "reload", "files" to listOf("/proj/Content/Script/A.lua"))).code)
+        assertTrue(backend.reloads.isEmpty())
+        confirmer.control = ControlDecision.ALLOW_ONCE
+        backend.ueRunning = false
+        val r = client.call(S, mapOf("action" to "reload", "files" to listOf("/proj/Content/Script/A.lua")))
+        assertEquals("target_not_found", r.code)
+        assertTrue(r["message"] as String, (r["message"] as String).contains("UE"))
+    }
 }

@@ -154,6 +154,23 @@ class FakeBackend : LuaDebugBackend {
 
     override fun getProbeHits(breakpointId: String?, sinceSeq: Long, limit: Int) = ProbeHitPage(emptyList(), sinceSeq)
 
+    /** null = 模拟没有开着的 UE 实例。 */
+    @Volatile
+    var ueRunning: Boolean = true
+    val reloads = CopyOnWriteArrayList<ReloadRequest>()
+
+    override fun reloadModules(request: ReloadRequest): CompletableFuture<ReloadResult> {
+        if (!ueRunning) {
+            return CompletableFuture.failedFuture(LuaDebugBackendException(ErrorCode.TARGET_NOT_FOUND, "没找到开着的 UE 编辑器或游戏。"))
+        }
+        reloads += request
+        val names = request.modules + request.files.map { it.substringAfterLast('/').removeSuffix(".lua") }
+        val items = names.map { n ->
+            if (n == "Broken") ReloadItem(n, false, error = "attempt to index a nil value") else ReloadItem(n, true, "require")
+        }
+        return CompletableFuture.completedFuture(ReloadResult(listOf(ReloadTargetResult(200, "editor", items, note = "require 兜底"))))
+    }
+
     override fun sourceSnippet(file: String, line: Int, radius: Int) =
         (line - radius..line + radius).map { SourceLine(it, "line $it") }
 }

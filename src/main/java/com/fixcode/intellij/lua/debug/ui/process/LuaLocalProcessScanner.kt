@@ -58,6 +58,10 @@ object LuaLocalProcessScanner {
     fun tags(process: LuaLocalProcess): List<String> =
         LuaProcessTagProvider.EP.extensionList.flatMap { it.tags(process) }.distinct()
 
+    /** 排序优先级：各标签提供者给的最大值（带 UELink 名片的 UE 进程最高）。 */
+    fun priority(process: LuaLocalProcess): Int =
+        LuaProcessTagProvider.EP.extensionList.maxOfOrNull { runCatching { it.priority(process) }.getOrDefault(0) } ?: 0
+
     /** 归到"Lua"分组：检测到 Lua 模块，或者标签提供者认为它是 Lua 宿主（Lua 静态链接的 UE 进程）。 */
     fun isLuaCandidate(process: LuaLocalProcess): Boolean =
         process.hasLuaRuntime || LuaProcessTagProvider.EP.extensionList.any { it.isLikelyLuaHost(process) }

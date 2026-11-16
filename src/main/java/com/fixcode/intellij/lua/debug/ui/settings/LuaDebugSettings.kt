@@ -28,6 +28,8 @@ class LuaDebugSettings : SimplePersistentStateComponent<LuaDebugSettings.State>(
         /** 未裁剪 so 的搜索目录，分号分隔，支持 $PROJECT_DIR$。 */
         var symbolSearchDirs by string(DEFAULT_SYMBOL_DIRS)
         var logLevel by enum(LuaDebugLogLevel.RUNTIME)
+        /** 保存 Lua 文件后经 UELink 自动重载到开着的 UE 编辑器 / 游戏（默认关）。 */
+        var reloadToUnrealOnSave by property(false)
 
         // 变量视图（docs/design/variable-view.md 13.5、15.3）。平铺存储，读写走 [variableView]。
         var viewSort by enum(LuaVariableSort.SMART)
@@ -67,6 +69,10 @@ class LuaDebugSettings : SimplePersistentStateComponent<LuaDebugSettings.State>(
     var logLevel: LuaDebugLogLevel
         get() = state.logLevel
         set(value) { state.logLevel = value }
+
+    var reloadToUnrealOnSave: Boolean
+        get() = state.reloadToUnrealOnSave
+        set(value) { state.reloadToUnrealOnSave = value }
 
     /**
      * 变量视图设置的快照。引擎在握手后和设置变化时用 [VariableViewSettings.toProtocolOptions]

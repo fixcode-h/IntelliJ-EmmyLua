@@ -70,6 +70,31 @@
         <notificationGroup id="EmmyLua Debug" displayType="BALLOON" bundle="messages.LuaDebugBundle" key="notification.group"/>
     </extensions>
 
+    <!-- ===== UE 热重载（经 UELink lua.reload）和断点诊断 ===== -->
+    <extensions defaultExtensionNs="com.intellij">
+        <notificationGroup id="EmmyLua UE Reload" displayType="BALLOON"/>
+    </extensions>
+    <applicationListeners>
+        <listener class="com.fixcode.intellij.lua.debug.ue.UnrealReloadOnSaveListener"
+                  topic="com.intellij.openapi.fileEditor.FileDocumentManagerListener"/>
+    </applicationListeners>
+    <actions>
+        <!-- Ctrl+Alt+R 在默认键位里只有比较视图里的 Diff.ApplyLeftSide 用，这个动作只在 Lua 文件上可用，不冲突；
+             macOS 键位里 ⌘⌥R 是 Resume、⌃⌥R 是 Run…，改用 ⌃⌥U -->
+        <action id="EmmyLua.Debug.ReloadToUnreal" class="com.fixcode.intellij.lua.debug.ue.ReloadToUnrealAction">
+            <keyboard-shortcut keymap="$default" first-keystroke="control alt R"/>
+            <keyboard-shortcut keymap="Mac OS X 10.5+" first-keystroke="control alt U" replace-all="true"/>
+            <keyboard-shortcut keymap="Mac OS X" first-keystroke="control alt U" replace-all="true"/>
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+            <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
+            <add-to-group group-id="EditorTabPopupMenu" anchor="last"/>
+        </action>
+        <action id="EmmyLua.Debug.DiagnoseBreakpoints" class="com.fixcode.intellij.lua.debug.xdebugger.DiagnoseBreakpointsAction">
+            <add-to-group group-id="RunMenu" anchor="last"/>
+            <add-to-group group-id="XDebugger.ToolWindow.TopToolbar3.Extra" anchor="last"/>
+        </action>
+    </actions>
+
     <actions>
         <group id="EmmyLua.Debug.Tools" popup="true" text="EmmyLua 调试">
             <action id="EmmyLua.Debug.InstallMcp"
