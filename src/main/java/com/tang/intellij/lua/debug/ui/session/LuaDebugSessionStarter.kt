@@ -35,13 +35,17 @@ import com.tang.intellij.lua.debug.ui.mcp.LuaMcpInstallPrompt
  * 保证它们看到的是同一种会话：同样的页签、同样的 MCP 提示。
  */
 object LuaDebugSessionStarter {
+    /** 正在调试的本机进程，「Lua 附加」据此跳过已附加的进程。 */
+    private val attachedPids = java.util.concurrent.ConcurrentHashMap.newKeySet<Int>()
+
+    fun isAttached(pid: Int): Boolean = pid in attachedPids
 
     /** 运行配置入口：返回给 ProgramRunner 的 RunContentDescriptor。 */
     @Throws(ExecutionException::class)
     fun start(env: ExecutionEnvironment, target: LuaDebugTarget): RunContentDescriptor {
         val factory = requireFactory(target)
         val session = XDebuggerManager.getInstance(env.project).startSession(env, starter(factory, target))
-        afterStart(env.project, session)
+        afterStart(env.project, session, target)
         return session.runContentDescriptor
     }
 
@@ -51,7 +55,7 @@ object LuaDebugSessionStarter {
         val factory = requireFactory(target)
         val session = XDebuggerManager.getInstance(project)
             .startSessionAndShowTab(target.displayName, null, starter(factory, target))
-        afterStart(project, session)
+        afterStart(project, session, target)
         return session
     }
 
@@ -65,7 +69,13 @@ object LuaDebugSessionStarter {
         override fun start(session: XDebugSession): XDebugProcess = factory.createDebugProcess(session, target)
     }
 
-    private fun afterStart(project: Project, session: XDebugSession) {
+    private fun afterStart(project: Project, session: XDebugSession, target: LuaDebugTarget) {
+        if (target is LuaDebugTarget.LocalProcess) {
+            attachedPids += target.pid
+            session.addSessionListener(object : com.intellij.xdebugger.XDebugSessionListener {
+                override fun sessionStopped() { attachedPids -= target.pid }
+            })
+        }
         // 页签要等会话 UI 建好再加；startSession 返回时通常已经建好，保险起见放到下一轮 EDT。
         ApplicationManager.getApplication().invokeLater({
             if (!project.isDisposed && !session.isStopped) LuaDebugSessionTabs.install(project, session)
