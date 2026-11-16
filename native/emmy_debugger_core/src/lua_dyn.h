@@ -17,6 +17,12 @@
 extern "C" {
 #endif
 #include "emmy_lua_dyn_list.h" /* luaL_* 改名必须在 lauxlib.h 之前 */
+/* 宿主可能改过 LUA_IDSIZE（lua_Debug.short_src 的长度）。我们在自己栈上放的 lua_Debug 交给宿主的
+ * lua_getstack / lua_getinfo 去填，宿主按它的长度写 short_src 和后面的 i_ci，比我们的大就会写坏栈。
+ * 所以这里把长度放大（luaconf.h 无条件定义它，只能先包含再改），并且核心不读 i_ci（见 lua_internal.cpp）。 */
+#include "luaconf.h"
+#undef LUA_IDSIZE
+#define LUA_IDSIZE 512
 #include "lua.h"
 #include "lauxlib.h"
 #include "lualib.h"

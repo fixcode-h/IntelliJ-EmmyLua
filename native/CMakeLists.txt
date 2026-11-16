@@ -7,6 +7,13 @@ project(emmy)
 
 set(CMAKE_CXX_STANDARD 14)
 
+# Release 也生成 PDB（/Z7 把调试信息放进 .obj，并行编译不抢同一个 .pdb；/DEBUG 让链接器输出 .pdb）。
+# 注入到别人进程里崩溃时，用户在 VS 里加载这些 PDB 才看得到函数名和行号。/OPT 两项恢复 /DEBUG 默认关掉的裁剪。
+if(MSVC)
+    add_compile_options($<$<CONFIG:Release>:/Z7>)
+    add_link_options($<$<CONFIG:Release>:/DEBUG> $<$<CONFIG:Release>:/OPT:REF> $<$<CONFIG:Release>:/OPT:ICF>)
+endif()
+
 if(NOT WIN32)
     message(STATUS "native/ 顶层只有 Windows 附加工具；调试核心请直接构建 native/emmy_debugger_core")
     return()

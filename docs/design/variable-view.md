@@ -636,6 +636,8 @@ typedef struct EmmyHostValueProviderV2 {
 
 EMMY_HOST_API_EXPORT uint64_t EMMY_HOST_API_CALL Emmy_RegisterHostValueProviderV2(const EmmyHostValueProviderV2* provider);
 EMMY_HOST_API_EXPORT int      EMMY_HOST_API_CALL Emmy_UnregisterHostValueProviderV2(uint64_t providerId);
+// 可选（宿主先查导出再用）：id 是否还注册着。同一组回调 + userData 重复注册返回原 id。
+EMMY_HOST_API_EXPORT int      EMMY_HOST_API_CALL Emmy_HasHostValueProviderV2(uint64_t providerId);
 ```
 
 runtime 侧约定：

@@ -5,7 +5,8 @@
 //      用这个模块的导出表给核心解析 Lua 函数，挂 lua_pcall / lua_pcallk / lua_resume / lua_close，监听端口；
 //   2. 每次：更新 token（IDE 每个会话一个）。
 // 挂钩的入口只负责在 Lua 线程上把 lua_State 报给核心（Emmy_RegisterLuaVm），其余都在核心里。
-// 目标进程之后才加载的 Lua 模块不处理：附加时 Lua 必须已经在跑（附加到运行中的游戏就是这样）。
+// 附加时还没有 Lua 模块（UE 编辑器里 Game 还没启动）：返回 kWaitingForLua，后台线程每秒找一次，找到后照第 1 步初始化，
+// token 用最近一次附加给的。UnLua 等把 Lua 当 C++ 编译时导出名是修饰过的（?lua_gettop@@...），按 @@ 前的名字认。
 #include <Windows.h>
 #include <Psapi.h>
 #include <TlHelp32.h>
@@ -47,7 +48,8 @@ std::unordered_map<std::string, void*> g_luaSymbols; // 选中的 Lua 模块的�
 
 // ---- PE 导出表（只用裸指针，__try 里不能有要析构的 C++ 对象） ----
 struct RawExport {
-	const char* name;
+	const char* name; // 指向模块的导出名表；C++ 修饰名时已跳过开头的 '?'
+	size_t length;    // 名字长度（修饰名只取到 "@@" 之前）
 	DWORD rva;
 };
 
@@ -66,12 +68,23 @@ size_t ReadLuaExports(const uint8_t* base, RawExport* out, size_t capacity) {
 		const auto* functions = reinterpret_cast<const DWORD*>(base + exp->AddressOfFunctions);
 		for (DWORD i = 0; i < exp->NumberOfNames && count < capacity; ++i) {
 			const char* name = reinterpret_cast<const char*>(base + names[i]);
-			if (name[0] != 'l' || name[1] != 'u' || name[2] != 'a') continue; // lua_* / luaL_* / luaJIT_*
+			size_t length = 0;
+			if (name[0] == '?') {
+				// C++ 修饰名：?lua_gettop@@YAHPEAUlua_State@@@Z → lua_gettop（Lua 当 C++ 编译时的全局函数）
+				++name;
+				if (name[0] != 'l' || name[1] != 'u' || name[2] != 'a') continue;
+				while (name[length] != '\0' && !(name[length] == '@' && name[length + 1] == '@')) ++length;
+				if (name[length] == '\0') continue;
+			} else {
+				if (name[0] != 'l' || name[1] != 'u' || name[2] != 'a') continue; // lua_* / luaL_* / luaJIT_*
+				length = strlen(name);
+			}
 			const DWORD ordinal = ordinals[i];
 			if (ordinal >= exp->NumberOfFunctions) continue;
 			const DWORD rva = functions[ordinal];
 			if (rva >= dir.VirtualAddress && rva < dir.VirtualAddress + dir.Size) continue; // 转发导出
 			out[count].name = name;
+			out[count].length = length;
 			out[count].rva = rva;
 			++count;
 		}
@@ -101,7 +114,10 @@ HMODULE FindLuaModule(std::unordered_map<std::string, void*>& symbols) {
 		const auto* base = reinterpret_cast<const uint8_t*>(entry.hModule);
 		const size_t n = ReadLuaExports(base, exports, sizeof(exports) / sizeof(exports[0]));
 		std::unordered_map<std::string, void*> found;
-		for (size_t i = 0; i < n; ++i) found[exports[i].name] = const_cast<uint8_t*>(base) + exports[i].rva;
+		for (size_t i = 0; i < n; ++i) {
+			// 同名的 C 导出和修饰名都有时取先出现的
+			found.emplace(std::string(exports[i].name, exports[i].length), const_cast<uint8_t*>(base) + exports[i].rva);
+		}
 		if (!found.count("lua_gettop") || !(found.count("lua_pcall") || found.count("lua_pcallk"))) continue;
 		if (found.size() > symbols.size()) {
 			symbols.swap(found);
@@ -271,22 +287,55 @@ uint32_t Initialize() {
 	return emmy_attach::kOk;
 }
 
+// ---- 等 Lua 加载 ----
+bool g_waiting = false;    // 后台线程在找 Lua（g_initLock 保护）
+std::string g_pendingToken; // 等待期间最近一次附加给的 token（g_initLock 保护）
+
+// 调用前持有 g_initLock
+void TryInitializeLocked() {
+	g_initResult = Initialize();
+	// 还没找到 Lua 时之后再找；其余失败不重试，避免挂两遍钩子
+	g_initialized = g_initResult != emmy_attach::kNoLua;
+	if (!g_initialized) g_luaSymbols.clear();
+	// 每次附加（含重连）都换成 IDE 这次给的 token；空串表示不校验
+	if (g_initResult == emmy_attach::kOk) g_core.setToken(g_pendingToken.c_str());
+}
+
+DWORD WINAPI WaitForLuaThread(LPVOID) {
+	for (;;) {
+		Sleep(1000);
+		AcquireSRWLockExclusive(&g_initLock);
+		if (!g_initialized) TryInitializeLocked();
+		const bool done = g_initialized;
+		if (done) g_waiting = false;
+		ReleaseSRWLockExclusive(&g_initLock);
+		if (done) return 0;
+	}
+}
+
 } // namespace
 
 // emmy_tool 的远程线程入口。param 为 RemoteThreadParam*（可能为空）。返回 emmy_attach::Result。
 DWORD WINAPI AttachInit(LPVOID param) {
+	const auto* p = static_cast<const RemoteThreadParam*>(param);
 	AcquireSRWLockExclusive(&g_initLock);
+	g_pendingToken = p ? p->authToken : "";
 	if (!g_initialized) {
-		g_initResult = Initialize();
-		// 还没找到 Lua 时允许下次附加再找（目标可能稍后才加载 Lua）；其余失败不重试，避免挂两遍钩子
-		g_initialized = g_initResult != emmy_attach::kNoLua;
-		if (!g_initialized) g_luaSymbols.clear();
+		TryInitializeLocked();
+	} else if (g_initResult == emmy_attach::kOk) {
+		g_core.setToken(g_pendingToken.c_str());
 	}
-	const uint32_t result = g_initResult;
-	if (result == emmy_attach::kOk) {
-		const auto* p = static_cast<const RemoteThreadParam*>(param);
-		// 每次附加（含重连）都换成 IDE 这次给的 token；空串表示不校验
-		g_core.setToken(p ? p->authToken : "");
+	uint32_t result = g_initResult;
+	if (!g_initialized) {
+		// 还没有 Lua：留在进程里等。线程只开一个，重复附加只更新 token
+		if (!g_waiting) {
+			HANDLE thread = CreateThread(nullptr, 0, &WaitForLuaThread, nullptr, 0, nullptr);
+			if (thread) {
+				CloseHandle(thread);
+				g_waiting = true;
+			}
+		}
+		if (g_waiting) result = emmy_attach::kWaitingForLua;
 	}
 	ReleaseSRWLockExclusive(&g_initLock);
 	return result;

@@ -739,6 +739,8 @@ IDE 收到不认识的错误码按 `INTERNAL` 处理并展示 `message`。
 1. 选位数：`emmy_tool.exe arch_pid <pid>`，用插件目录下对应的 `x86/` 或 `x64/`。
 2. 附加：`emmy_tool.exe attach -p <pid> -dir <位数目录> -dll emmy_hook.dll -auth-token <token> -protocol 3`。`-protocol 3` 时 `-dll` 被忽略，注入的是 `emmy_attach.dll`；token 建议 32 位十六进制，空串表示不校验。
 3. 结果：stdout **最后一行**是 JSON。成功 `{"ok":true,"protocol":3,"host":"127.0.0.1","port":N,"pid":P,"reinjected":false}`，退出码 0；失败 `{"ok":false,"protocol":3,"pid":P,"error":"中文原因"}`，退出码非 0。
+   - 目标进程还没加载 Lua（例如 UE 编辑器里 Game 还没启动）时不算失败：`emmy_attach.dll` 留在进程里，后台每秒找一次导出 Lua API 的模块，找到后自动挂钩、开始监听 `port`。这时返回 `{"ok":true,...,"waiting":true,"message":"..."}`，退出码 0；IDE 显示「等待 Lua 加载」，持续尝试连 `port`，连上后照常握手。等待期间再次附加只更新 token，仍返回 `waiting:true`。
+   - Lua 当 C++ 编译（UnLua 等）时导出名是修饰过的（`?lua_gettop@@...`），按 `@@` 前的名字认。
 4. 重复附加（含 IDE 重连）：进程里已有 `emmy_attach.dll` 时不再注入，只换 token，返回 `reinjected:true`。进程里有旧版 `emmy_hook.dll` 时直接失败，提示重启目标进程。
 5. 目标进程里：`emmy_attach.dll` 在已加载模块里找导出 `lua_*` 的模块，按导出判断 Lua 版本（`lua_newuserdatauv` → 5.4，`lua_rotate` → 5.3，`lua_callk` → 5.2，否则 5.1；有 `luaJIT_setmode` 时报不支持），加载同目录的 `lua5X/emmy_debugger_core.dll`（dynamic 模式，用目标进程自己的 Lua），挂 `lua_pcall` / `lua_pcallk` / `lua_resume` / `lua_close` 在 Lua 线程上登记 VM，然后监听端口。附加时 Lua 必须已加载。
 6. 文件布局（每个位数目录）：`emmy_tool.exe`、`emmy_attach.dll`、`EasyHook.dll`、`lua51/` … `lua54/emmy_debugger_core.dll`。

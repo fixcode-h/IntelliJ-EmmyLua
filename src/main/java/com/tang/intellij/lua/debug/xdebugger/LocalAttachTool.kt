@@ -14,6 +14,7 @@ import java.util.concurrent.TimeUnit
  * - 注入：`emmy_tool.exe attach -p <pid> -dir <位数目录> -dll emmy_hook.dll -auth-token <token> -protocol 3`。
  * - 结果：stdout 最后一行 JSON。成功 `{"ok":true,"protocol":3,"host":"127.0.0.1","port":N,"pid":P,"reinjected":false}`，
  *   失败 `{"ok":false,"error":"中文原因"}` + 非 0 退出码。端口以 JSON 为准（被占用时 runtime 会顺延）。
+ * - 目标还没加载 Lua 时返回 `"waiting":true`（退出码 0）：组件在后台等 Lua 出现后才监听端口，IDE 持续连端口即可，不重新注入。
  * - 进程里已有 hook 时不重复注入，只更新 token 并返回同样的 JSON（reinjected:true），所以每次建连都可以先跑一遍。
  */
 class LocalAttachTool(
@@ -22,25 +23,44 @@ class LocalAttachTool(
     private val log: (String) -> Unit = {},
     private val timeoutSeconds: Long = 30
 ) {
-    data class Result(val host: String, val port: Int, val pid: Int, val reinjected: Boolean)
+    data class Result(
+        val host: String,
+        val port: Int,
+        val pid: Int,
+        val reinjected: Boolean,
+        /** 目标还没加载 Lua：调试组件已就位，Lua 加载后才开始监听 [port]，这期间连不上是正常的。 */
+        val waiting: Boolean = false,
+        val message: String? = null
+    )
 
-    fun attach(pid: Int, token: String): Result {
-        val arch = detectArch(pid)
+    /** [arch] 为空时现查；同一个会话里应该只查一次（进程退出后 arch_pid 会失败，不能拿它的结果回退成 x86）。 */
+    fun attach(pid: Int, token: String, arch: String = detectArch(pid)): Result {
         val dir = File(toolsRoot, arch)
         val tool = File(dir, TOOL)
         if (!tool.isFile) throw IOException("插件里缺少 $arch/$TOOL，请确认插件包完整")
         log("注入 $arch 调试组件到进程 $pid …")
         val (exit, output) = run(listOf(tool.path, "attach", "-p", pid.toString(), "-dir", dir.path, "-dll", HOOK, "-auth-token", token, "-protocol", "3"), dir)
         val result = parseResult(output, exit)
-        log(if (result.reinjected) "进程里已有调试组件，复用它（${result.host}:${result.port}）" else "注入完成，runtime 监听 ${result.host}:${result.port}")
+        log(
+            when {
+                result.waiting -> result.message ?: "目标进程还没有加载 Lua，调试器已就位，Lua 加载后自动连上"
+                result.reinjected -> "进程里已有调试组件，复用它（${result.host}:${result.port}）"
+                else -> "注入完成，runtime 监听 ${result.host}:${result.port}"
+            }
+        )
         return result
     }
 
-    private fun detectArch(pid: Int): String {
+    /** 目标进程的位数（x64 / x86）。emmy_tool arch_pid 退出码 0 = x64，1 = x86，其他是出错（进程不存在、没权限）。 */
+    fun detectArch(pid: Int): String {
         val probe = File(File(toolsRoot, "x86"), TOOL).takeIf { it.isFile } ?: File(File(toolsRoot, "x64"), TOOL)
         if (!probe.isFile) throw IOException("插件里缺少 $TOOL，请确认插件包完整")
-        val (exit, _) = run(listOf(probe.path, "arch_pid", pid.toString()), probe.parentFile)
-        return if (exit == 0) "x64" else "x86"
+        val (exit, output) = run(listOf(probe.path, "arch_pid", pid.toString()), probe.parentFile)
+        return when (exit) {
+            0 -> "x64"
+            1 -> "x86"
+            else -> throw IOException("无法判断进程 $pid 的位数（emmy_tool 退出码 $exit）：${output.trim().takeLast(200)}")
+        }
     }
 
     private fun run(command: List<String>, dir: File): Pair<Int, String> {
@@ -84,7 +104,9 @@ class LocalAttachTool(
                 host = json.get("host")?.asString ?: "127.0.0.1",
                 port = json.get("port")?.asInt ?: throw IOException("注入结果里没有端口：$last"),
                 pid = json.get("pid")?.asInt ?: 0,
-                reinjected = json.get("reinjected")?.asBoolean == true
+                reinjected = json.get("reinjected")?.asBoolean == true,
+                waiting = json.get("waiting")?.asBoolean == true,
+                message = json.get("message")?.takeIf { it.isJsonPrimitive }?.asString
             )
         }
     }
