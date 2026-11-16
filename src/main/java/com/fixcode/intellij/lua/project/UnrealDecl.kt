@@ -45,12 +45,15 @@ object UnrealDecl {
         }
     }
 
-    /** UE 那边还没开时：IDE 里勾了开关就先打开再刷新，没勾就报错让先勾上。 */
-    fun refresh(project: Project, mode: Refresh): String {
+    /**
+     * UE 那边还没开时：IDE 里勾了开关就先打开再刷新，没勾就报错让先勾上。
+     * 设置页里勾了还没点「应用」时按界面上的勾选算（[enabledInUi]）。
+     */
+    fun refresh(project: Project, mode: Refresh, enabledInUi: Boolean? = null): String {
         val editor = editor(project)
         val status = UELinkClient.call(editor, "luadecl.status")
         if (status.get("active")?.asBoolean != true) {
-            if (!LuaProjectSettings.getInstance(project).unrealLuaDecl) {
+            if (!(enabledInUi ?: LuaProjectSettings.getInstance(project).unrealLuaDecl)) {
                 throw IOException("还没打开后台生成：先在 设置 → EmmyLua → 库目录 勾选「让 UE 编辑器后台生成反射声明」")
             }
             UELinkClient.call(editor, "luadecl.enable", JsonObject().apply { addProperty("enabled", true) })

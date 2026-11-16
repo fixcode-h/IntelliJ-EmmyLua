@@ -19,6 +19,7 @@ import com.intellij.ui.dsl.builder.panel
 import com.intellij.ui.dsl.builder.rows
 import java.io.IOException
 import java.nio.file.Files
+import javax.swing.JCheckBox
 import javax.swing.JLabel
 
 /** 设置 → 语言和框架 → EmmyLua。改了会影响 emmylua_ls 的项，应用后重启服务器。 */
@@ -33,6 +34,7 @@ class LuaSettingsConfigurable(private val project: Project) :
     private var detectUnreal = proj.detectUnrealProject
     private var libraries = proj.additionalSourcesRoot.joinToString("\n")
     private var declStatus: JLabel? = null
+    private var declCheck: JCheckBox? = null
     private var unrealLuaDecl = proj.unrealLuaDecl
 
     override fun createPanel(): DialogPanel = panel {
@@ -61,12 +63,12 @@ class LuaSettingsConfigurable(private val project: Project) :
                     .comment(describeUnreal())
             }
             row {
-                checkBox("让 UE 编辑器后台生成反射声明（需要 UEKit 的 UELink 2.5+）")
+                declCheck = checkBox("让 UE 编辑器后台生成反射声明（需要 UEKit 的 UELink 2.5+）")
                     .bindSelected(::unrealLuaDecl)
                     .comment(
                         "默认不生成。勾上后 UE 编辑器在后台把 C++ 类和蓝图生成 Lua 声明到 Intermediate/UELink/LuaDecl，" +
                             "蓝图编译、资源保存、Live Coding 后只更新变了的文件；IDE 有这个目录时优先用它。UE 编辑器后开的也会自动打开"
-                    )
+                    ).component
             }
             row("主动刷新：") {
                 for (mode in UnrealDecl.Refresh.entries) {
@@ -158,10 +160,11 @@ class LuaSettingsConfigurable(private val project: Project) :
     }
 
     private fun refreshUnrealDecl(mode: UnrealDecl.Refresh) {
+        val checked = declCheck?.isSelected
         declStatus?.text = "正在连 UE 编辑器…"
         ApplicationManager.getApplication().executeOnPooledThread {
             val text = try {
-                UnrealDecl.refresh(project, mode)
+                UnrealDecl.refresh(project, mode, checked)
             } catch (e: IOException) {
                 e.message ?: "失败"
             }
