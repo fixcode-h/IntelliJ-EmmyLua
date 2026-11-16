@@ -8,6 +8,17 @@
 
 EmmyLua 是一个功能强大的 Lua 语言支持插件，专为 IntelliJ IDEA 系列 IDE 设计。在原有 EmmyLua 功能基础上，本版本特别增加了 **LuaPanda 调试模式**，为 Lua 开发者提供更完整的开发体验。
 
+> **重构进行中**：调试部分正在按 [调试插件重构设计](docs/design/2026-11-debugger-redesign.md) 重写（附加调试 + Android 真机附加 + MCP）。原 EmmyLuaDebugger 原生调试器已并入本仓库 `native/` 目录，不再使用子模块。开发在 `dev` 分支进行。
+
+## 📁 仓库结构
+
+| 目录 | 内容 |
+| --- | --- |
+| `src/`、`gen/` | IntelliJ 插件（语言支持 + 调试 IDE 侧） |
+| `modules/` | 调试相关的独立 Kotlin 模块 |
+| `native/` | 原生调试 runtime（原 EmmyLuaDebugger）：调试核心、`emmy_core` Lua 模块、Windows 附加注入、测试 |
+| `docs/design/` | 设计文档；`archive/` 下是历史设计 |
+
 ## ✨ 主要特性
 
 ### 🔧 核心功能
@@ -68,7 +79,7 @@ EmmyLua 是一个功能强大的 Lua 语言支持插件，专为 IntelliJ IDEA �
 5. 重启 IDE
 
 ### 方式二：手动安装
-1. 从 [Releases](https://github.com/tangzx/IntelliJ-EmmyLua/releases) 页面下载最新版本
+1. 从 [Releases](https://github.com/fixcode-h/IntelliJ-EmmyLua/releases) 页面下载最新版本
 2. 进入 `File` → `Settings` → `Plugins`
 3. 点击齿轮图标 → `Install Plugin from Disk...`
 4. 选择下载的插件文件（.zip 格式）
@@ -227,8 +238,9 @@ end
 ### 开发环境设置
 1. **克隆仓库**
    ```bash
-   git clone https://github.com/tangzx/IntelliJ-EmmyLua.git
+   git clone https://github.com/fixcode-h/IntelliJ-EmmyLua.git
    cd IntelliJ-EmmyLua
+   git switch dev
    ```
 
 2. **构建项目**

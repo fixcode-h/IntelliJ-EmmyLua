@@ -42,7 +42,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/verify-emmy-native-res
 98017A9CD5AC79ED3A7238642604E9A1626785F3E8F337596B8E3A617BC96C37
 ```
 
-JVM 报告位于根、`modules/*`、`tools/emmy-debug` 的 `build/test-results/test`；Verifier 位于 `build/reports/pluginVerifier/IC-252.23892.409`。Native 的构建目录、配置、命令与 TCP 放行前后报告见 [Native 验收记录](../../../EmmyLuaDebugger/docs/native_socket_acceptance_20260910.md)。拦截证据、应用规则对照及尚未确定的策略来源见 [本机 TCP 诊断](../../native-tcp-firewall-diagnosis-20260910.md)。项目保留 TCP，不引入 WebSocket。
+JVM 报告位于根、`modules/*`、`tools/emmy-debug` 的 `build/test-results/test`；Verifier 位于 `build/reports/pluginVerifier/IC-252.23892.409`。Native 的构建目录、配置、命令与 TCP 放行前后报告见 [Native 验收记录](../../../../../native/docs/native_socket_acceptance_20260910.md)。拦截证据、应用规则对照及尚未确定的策略来源见 [本机 TCP 诊断](../../../../native-tcp-firewall-diagnosis-20260910.md)。项目保留 TCP，不引入 WebSocket。
 
 统计范围固定为根插件、`debugger-core`、`debugger-transport`、`debugger-emmy-protocol`、`debugger-cli-protocol`、`debugger-luapanda-protocol` 和 `tools/emmy-debug`。不递归累计旧构建目录中已经退出 settings.gradle 的 AI/MCP 模块报告；此前记录的 223 项混入这些历史报告，已纠正。全量日志为 `build/verification-tools/final-verification.log`；真实联调 JUnit 为 `build/test-results/test/TEST-com.tang.intellij.test.debugger.EmmyNativeIdeFixtureIntegrationTest.xml`。
 
@@ -85,6 +85,6 @@ JVM 报告位于根、`modules/*`、`tools/emmy-debug` 的 `build/test-results/t
 
 ## 仍须完成的外部验收
 
-1. 在允许 Native 回环连接的环境补齐其他架构/配置此前排除的 TCP 项。x64 Lua 5.4 source 的两项已通过 [受限验收脚本](../../../tools/test-native-tcp-with-firewall.ps1) 完成，经用户授权仅临时放行两个精确程序的 127.0.0.1 入站 TCP，规则已删除；这不代表其他程序或宿主已获得防火墙修改授权，也不代表本机回环策略来源已经查明。
+1. 在允许 Native 回环连接的环境补齐其他架构/配置此前排除的 TCP 项。x64 Lua 5.4 source 的两项已通过 [受限验收脚本](../../../../../tools/test-native-tcp-with-firewall.ps1) 完成，经用户授权仅临时放行两个精确程序的 127.0.0.1 入站 TCP，规则已删除；这不代表其他程序或宿主已获得防火墙修改授权，也不代表本机回环策略来源已经查明。
 2. 安装本次插件包，在真实 IDEA 调试会话与 UE/UnLua Host 接入中验证两种启动顺序、零/双 VM、HotReload、重复 attach、Detach 后 PIE，以及 CLI Probe 条件采集与用户抢占。
 3. 获得远端提交授权后再运行 Linux/macOS 与 IDEA 251/252 CI。本次仅本地中文提交，没有 push，也没有合并提交历史。

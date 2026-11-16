@@ -636,5 +636,5 @@ CLI 请求与响应的最小形态：
 - 联调验证 source reset、表与特殊 key 的有界读取、Probe 自动清理，以及 VM 独立关闭时 IDEA 收到 CLOSING/CLOSED 且 Agent 保持在线；由实际 Gson 报文发现并修复 Native 可选字段读取断言。
 - 最后审查补齐 `wait --probe-id` 取消/超时/真实 socket 断开清理、同 ID 重装代次隔离、清理失败有界重试和诊断；普通 CLI 短连接不删除 Probe，终态事件仍可读取，CLI 等待失败返回非零退出码。已通过定向测试及包含真实联调的全量回归。
 - 新 Release Native 资源已打包，最终插件 ZIP 的八个资源 SHA-256 与输入完全一致；Plugin Verifier 判定 Compatible。
-- Native TCP 放行前独立复验失败 2/2；WFP 确认本机 Windows 防火墙的 Query User Default 拦截回环入站。17:46 经授权临时放行两个精确 exe 后，x64 Lua 5.4 source 的相同两项 2/2 通过，规则已删除，没有留下持久放行；[诊断记录](../../native-tcp-firewall-diagnosis-20260910.md) 明确区分直接原因与尚未查明的策略来源。
+- Native TCP 放行前独立复验失败 2/2；WFP 确认本机 Windows 防火墙的 Query User Default 拦截回环入站。17:46 经授权临时放行两个精确 exe 后，x64 Lua 5.4 source 的相同两项 2/2 通过，规则已删除，没有留下持久放行；[诊断记录](../../../../native-tcp-firewall-diagnosis-20260910.md) 明确区分直接原因与尚未查明的策略来源。
 - 仍未关闭：任务 10 的其他 Native 配置 TCP、实机/跨平台全矩阵。项目继续使用 TCP，没有 push，没有用 skip 或局部通过替代整体验收。
