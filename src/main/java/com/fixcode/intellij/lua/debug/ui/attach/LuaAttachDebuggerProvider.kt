@@ -51,12 +51,19 @@ class LuaAttachDebuggerProvider : XAttachDebuggerProvider {
         } catch (_: Exception) {
             LuaLocalProcessScanner.listProcesses()
         }
-        return LuaLocalProcessScanner.scan(processes).also { holder.putUserData(SCAN_KEY, it) }
+        return LuaLocalProcessScanner.scan(processes).also {
+            holder.putUserData(SCAN_KEY, it)
+            lastScan = it
+        }
     }
 
     companion object {
         private val SCAN_KEY = Key.create<Map<Int, LuaLocalProcess>>("EmmyLua.Debug.LuaProcessScan")
         internal val PROCESS_KEY = SCAN_KEY
+
+        /** 最近一次扫描结果：分组排序（compare 拿不到 dataHolder）按它取优先级。 */
+        @Volatile
+        internal var lastScan: Map<Int, LuaLocalProcess> = emptyMap()
     }
 }
 
@@ -101,9 +108,14 @@ internal object LuaProcessGroup : XAttachProcessPresentationGroup {
     override fun getItemDescription(project: Project, info: ProcessInfo, dataHolder: UserDataHolder): String? =
         dataHolder.getUserData(LuaAttachDebuggerProvider.PROCESS_KEY)?.get(info.pid)?.executablePath
 
+    /** 带 UELink 名片的编辑器 / 游戏排前面，其余按名字。 */
     override fun compare(a: ProcessInfo, b: ProcessInfo): Int =
-        a.executableDisplayName.compareTo(b.executableDisplayName, ignoreCase = true).takeIf { it != 0 }
+        priorityOf(b).compareTo(priorityOf(a)).takeIf { it != 0 }
+            ?: a.executableDisplayName.compareTo(b.executableDisplayName, ignoreCase = true).takeIf { it != 0 }
             ?: a.pid.compareTo(b.pid)
+
+    private fun priorityOf(info: ProcessInfo): Int =
+        LuaAttachDebuggerProvider.lastScan[info.pid]?.let { LuaLocalProcessScanner.priority(it) } ?: 0
 
     private fun isRecent(project: Project, process: LuaLocalProcess): Boolean =
         LuaDebugProjectState.getInstance(project).recentAttachTargets

@@ -3,6 +3,7 @@ package com.fixcode.intellij.lua.debug.ui.process
 import com.fixcode.intellij.lua.debug.api.LuaLocalProcess
 import com.fixcode.intellij.lua.debug.api.LuaProcessTagProvider
 import com.fixcode.intellij.lua.debug.ui.LuaDebugBundle
+import com.fixcode.intellij.lua.project.UELinkClient
 
 /**
  * 识别 UE 进程。UnLua 把 Lua 静态链接进模块，tasklist 看不到 lua*.dll，
@@ -13,7 +14,21 @@ import com.fixcode.intellij.lua.debug.ui.LuaDebugBundle
  */
 class UnrealProcessTagProvider : LuaProcessTagProvider {
 
-    override fun tags(process: LuaLocalProcess): List<String> = when (classify(process)) {
+    override fun tags(process: LuaLocalProcess): List<String> {
+        // 有 UELink 名片时按名片标：类型准确（编辑器 / 游戏 / 服务器），还能带上项目名
+        card(process)?.let { card ->
+            val kind = when (card.kind) {
+                UELinkClient.KIND_EDITOR -> LuaDebugBundle.message("tag.ue.editor")
+                UELinkClient.KIND_GAME -> LuaDebugBundle.message("tag.ue.game")
+                UELinkClient.KIND_SERVER -> LuaDebugBundle.message("tag.ue.server")
+                else -> card.label
+            }
+            return listOf(LuaDebugBundle.message("tag.uelink", kind, card.projectName ?: "?"))
+        }
+        return byName(process)
+    }
+
+    private fun byName(process: LuaLocalProcess): List<String> = when (classify(process)) {
         Kind.EDITOR -> listOf(
             if (isStandaloneGame(process)) LuaDebugBundle.message("tag.ue.editorGame")
             else LuaDebugBundle.message("tag.ue.editor")
@@ -25,6 +40,19 @@ class UnrealProcessTagProvider : LuaProcessTagProvider {
 
     override fun isLikelyLuaHost(process: LuaLocalProcess): Boolean =
         classify(process).let { it == Kind.EDITOR || it == Kind.SERVER || it == Kind.GAME }
+
+    /** 带 UELink 名片的排最前（编辑器先于游戏），其次是认出来的 UE 进程。 */
+    override fun priority(process: LuaLocalProcess): Int {
+        val card = card(process)
+        if (card != null) return if (card.kind == UELinkClient.KIND_EDITOR) 30 else 20
+        return if (classify(process).let { it == Kind.EDITOR || it == Kind.SERVER || it == Kind.GAME }) 10 else 0
+    }
+
+    private fun card(process: LuaLocalProcess): UELinkClient.Instance? {
+        // 只对认出来的 UE 进程查名片（读磁盘），普通进程不查
+        if (classify(process).let { it != Kind.EDITOR && it != Kind.SERVER && it != Kind.GAME }) return null
+        return UELinkProcessCards.cardFor(process.pid, process.commandLine, process.executablePath)
+    }
 
     private enum class Kind { EDITOR, SERVER, GAME, TOOL, NONE }
 

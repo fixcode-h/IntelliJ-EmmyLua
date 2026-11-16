@@ -53,7 +53,8 @@ class UnrealIntelliSenseRootsTest : TestCase() {
         val card = tmp.resolve("123.json")
         Files.writeString(card, """{"pid":123,"kind":"editor","http":30110,"token":"t","startedAt":"2026-11-16T00:00:00Z"}""")
         assertEquals(UELinkClient.Instance(123, 30110, "t", "2026-11-16T00:00:00Z"), UELinkClient.parseCard(card))
+        // 名片解析不再只认编辑器（热重载、附加列表也用 game 名片）；只认编辑器的是 findEditor
         Files.writeString(card, """{"pid":123,"kind":"game","http":30110,"token":"t"}""")
-        assertNull(UELinkClient.parseCard(card))
+        assertEquals("game", UELinkClient.parseCard(card)?.kind)
     }
 }

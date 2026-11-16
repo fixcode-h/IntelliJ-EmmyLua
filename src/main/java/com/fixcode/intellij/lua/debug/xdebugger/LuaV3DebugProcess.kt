@@ -22,6 +22,7 @@ import com.fixcode.intellij.lua.debug.api.LuaMappingStatus
 import com.fixcode.intellij.lua.debug.api.LuaSourceMappingEntry
 import com.fixcode.intellij.lua.debug.api.LuaVmInfo
 import com.fixcode.intellij.lua.debug.api.LuaVmState
+import com.fixcode.intellij.lua.debug.engine.BreakpointDiagnostics
 import com.fixcode.intellij.lua.debug.engine.BreakpointOrigin
 import com.fixcode.intellij.lua.debug.engine.BreakpointRequest
 import com.fixcode.intellij.lua.debug.engine.BreakpointVerification
@@ -172,6 +173,7 @@ class LuaV3DebugProcess(
         notifyModel(event)
         when (event) {
             is DebugEvent.Paused -> {
+                diagnostics.recordChunk(event.pause.top?.chunkName)
                 logPauseLocation(event.pause)
                 if (event.focused) present(event.pause)
             }
@@ -181,14 +183,25 @@ class LuaV3DebugProcess(
                 if (event.initiator != Initiator.USER && engine.focusedPause() == null) session.sessionResumed()
             }
             is DebugEvent.BreakpointsChanged -> {
+                val now = System.currentTimeMillis()
+                event.breakpoints.forEach { diagnostics.recordBreakpoint(it, now) }
+                event.removedIds.forEach(diagnostics::forget)
+                if (event.breakpoints.any { it.verification == BreakpointVerification.PENDING }) scheduleUnmatchedCheck()
                 event.breakpoints.forEach(::updateBreakpointState)
                 event.breakpoints.forEach(::logBreakpointState)
                 event.removedIds.forEach { loggedStates.remove(it) }
             }
-            is DebugEvent.Output -> printOutput(event)
+            is DebugEvent.Output -> {
+                printOutput(event)
+                // runtime 的「断点下发后没匹配上」报告：记下执行过的 chunk，没对上的断点马上变灰
+                if (diagnostics.recordOutput(event.output.category, event.output.text, event.output.vmId)) refreshUnmatched()
+            }
             is DebugEvent.Disconnected -> print("[EmmyLua] 连接断开：${event.reason}，正在重连…\n", ConsoleViewContentType.LOG_WARNING_OUTPUT)
             is DebugEvent.Connected -> {
-                if (event.reconnect) print("[EmmyLua] 已重新连接，断点已重新下发。\n", ConsoleViewContentType.SYSTEM_OUTPUT)
+                if (event.reconnect) {
+                    diagnostics.resetRuntimeReports()
+                    print("[EmmyLua] 已重新连接，断点已重新下发。\n", ConsoleViewContentType.SYSTEM_OUTPUT)
+                }
                 schedulePendingHint()
             }
             is DebugEvent.SourceMismatch -> print(
@@ -257,6 +270,40 @@ class LuaV3DebugProcess(
         }, 20, java.util.concurrent.TimeUnit.SECONDS)
     }
 
+    // ---------- 断点诊断：一直没对上代码的断点变灰并说明原因；「诊断断点」动作的报告 ----------
+
+    /** 和 runtime 的 5 秒诊断报告共用数据（protocol-v3.md 7.2 末尾）。 */
+    val diagnostics = BreakpointDiagnostics()
+
+    /** 老 runtime 不发诊断报告时，按超时再看一次。 */
+    private fun scheduleUnmatchedCheck() {
+        com.intellij.util.concurrency.AppExecutorUtil.getAppScheduledExecutorService().schedule({
+            if (!stopping) refreshUnmatched()
+        }, BreakpointDiagnostics.DEFAULT_PENDING_TIMEOUT_MS + 200, java.util.concurrent.TimeUnit.MILLISECONDS)
+    }
+
+    private fun refreshUnmatched() = engine.breakpoints().forEach(::updateBreakpointState)
+
+    /**
+     * 「诊断断点」的报告：本次会话见过的 chunk 及其映射、每个断点的匹配结果、建议的映射（chunk → 本地文件）。
+     * 映射解析可能查文件索引，在后台线程调。
+     */
+    fun diagnosticsReport(): Pair<String, Map<String, String>> {
+        engine.sourceMapper.entries().forEach { diagnostics.recordChunk(it.chunkName) }
+        val now = System.currentTimeMillis()
+        val chunks = diagnostics.chunks()
+        val lines = engine.breakpoints().filter { it.request.origin != BreakpointOrigin.TEMPORARY }.map {
+            BreakpointDiagnostics.Companion.BreakpointLine(it, diagnostics.unmatchedReason(it, now), BreakpointDiagnostics.suggestChunks(it.request.file, chunks))
+        }
+        val (body, suggested) = BreakpointDiagnostics.report(lines, chunks) { engine.localPathOfChunk(it) }
+        val vms = engine.vms().joinToString("、") { "${it.name}(${it.vmId})" }.ifEmpty { "还没有" }
+        val header = "调试会话：${engine.config.name}　runtime：${engine.welcome?.runtime?.version ?: "未连接"}　VM：$vms\n\n"
+        return header + body to suggested
+    }
+
+    /** 应用「诊断断点」建议的映射；断点会按新的 chunk 名重新下发。 */
+    fun applyMappings(mappings: Map<String, String>) = mappings.forEach { (chunk, file) -> overrideMapping(chunk, file) }
+
     private fun logPauseLocation(pause: PauseInfo) {
         val top = pause.top ?: return
         if (!top.hasSource) return
@@ -305,7 +352,10 @@ class LuaV3DebugProcess(
             BreakpointVerification.VERIFIED -> session.setBreakpointVerified(breakpoint)
             BreakpointVerification.INVALID -> session.setBreakpointInvalid(breakpoint, view.message)
             BreakpointVerification.MISMATCH, BreakpointVerification.AMBIGUOUS -> session.setBreakpointInvalid(breakpoint, view.message)
-            BreakpointVerification.PENDING -> Unit
+            // 一直没对上代码：灰色图标 + 悬停说明原因；对上后 setBreakpointVerified 换回正常图标
+            BreakpointVerification.PENDING -> diagnostics.unmatchedReason(view, System.currentTimeMillis())?.let {
+                session.updateBreakpointPresentation(breakpoint, com.intellij.icons.AllIcons.Debugger.Db_muted_breakpoint, it)
+            }
         }
     }
 

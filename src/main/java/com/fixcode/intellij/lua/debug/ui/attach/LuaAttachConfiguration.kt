@@ -121,7 +121,8 @@ class LuaAttachConfiguration(project: Project, factory: ConfigurationFactory) :
             val candidates = if (options.onlyLuaProcesses) all.filter { LuaLocalProcessScanner.isLuaCandidate(it) } else all
             if (candidates.isNotEmpty()) {
                 return candidates.sortedWith(
-                    compareBy<LuaLocalProcess> { p -> recent.indexOfFirst { it == p.executablePath || it == p.name }.let { if (it < 0) Int.MAX_VALUE else it } }
+                    compareByDescending<LuaLocalProcess> { LuaLocalProcessScanner.priority(it) }
+                        .thenBy { p -> recent.indexOfFirst { it == p.executablePath || it == p.name }.let { if (it < 0) Int.MAX_VALUE else it } }
                         .thenByDescending { LuaLocalProcessScanner.isLuaCandidate(it) }
                         .thenBy { it.name.lowercase() }
                         .thenByDescending { it.pid }

@@ -29,7 +29,7 @@ import com.fixcode.intellij.lua.debug.ui.mcp.LuaMcpInstallDialog
 import javax.swing.JCheckBox
 
 /**
- * `Settings > Tools > EmmyLua 调试`（设计文档 10.5）：MCP、设备、日志三段。
+ * `Settings > Tools > EmmyLua 调试`（设计文档 10.5）：MCP、UE、设备、变量视图、日志。
  * 用 Kotlin UI DSL v2 绑定到 [LuaDebugSettings]，应用时通知 MCP 服务按新端口重启。
  */
 class LuaDebugConfigurable : BoundConfigurable(LuaDebugBundle.message("settings.title")) {
@@ -64,6 +64,13 @@ class LuaDebugConfigurable : BoundConfigurable(LuaDebugBundle.message("settings.
             }
             if (mcp == null) {
                 row { comment(LuaDebugBundle.message("mcp.error.noService")) }
+            }
+        }
+        group(LuaDebugBundle.message("settings.ue")) {
+            row {
+                checkBox(LuaDebugBundle.message("settings.ue.reloadOnSave"))
+                    .bindSelected(settings::reloadToUnrealOnSave)
+                    .comment(LuaDebugBundle.message("settings.ue.reloadOnSave.comment"))
             }
         }
         group(LuaDebugBundle.message("settings.device")) {

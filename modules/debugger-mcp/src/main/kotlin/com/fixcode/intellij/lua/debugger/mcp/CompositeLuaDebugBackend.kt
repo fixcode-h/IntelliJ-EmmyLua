@@ -137,6 +137,10 @@ class CompositeLuaDebugBackend(private val members: () -> List<Member>) : LuaDeb
         return ProbeHitPage(hits, pages.maxOfOrNull { it.nextSeq } ?: sinceSeq)
     }
 
+    /** 给了文件时按第一个文件所属的项目发（UE 项目根从项目目录往上找）；否则发给当前焦点项目。 */
+    override fun reloadModules(request: ReloadRequest): CompletableFuture<ReloadResult> =
+        (request.files.firstOrNull()?.let { byFile(it) } ?: primary()).reloadModules(request)
+
     override fun sourceSnippet(file: String, line: Int, radius: Int): List<SourceLine>? =
         all().firstNotNullOfOrNull { it.backend.sourceSnippet(file, line, radius) }
 }

@@ -83,5 +83,8 @@ class McpPermissionPolicy(private val confirmer: McpConfirmer) {
     companion object {
         /** 没有会话的控制（下断点）用这个 key 记授权。 */
         const val BREAKPOINTS_KEY = "breakpoints"
+
+        /** UE 热重载（lua.reload）不属于哪个调试会话，单独记授权。 */
+        const val RELOAD_KEY = "ue-reload"
     }
 }
