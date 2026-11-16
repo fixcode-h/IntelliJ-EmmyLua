@@ -24,7 +24,7 @@ jobs:
           arch: x64
       - name: Build real Lua fixture
         run: |
-          cmake -S native -B build/native-ide -G Ninja -DCMAKE_BUILD_TYPE=Debug -DEMMY_USE_LUA_SOURCE=ON -DEMMY_VM_REGISTRY_TEST=ON -DEMMY_LUA_VERSION=54
+          cmake -S native -B build/native-ide -G Ninja -DCMAKE_BUILD_TYPE=Debug -DEMMY_USE_LUA_SOURCE=ON -DLUA_BUILD_AS_DLL=ON -DEMMY_VM_REGISTRY_TEST=ON -DEMMY_LUA_VERSION=54
           cmake --build build/native-ide --target emmy_native_ide_fixture emmy_attach_lua_fixture --parallel 4
       - name: Verify Native to IDEA to CLI
         shell: pwsh
