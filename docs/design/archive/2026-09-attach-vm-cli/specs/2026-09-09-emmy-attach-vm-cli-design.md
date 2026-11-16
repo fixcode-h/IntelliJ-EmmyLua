@@ -67,13 +67,13 @@
 
 关键源码入口：
 
-- IDEA 附加与连接：[EmmyAttachTargetBootstrap.kt](../../../src/main/java/com/tang/intellij/lua/debugger/emmy/attach/EmmyAttachTargetBootstrap.kt#L16)
-- IDEA 握手与消息处理：[EmmyDebugProcessBase.kt](../../../src/main/java/com/tang/intellij/lua/debugger/emmy/EmmyDebugProcessBase.kt#L121)
-- IDEA 对 `AttachedNotify` 的处理：[EmmyAttachDebugProcess.kt](../../../src/main/java/com/tang/intellij/lua/debugger/emmy/attach/EmmyAttachDebugProcess.kt#L26)
-- 原生 Facade：[emmy_facade.cpp](../../../EmmyLuaDebugger/emmy_debugger/src/emmy_facade.cpp#L209)
-- Windows hook：[emmy_hook.windows.cpp](../../../EmmyLuaDebugger/emmy_hook/src/emmy_hook.windows.cpp#L72)
-- 原生 Manager：[emmy_debugger_manager.h](../../../EmmyLuaDebugger/emmy_debugger/include/emmy_debugger/debugger/emmy_debugger_manager.h#L23)
-- 当前 Kotlin 协议：[EmmyProtocol.kt](../../../modules/debugger-emmy-protocol/src/main/kotlin/com/tang/intellij/lua/debugger/emmy/EmmyProtocol.kt#L24)
+- IDEA 附加与连接：[EmmyAttachTargetBootstrap.kt](../../../../../src/main/java/com/tang/intellij/lua/debugger/emmy/attach/EmmyAttachTargetBootstrap.kt#L16)
+- IDEA 握手与消息处理：[EmmyDebugProcessBase.kt](../../../../../src/main/java/com/tang/intellij/lua/debugger/emmy/EmmyDebugProcessBase.kt#L121)
+- IDEA 对 `AttachedNotify` 的处理：[EmmyAttachDebugProcess.kt](../../../../../src/main/java/com/tang/intellij/lua/debugger/emmy/attach/EmmyAttachDebugProcess.kt#L26)
+- 原生 Facade：[emmy_facade.cpp](../../../../../native/emmy_debugger/src/emmy_facade.cpp#L209)
+- Windows hook：[emmy_hook.windows.cpp](../../../../../native/emmy_hook/src/emmy_hook.windows.cpp#L72)
+- 原生 Manager：[emmy_debugger_manager.h](../../../../../native/emmy_debugger/include/emmy_debugger/debugger/emmy_debugger_manager.h#L23)
+- 当前 Kotlin 协议：[EmmyProtocol.kt](../../../../../modules/debugger-emmy-protocol/src/main/kotlin/com/tang/intellij/lua/debugger/emmy/EmmyProtocol.kt#L24)
 
 ### 3.2 当前 Attach 时序
 
@@ -135,10 +135,10 @@ Attach 目前用第一次 `AttachedNotify` 完成 `INITIALIZING -> RUNNING`，�
 
 证据：
 
-- 当前 hook 表只 hook `lua_pcall`、`lua_pcallk` 和 `lua_resume`，没有 hook `lua_newstate`、`luaL_newstate` 或 `lua_close`：[emmy_hook.windows.cpp](../../../EmmyLuaDebugger/emmy_hook/src/emmy_hook.windows.cpp#L142)。
-- `Hook()` 首次遇到未知 main state 时只发送 `AttachedNotify{state}`：[emmy_facade.cpp](../../../EmmyLuaDebugger/emmy_debugger/src/emmy_facade.cpp#L329)。
-- `OnLuaStateGC()` 会移除 Debugger，但不发送任何关闭事件：[emmy_facade.cpp](../../../EmmyLuaDebugger/emmy_debugger/src/emmy_facade.cpp#L315)。
-- `Debugger::Detach()` 当前为空：[emmy_debugger.cpp](../../../EmmyLuaDebugger/emmy_debugger/src/debugger/emmy_debugger.cpp#L138)。
+- 当前 hook 表只 hook `lua_pcall`、`lua_pcallk` 和 `lua_resume`，没有 hook `lua_newstate`、`luaL_newstate` 或 `lua_close`：[emmy_hook.windows.cpp](../../../../../native/emmy_hook/src/emmy_hook.windows.cpp#L142)。
+- `Hook()` 首次遇到未知 main state 时只发送 `AttachedNotify{state}`：[emmy_facade.cpp](../../../../../native/emmy_debugger/src/emmy_facade.cpp#L329)。
+- `OnLuaStateGC()` 会移除 Debugger，但不发送任何关闭事件：[emmy_facade.cpp](../../../../../native/emmy_debugger/src/emmy_facade.cpp#L315)。
+- `Debugger::Detach()` 当前为空：[emmy_debugger.cpp](../../../../../native/emmy_debugger/src/debugger/emmy_debugger.cpp#L138)。
 
 影响：
 
@@ -152,11 +152,11 @@ Attach 目前用第一次 `AttachedNotify` 完成 `INITIALIZING -> RUNNING`，�
 
 证据：
 
-- `ActionParams` 只有 `action`，`EvalContext` 只有栈层级和表达式，没有 VM 身份：[proto.h](../../../EmmyLuaDebugger/emmy_debugger/include/emmy_debugger/proto/proto.h#L99)。
-- Kotlin `BreakNotify` 只有 `stacks`，`EvalReq` 没有 `vmId` 或 `pauseId`：[EmmyProtocol.kt](../../../modules/debugger-emmy-protocol/src/main/kotlin/com/tang/intellij/lua/debugger/emmy/EmmyProtocol.kt#L149)。
-- `EmmyDebuggerManager` 使用进程级单个 `hitDebugger`，`DoAction()` 和 `Eval()` 都隐式作用于最后命中的 Debugger：[emmy_debugger_manager.h](../../../EmmyLuaDebugger/emmy_debugger/include/emmy_debugger/debugger/emmy_debugger_manager.h#L45)。
-- `HookStateStepOver` 等可变状态对象由 Manager 中所有 Debugger 共享：[emmy_debugger_manager.h](../../../EmmyLuaDebugger/emmy_debugger/include/emmy_debugger/debugger/emmy_debugger_manager.h#L79)。
-- `Debugger::GetStacks()` 在完成栈读取后仍返回 `false`，返回值无法表达“读取成功”：[emmy_debugger.cpp](../../../EmmyLuaDebugger/emmy_debugger/src/debugger/emmy_debugger.cpp#L219)。
+- `ActionParams` 只有 `action`，`EvalContext` 只有栈层级和表达式，没有 VM 身份：[proto.h](../../../../../native/emmy_debugger/include/emmy_debugger/proto/proto.h#L99)。
+- Kotlin `BreakNotify` 只有 `stacks`，`EvalReq` 没有 `vmId` 或 `pauseId`：[EmmyProtocol.kt](../../../../../modules/debugger-emmy-protocol/src/main/kotlin/com/tang/intellij/lua/debugger/emmy/EmmyProtocol.kt#L149)。
+- `EmmyDebuggerManager` 使用进程级单个 `hitDebugger`，`DoAction()` 和 `Eval()` 都隐式作用于最后命中的 Debugger：[emmy_debugger_manager.h](../../../../../native/emmy_debugger/include/emmy_debugger/debugger/emmy_debugger_manager.h#L45)。
+- `HookStateStepOver` 等可变状态对象由 Manager 中所有 Debugger 共享：[emmy_debugger_manager.h](../../../../../native/emmy_debugger/include/emmy_debugger/debugger/emmy_debugger_manager.h#L79)。
+- `Debugger::GetStacks()` 在完成栈读取后仍返回 `false`，返回值无法表达“读取成功”：[emmy_debugger.cpp](../../../../../native/emmy_debugger/src/debugger/emmy_debugger.cpp#L219)。
 
 影响：
 
@@ -170,9 +170,9 @@ Attach 目前用第一次 `AttachedNotify` 完成 `INITIALIZING -> RUNNING`，�
 
 证据：
 
-- IDEA 在连接后发送 `InitReq`、断点和 `ReadyReq`：[EmmyDebugProcessBase.kt](../../../src/main/java/com/tang/intellij/lua/debugger/emmy/EmmyDebugProcessBase.kt#L121)。
-- IDEA 通用 Emmy 会话只在收到 `ReadyRsp` 时调用 `markInitialized()`：[EmmyDebugProcessBase.kt](../../../src/main/java/com/tang/intellij/lua/debugger/emmy/EmmyDebugProcessBase.kt#L246)。
-- 原生 `ReadyReq()` 只修改布尔值并唤醒等待线程，没有发送 `ReadyRsp`：[emmy_facade.cpp](../../../EmmyLuaDebugger/emmy_debugger/src/emmy_facade.cpp#L263)。
+- IDEA 在连接后发送 `InitReq`、断点和 `ReadyReq`：[EmmyDebugProcessBase.kt](../../../../../src/main/java/com/tang/intellij/lua/debugger/emmy/EmmyDebugProcessBase.kt#L121)。
+- IDEA 通用 Emmy 会话只在收到 `ReadyRsp` 时调用 `markInitialized()`：[EmmyDebugProcessBase.kt](../../../../../src/main/java/com/tang/intellij/lua/debugger/emmy/EmmyDebugProcessBase.kt#L246)。
+- 原生 `ReadyReq()` 只修改布尔值并唤醒等待线程，没有发送 `ReadyRsp`：[emmy_facade.cpp](../../../../../native/emmy_debugger/src/emmy_facade.cpp#L263)。
 - 当前子模块源码中没有 `InitRsp`、`ReadyRsp`、`ActionRsp` 或断点响应的发送点。
 
 影响：通用 Emmy 会话可能永久停留在 `INITIALIZING`；Attach 又把首个 VM 发现错误地当作 Agent 握手成功。
@@ -183,10 +183,10 @@ Attach 目前用第一次 `AttachedNotify` 完成 `INITIALIZING -> RUNNING`，�
 
 证据：
 
-- IDEA 停止 Attach 时只关闭传输，本地明确记录“注入 DLL 由目标进程持有到进程退出”：[EmmyAttachTargetBootstrap.kt](../../../src/main/java/com/tang/intellij/lua/debugger/emmy/attach/EmmyAttachTargetBootstrap.kt#L51)。
-- 原生 `Debugger::Stop()` 明确不取消 Lua hook：[emmy_debugger.cpp](../../../EmmyLuaDebugger/emmy_debugger/src/debugger/emmy_debugger.cpp#L186)。
-- EasyHook handle 创建后没有被集中持有，现有 `UnHook()` 没有参与停止流程：[emmy_hook.windows.cpp](../../../EmmyLuaDebugger/emmy_hook/src/emmy_hook.windows.cpp#L128)。
-- `EmmyFacade::Destroy()` 会将 `transporter` 置空，但后续 hook 入口的 `Attach()` 会无空指针保护地访问 `transporter->IsConnected()`：[emmy_facade.cpp](../../../EmmyLuaDebugger/emmy_debugger/src/emmy_facade.cpp#L224)、[emmy_facade.cpp](../../../EmmyLuaDebugger/emmy_debugger/src/emmy_facade.cpp#L402)。
+- IDEA 停止 Attach 时只关闭传输，本地明确记录“注入 DLL 由目标进程持有到进程退出”：[EmmyAttachTargetBootstrap.kt](../../../../../src/main/java/com/tang/intellij/lua/debugger/emmy/attach/EmmyAttachTargetBootstrap.kt#L51)。
+- 原生 `Debugger::Stop()` 明确不取消 Lua hook：[emmy_debugger.cpp](../../../../../native/emmy_debugger/src/debugger/emmy_debugger.cpp#L186)。
+- EasyHook handle 创建后没有被集中持有，现有 `UnHook()` 没有参与停止流程：[emmy_hook.windows.cpp](../../../../../native/emmy_hook/src/emmy_hook.windows.cpp#L128)。
+- `EmmyFacade::Destroy()` 会将 `transporter` 置空，但后续 hook 入口的 `Attach()` 会无空指针保护地访问 `transporter->IsConnected()`：[emmy_facade.cpp](../../../../../native/emmy_debugger/src/emmy_facade.cpp#L224)、[emmy_facade.cpp](../../../../../native/emmy_debugger/src/emmy_facade.cpp#L402)。
 
 影响：IDE 断开、VM 继续执行后可能触发空指针访问；重复附加和重连也缺少明确代次。
 
