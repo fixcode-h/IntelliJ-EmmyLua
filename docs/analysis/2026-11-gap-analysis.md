@@ -75,7 +75,7 @@
 | **内嵌 runtime**（游戏里 `require("emmy_core")` 后 `tcpListen` / `tcpConnect`） | 旧版、VS Code 版的主要用法 | **没有 Lua 模块**：核心只导出 C ABI（`Emmy_ListenTcp` 等），没有 `luaopen_emmy_core` | 非 Windows 宿主（Linux 服务器、macOS 编辑器、自研引擎）没有接入方式；手动地址的运行配置连不到任何东西 | 设计 §7.5 列为可选。补一个薄的 Lua 绑定模块工作量小，但要同时出各平台 / 各 Lua 版本的包 |
 | macOS / Linux 附加 | 旧版也没有 | 没有 | 中：Mac 上做 UE / 服务器 Lua 的人无法调试 | 设计 §11 建议先做 Linux（ptrace）；有了内嵌 runtime 后，非 Windows 可以先走内嵌 |
 | iOS | LuaPanda 能做（纯 Lua，需要改包） | 不做 | 已确认不做 | 用户要求包内不加东西，不改包没有可靠方案 |
-| Android 无未裁剪 so 时的特征码兜底 | — | 没做 | 中：构建机清了 `Intermediate` 就附加不了 | 设计 §7.2 第 2 点；`native/platforms/android/README.md` 已知限制 |
+| Android 无未裁剪 so 时的特征码兜底 | — | 已做（2026-11），真机未验收 | 中：构建机清了 `Intermediate` 就附加不了 | 符号目录按 Build ID → 设备 so 的 .dynsym / MiniDebugInfo → 参考 so 特征码；见 `native/platforms/android/README.md`「没有未裁剪 so 时」 |
 | 热重载（保存后推给游戏重新加载） | UnLua 自带 `UnLua.HotReload`；LuaPanda 有 | 没有 | 中：UE 里改 Lua 的迭代速度 | 设计 §11 列为中优先级。UE 侧可经 UELink 调 UnLua 的热重载，不一定要走调试连接 |
 | 性能分析（采样 / 火焰图） | UnLua 生态有 LuaProfiler 类工具；UELink 有 `lua.profile` 钩子 | 没有 | 中 | 核心已有 `HookMux`，可以和 UELink 共用 |
 | 内存快照与对比 | UELink 有 `lua.leaks`（UObject 方向） | 没有 | 低 | 设计 §11 低优先级 |
@@ -216,7 +216,7 @@
 | 12 | 附加列表接 UELink 名片；断点诊断动作 | S–M |
 | 13 | 采样性能分析（IDE 火焰图 + MCP） | L |
 | 14 | 断点性能可选补丁（如果第 5 项选了它） | M |
-| 15 | Android 特征码兜底 | M–L |
+| 15 | Android 特征码兜底（已做，待真机验收） | M–L |
 
 ### 之后再看
 

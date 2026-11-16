@@ -10,6 +10,8 @@ repositories {
 
 dependencies {
     compileOnly(kotlin("stdlib"))
+    // 解压 .gnu_debugdata（MiniDebugInfo，xz 格式）；JDK 没有 xz。随主插件一起打进 lib/（主工程 implementation 了本模块）
+    implementation("org.tukaani:xz:1.10")
     testImplementation(kotlin("stdlib"))
     testImplementation("junit:junit:4.13.2")
 }

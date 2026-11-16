@@ -12,7 +12,6 @@ import com.fixcode.intellij.lua.debugger.android.attach.AndroidAttachException
 import com.fixcode.intellij.lua.debugger.android.attach.AndroidAttachRequest
 import com.fixcode.intellij.lua.debugger.android.attach.AndroidAttachResult
 import com.fixcode.intellij.lua.debugger.android.attach.AndroidAttachSession
-import com.fixcode.intellij.lua.debugger.android.elf.LuaSymbolResolver
 import java.io.File
 
 /**
@@ -27,20 +26,21 @@ object AndroidAttachLauncher {
         fun detach() = session.detach()
     }
 
-    fun attach(project: Project, target: LuaDebugTarget.AndroidDevice, log: (String) -> Unit): Handle {
-        val adbFile = AdbLocator.locate(LuaDebugSettings.getInstance().adbPath)
+    /**
+     * 符号按「指定的 so → 符号目录（Build ID）→ 设备 so 自带的符号 → 参考 so 特征码」逐级找，见 LuaSymbolLocator。
+     * [cancelled] 返回 true（调试会话已停）时特征码搜索和等待 agent 尽快停下。
+     */
+    fun attach(project: Project, target: LuaDebugTarget.AndroidDevice, log: (String) -> Unit, cancelled: () -> Boolean = { false }): Handle {
+        val settings = LuaDebugSettings.getInstance()
+        val adbFile = AdbLocator.locate(settings.adbPath)
             ?: throw AndroidAttachException("没有找到 adb：安装 Android SDK Platform-Tools，或在设置里指定 adb 路径")
         val adb = AdbClient(ProcessAdbExecutor(adbFile))
-        val symbolPath = (LuaDeviceService.getInstance() ?: AndroidLuaDeviceService())
-            .resolveSymbolFile(project, target.symbolFile, target.deviceSerial, target.packageName)
-            ?: throw AndroidAttachException(
-                "没有找到未裁剪的 ${AndroidLuaDeviceService.MODULE_NAME}：在运行配置里指定，或在设置里添加符号搜索目录"
-            )
         val session = AndroidAttachSession(
             adb,
             AndroidLuaDeviceService.agentBinaries(),
-            LuaSymbolResolver(File(PathManager.getSystemPath(), "emmylua/android-symbols")),
+            AndroidLuaDeviceService.symbolLocator,
             log,
+            cancelled = cancelled,
         )
         val result = session.attach(
             AndroidAttachRequest(
@@ -48,8 +48,10 @@ object AndroidAttachLauncher {
                 packageName = target.packageName,
                 pid = target.pid,
                 launch = target.launchAndAttach,
-                symbolFile = File(symbolPath),
+                symbolFile = target.symbolFile?.takeIf { it.isNotBlank() }?.let(::File),
                 moduleName = AndroidLuaDeviceService.MODULE_NAME,
+                symbolDirs = settings.expandedSymbolSearchDirs(project).map(::File),
+                referenceSo = (target.referenceSo?.takeIf { it.isNotBlank() } ?: settings.expandedReferenceSo(project))?.let(::File),
             )
         )
         return Handle(result, session)

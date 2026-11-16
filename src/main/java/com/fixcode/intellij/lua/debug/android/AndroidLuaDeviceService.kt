@@ -23,7 +23,9 @@ import com.fixcode.intellij.lua.debugger.android.attach.AgentBinaryProvider
 import com.fixcode.intellij.lua.debugger.android.attach.AttachEnvironmentChecker
 import com.fixcode.intellij.lua.debugger.android.attach.CheckStatus
 import com.fixcode.intellij.lua.debugger.android.elf.DetectedLuaVersion
+import com.fixcode.intellij.lua.debugger.android.elf.LuaSymbolLocator
 import com.fixcode.intellij.lua.debugger.android.elf.LuaSymbolResolver
+import com.fixcode.intellij.lua.debugger.android.elf.SymbolSearchOptions
 import com.fixcode.intellij.lua.debugger.resources.DebuggerResourceService
 import java.io.File
 
@@ -33,9 +35,7 @@ import java.io.File
  */
 class AndroidLuaDeviceService : LuaDeviceService {
 
-    private val symbolResolver by lazy {
-        LuaSymbolResolver(File(PathManager.getSystemPath(), "emmylua/android-symbols"))
-    }
+    private val symbolResolver by lazy { LuaSymbolResolver(symbolCacheDir()) }
 
     override fun listDevices(): List<LuaDevice> = wrap {
         AndroidDevices(adb()).list().map { d ->
@@ -119,13 +119,15 @@ class AndroidLuaDeviceService : LuaDeviceService {
     override fun checkEnvironment(project: Project, target: LuaDebugTarget.AndroidDevice): List<LuaEnvCheckItem> {
         val adbFile = AdbLocator.locate(LuaDebugSettings.getInstance().adbPath)
         val adb = adbFile?.let { AdbClient(ProcessAdbExecutor(it)) }
-        val symbol = try {
-            resolveSymbolFile(project, target.symbolFile, target.deviceSerial, target.packageName)
-        } catch (_: Exception) {
-            null
-        }
-        return AttachEnvironmentChecker(adb, agentBinaries(), symbolResolver)
-            .check(target.deviceSerial, target.packageName, symbol?.let(::File))
+        val settings = LuaDebugSettings.getInstance()
+        val options = SymbolSearchOptions(
+            configuredFile = target.symbolFile?.takeIf { it.isNotBlank() }?.let(::File),
+            symbolDirs = settings.expandedSymbolSearchDirs(project).map(::File),
+            referenceSo = (target.referenceSo?.takeIf { it.isNotBlank() } ?: settings.expandedReferenceSo(project))?.let(::File),
+            moduleName = MODULE_NAME,
+        )
+        return AttachEnvironmentChecker(adb, agentBinaries(), symbolLocator)
+            .check(target.deviceSerial, target.packageName, options, MODULE_NAME)
             .map { item ->
                 LuaEnvCheckItem(
                     title = item.title,
@@ -165,6 +167,11 @@ class AndroidLuaDeviceService : LuaDeviceService {
 
     companion object {
         const val MODULE_NAME = "libUnreal.so"
+
+        private fun symbolCacheDir() = File(PathManager.getSystemPath(), "emmylua/android-symbols")
+
+        /** 附加和环境检查共用：符号目录索引、设备符号和特征码结果都缓存在 system 目录下。 */
+        val symbolLocator: LuaSymbolLocator by lazy { LuaSymbolLocator(symbolCacheDir()) }
 
         /**
          * 插件包里的 agent：资源 debugger/emmy/android/<abi>/libemmylua_agent.so（由 native/platforms/android/build_agent.sh 产出），

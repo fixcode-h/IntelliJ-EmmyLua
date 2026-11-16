@@ -86,6 +86,13 @@ class LuaDebugConfigurable : BoundConfigurable(LuaDebugBundle.message("settings.
                     .bindText({ settings.symbolSearchDirs.joinToString(";") }, { v -> settings.symbolSearchDirs = v.split(';') })
                     .comment(LuaDebugBundle.message("settings.device.symbols.comment"))
             }
+            row(LuaDebugBundle.message("settings.device.reference")) {
+                textFieldWithBrowseButton(
+                    FileChooserDescriptorFactory.createSingleFileNoJarsDescriptor()
+                        .withTitle(LuaDebugBundle.message("settings.device.reference.choose")),
+                ).align(AlignX.FILL).bindText(settings::referenceSo)
+                    .comment(LuaDebugBundle.message("settings.device.reference.comment"))
+            }
         }
         group(LuaDebugBundle.message("settings.view")) {
             // 编辑期间改的是这份副本，apply 时整体写回，避免每个控件各自改 state。

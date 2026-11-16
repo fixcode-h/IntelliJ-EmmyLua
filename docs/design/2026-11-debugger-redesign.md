@@ -575,6 +575,7 @@ sequenceDiagram
 - IDE 读本地同一次构建的未裁剪 `libUnreal.so`（ELF 符号表），得到约 40 个 `lua_*` / `luaL_*` 函数的偏移，连同 GNU Build ID 一起传给 agent。agent 校验设备上 so 的 Build ID 一致后，用 `/proc/self/maps` 里的基址 + 偏移得到真实地址。Build ID 不一致直接报错："本地 so 和设备上的不是同一次构建"。
 - 现有 `lua_api_loader` 本来就是"运行时填函数指针表"的设计（PC 上用 `GetProcAddress`、Linux 上用 `dlsym`），这里只是多一个"符号偏移表"来源。`lua_Debug` 结构用 1024 字节的 `short_src` 兜底，能兼容 UnLua 的 `LUA_IDSIZE=256`；其余布局差异用已有的 `lua_abi_descriptor` 对账，后续可以从未裁剪 so 的 DWARF 里自动读出结构布局。
 - 没有未裁剪 so 时的兜底：按 Lua 版本内置的特征码扫描。特征码很脆弱，只当兜底，不作为默认。
+  - **已实现（2026-11）**，做法和这里最初的设想不同：不内置特征码，而是逐级兜底——符号目录按 Build ID 找（含 `.build-id` 布局）→ 设备 so 自带的 `.dynsym` / `.gnu_debugdata` → 用户指定的「参考 so」（同一工程以前任意一次构建的未裁剪 so）现场生成特征码，通配地址相关的立即数，在设备 so 里只接受唯一匹配。细节和限制见 `native/platforms/android/README.md`「没有未裁剪 so 时」。真机未验收。
 
 **3. 抓到 `lua_State` 并挂钩子**
 - 用内联 hook 库（Android 选 ShadowHook，MIT 协议，支持 arm64 / armv7）临时 hook `lua_pcallk` / `lua_resume`。第一次被调用时就在 Lua 所属线程上拿到 `lua_State`，调 `lua_sethook` 挂调试钩子，然后撤掉内联 hook。思路与 Windows 附加的 `emmy_hook` 相同。
@@ -918,6 +919,6 @@ P1、P2 可并行；P3 依赖 P2 的协议定稿（可以先定协议文档，�
 | MCP 客户端配置格式变化 | 各家格式还在变 | 每个客户端一个独立写入器，配格式测试 |
 | 默认端口冲突 | 9330 / 9966 被占用 | 顺延并在 UI / 安装器中提示 |
 | UnLua 定制分支 | Lua ABI 与官方不同 | 真机附加不重新编译 Lua，只调用游戏里现成的函数；`lua_Debug` 用大缓冲兜底；Host API 中对 ABI 描述做对账（已有 `lua_abi_descriptor`） |
-| 真机附加依赖未裁剪 so | 构建机清理了 `Intermediate` 就找不到符号 | IDE 提示保留路径；支持从构建产物归档（符号服务器 / 共享盘）按 Build ID 取；没有时退回特征码 |
+| 真机附加依赖未裁剪 so | 构建机清理了 `Intermediate` 就找不到符号 | IDE 提示保留路径；支持从构建产物归档（符号服务器 / 共享盘）按 Build ID 取；没有时退回特征码（已实现：符号目录 → 设备 so 自带符号 → 参考 so 特征码，见 7.2） |
 | Android 版本差异 | `attach-agent` 要求 Android 9+ 且应用可调试 | Android 8 及以下走 run-as + ptrace；正式签名包只在 root 设备支持 |
 | 待定 | MCP 默认端口号、配对码展示方式（日志 / 屏幕浮层）、是否去掉 251 构建 | 评审时确认 |
