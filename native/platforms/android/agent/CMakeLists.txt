@@ -83,7 +83,12 @@ if(ANDROID)
             ${AGENT_SRC}/hook_shadowhook.cpp)
     target_link_libraries(emmylua_agent PRIVATE emmylua_agent_common emmy_shadowhook log)
 
-    # 调试核心：同一 CMake 构建里有 emmy_debugger_core 就链接它，否则用占位实现（附加时状态文件会报错说明）
+    # 调试核心：单独构建 agent 时，native/emmy_debugger_core 存在就把它加进来
+    set(EMMY_CORE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../emmy_debugger_core)
+    if(NOT TARGET emmy_debugger_core AND EXISTS ${EMMY_CORE_DIR}/CMakeLists.txt)
+        add_subdirectory(${EMMY_CORE_DIR} ${CMAKE_CURRENT_BINARY_DIR}/emmy_debugger_core)
+    endif()
+    # 同一 CMake 构建里有 emmy_debugger_core 就链接它，否则用占位实现（附加时状态文件会报错说明）
     if(TARGET emmy_debugger_core)
         target_link_libraries(emmylua_agent PRIVATE emmy_debugger_core)
         target_compile_definitions(emmylua_agent PRIVATE EMMY_AGENT_HAS_CORE_HEADER)
