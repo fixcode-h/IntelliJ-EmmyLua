@@ -46,6 +46,7 @@
         <programRunner implementation="com.tang.intellij.lua.debug.ui.session.LuaDebugRunner"/>
         <xdebugger.attachDebuggerProvider implementation="com.tang.intellij.lua.debug.ui.attach.LuaAttachDebuggerProvider"/>
         <xdebugger.attachDebuggerProvider implementation="com.tang.intellij.lua.debug.ui.device.LuaDeviceAttachDebuggerProvider"/>
+        <xdebugger.attachHostProvider implementation="com.tang.intellij.lua.debug.ui.device.LuaDeviceAttachHostProvider"/>
 
         <applicationConfigurable parentId="tools"
                                  id="emmylua.debug"

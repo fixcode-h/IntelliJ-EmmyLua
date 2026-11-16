@@ -103,6 +103,10 @@ data class LuaSymbolReport(
     val luaVersion: String? = null,
     /** 读文件失败、不是 ELF、没有 lua_* 符号时的说明。 */
     val error: String? = null,
+    /** 附加必需但 so 里找不到的函数。 */
+    val missingFunctions: List<String> = emptyList(),
+    /** 不致命的问题，例如 so 里有两份 Lua；UI 原样显示。 */
+    val warnings: List<String> = emptyList(),
 ) {
     /** null = 没比对（没连设备）。 */
     val buildIdMatches: Boolean?
