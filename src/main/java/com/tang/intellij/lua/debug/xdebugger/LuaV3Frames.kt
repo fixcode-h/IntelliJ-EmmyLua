@@ -83,7 +83,14 @@ class LuaV3StackFrame(private val engine: DebugSession, val handle: FrameHandle)
 
     override fun getSourcePosition(): XSourcePosition? = position
 
-    override fun getEqualityObject(): Any = handle.frame.frameId
+    /**
+     * 跨暂停稳定的帧身份：同一个函数（VM + 协程 + chunk + 定义行 + 名字）。frameId 每次暂停都换新，
+     * 用它的话 IntelliJ 认不出「还是这个帧」，单步后既不恢复展开状态，也不会把变了的值标成高亮。
+     */
+    override fun getEqualityObject(): Any = FrameIdentity(
+        handle.pause.vmId, handle.frame.threadId ?: handle.pause.threadId, handle.frame.chunkName,
+        handle.frame.lineDefined ?: -1, handle.frame.name
+    )
 
     override fun getEvaluator(): XDebuggerEvaluator = LuaV3Evaluator(engine, handle)
 
@@ -118,3 +125,6 @@ class LuaV3StackFrame(private val engine: DebugSession, val handle: FrameHandle)
         }
     }
 }
+
+/** [LuaV3StackFrame.getEqualityObject]：平台按它保存 / 恢复变量树状态，并对比新旧值标出变化（variable-view.md 16）。 */
+private data class FrameIdentity(val vmId: Long, val threadId: String?, val chunkName: String, val lineDefined: Int, val name: String)

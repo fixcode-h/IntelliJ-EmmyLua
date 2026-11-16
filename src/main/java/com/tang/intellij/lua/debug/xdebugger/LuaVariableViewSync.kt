@@ -7,6 +7,10 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.ProjectManager
+import com.intellij.openapi.util.io.FileUtil
+import com.intellij.openapi.vfs.VirtualFileManager
+import com.intellij.openapi.vfs.newvfs.BulkFileListener
+import com.intellij.openapi.vfs.newvfs.events.VFileEvent
 import com.tang.intellij.lua.debug.engine.DebugSession
 import com.tang.intellij.lua.debug.engine.SessionConfig
 import com.tang.intellij.lua.debug.protocol.SetOptionsArgs
@@ -25,6 +29,7 @@ object LuaVariableViewSync {
 
     /** 新会话的初始配置。 */
     fun configure(project: Project, config: SessionConfig): SessionConfig {
+        watchRulesFiles()
         val view = settings()
         return config.copy(
             options = config.options.copy(variableView = protocolOptions(view)),
@@ -54,11 +59,52 @@ object LuaVariableViewSync {
         engine.setViewRules(rules)
     }
 
+    /**
+     * 只推显示规则（右键固定 / 隐藏、规则文件被编辑后）。[rebuild] 时等 runtime 收下再刷新变量树：
+     * runtime 对新取的引用按新规则排键，刷新会重新取局部变量，所以当前这次暂停里就能看到效果。
+     */
+    fun pushRules(project: Project, rules: JsonObject?, rebuild: Boolean) {
+        val sessions = LuaDebugSessionManager.getInstance(project).sessions()
+        sessions.forEach { entry ->
+            entry.engine.setViewRules(rules).whenComplete { _, _ ->
+                if (rebuild) ApplicationManager.getApplication().invokeLater({ entry.xSession.rebuildViews() }, project.disposed)
+            }
+        }
+    }
+
+    @Volatile
+    private var watching = false
+
+    /** 规则文件在编辑器里或外部被改了：重新读、推给这个项目的会话。只在第一次起会话时订阅一次。 */
+    private fun watchRulesFiles() {
+        if (watching) return
+        synchronized(this) {
+            if (watching) return
+            watching = true
+        }
+        ApplicationManager.getApplication().messageBus.connect().subscribe(VirtualFileManager.VFS_CHANGES, object : BulkFileListener {
+            override fun after(events: List<VFileEvent>) {
+                val paths = events.mapNotNull { it.path.takeIf { p -> p.endsWith(".json") } }
+                if (paths.isEmpty()) return
+                for (project in ProjectManager.getInstance().openProjects) {
+                    if (project.isDisposed) continue
+                    val file = LuaViewRulesFile.file(project) ?: continue
+                    val target = FileUtil.toSystemIndependentName(file.path)
+                    if (paths.none { FileUtil.pathsEqual(FileUtil.toSystemIndependentName(it), target) }) continue
+                    if (LuaDebugSessionManager.getInstance(project).sessions().isEmpty()) continue
+                    ApplicationManager.getApplication().executeOnPooledThread {
+                        pushRules(project, loadRules(project, settings()), rebuild = true)
+                    }
+                }
+            }
+        })
+    }
+
     private fun protocolOptions(view: VariableViewSettings): JsonObject =
         Gson().toJsonTree(view.toProtocolOptions()).asJsonObject
 
     /** 规则文件相对项目根；不存在时返回 null（不发），格式不对时记日志并忽略。 */
-    private fun loadRules(project: Project, view: VariableViewSettings): JsonObject? {
+    internal fun loadRules(project: Project, view: VariableViewSettings): JsonObject? {
         val path = view.rulesFile.trim().takeIf { it.isNotEmpty() } ?: return null
         val file = File(path).takeIf { it.isAbsolute } ?: File(project.basePath ?: return null, path)
         if (!file.isFile) return null
