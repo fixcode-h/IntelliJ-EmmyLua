@@ -3,6 +3,7 @@ package com.tang.intellij.lua.debug.engine
 import com.google.gson.JsonObject
 import com.tang.intellij.lua.debug.engine.transport.Connector
 import com.tang.intellij.lua.debug.engine.transport.MessageConnection
+import com.tang.intellij.lua.debug.engine.transport.TargetGoneException
 import com.tang.intellij.lua.debug.protocol.BreakpointHitEvent
 import com.tang.intellij.lua.debug.protocol.BreakpointSpec
 import com.tang.intellij.lua.debug.protocol.BreakpointStateNames
@@ -114,6 +115,8 @@ class DebugSession(
     private var heartbeat: ScheduledFuture<*>? = null
     private var heartbeatMisses = 0
     private var heartbeatInFlight = false
+    /** 心跳没回应但目标进程还在：保持连接继续等，恢复时提示一次。 */
+    private var heartbeatStalled = false
     private val startFuture = CompletableFuture<Welcome>()
     private val stopFuture = CompletableFuture<Unit>()
 
@@ -213,6 +216,12 @@ class DebugSession(
     }
 
     private fun onConnectFailed(error: Throwable) {
+        if (error is TargetGoneException) {
+            reconnecting = false
+            // 目标没了：首次连接算失败，重连途中算正常结束（游戏 / 编辑器被关掉是常态）
+            if (state == SessionState.RECONNECTING) finish(error.message ?: "目标进程已退出") else fail(error.message ?: "目标进程已退出")
+            return
+        }
         if (reconnecting) {
             scheduleReconnect(error.message ?: "连接失败")
         } else {
@@ -443,11 +452,45 @@ class DebugSession(
             heartbeatInFlight = false
             if (error == null) {
                 heartbeatMisses = 0
+                if (heartbeatStalled) {
+                    heartbeatStalled = false
+                    logEngine("runtime 恢复响应")
+                }
             } else if (unwrap(error).let { it is DebugEngineException && it.code == ErrorCodes.TIMEOUT }) {
                 heartbeatMisses++
-                if (heartbeatMisses >= config.heartbeatMaxMisses) {
-                    logEngine("runtime 连续 $heartbeatMisses 次没有回应心跳，按断线处理")
-                    connection?.close()
+                if (heartbeatMisses >= config.heartbeatMaxMisses) onHeartbeatLost()
+            }
+        }
+    }
+
+    /**
+     * 心跳连续没回应。连接还在、进程也还在时多半是整个进程被暂停了（VS 里中断、附加了别的调试器）
+     * 或卡在一个很长的帧里：断开重连只会反复注入，所以保持连接继续等；进程没了就结束会话。
+     * 查不了进程（手动地址、真机）时按断线处理，交给重连。
+     */
+    private fun onHeartbeatLost() {
+        val conn = connection ?: return
+        val misses = heartbeatMisses
+        CompletableFuture.supplyAsync({ runCatching { connector.isTargetAlive() }.getOrNull() }, io).whenComplete { alive, _ ->
+            post {
+                if (connection !== conn || state.isTerminal) return@post
+                when (alive) {
+                    true -> {
+                        heartbeatMisses = 0
+                        if (!heartbeatStalled) {
+                            heartbeatStalled = true
+                            logEngine("runtime 连续 $misses 次没有回应心跳，但进程还在（可能在 VS 等调试器里被暂停或卡住），保持连接继续等")
+                        }
+                    }
+                    false -> {
+                        logEngine("runtime 没有回应心跳，目标进程已退出")
+                        runtimeTerminatedReason = "目标进程已退出"
+                        conn.close()
+                    }
+                    null -> {
+                        logEngine("runtime 连续 $misses 次没有回应心跳，按断线处理")
+                        conn.close()
+                    }
                 }
             }
         }
@@ -457,6 +500,7 @@ class DebugSession(
         heartbeat?.cancel(false)
         heartbeat = null
         heartbeatInFlight = false
+        heartbeatStalled = false
     }
 
     // =====================================================================
