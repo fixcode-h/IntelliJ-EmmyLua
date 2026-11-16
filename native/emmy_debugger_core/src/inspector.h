@@ -108,7 +108,9 @@ private:
 	bool GetFrame(uint64_t frameId, FrameRef& out, lua_Debug& ar, ProtocolError& err);
 	void Materialize(RefEntry& entry);
 	bool HostDescribe(lua_State* L, int idx, VariableItem& item, const std::string& evaluateName);
-	void HostChildren(lua_State* L, int idx, const RefEntry& entry, std::vector<VariableItem>& out);
+	// 宿主列子项，分页原样交给宿主；返回宿主报的总数
+	int64_t HostChildren(lua_State* L, int idx, const RefEntry& entry, int start, int count, std::vector<VariableItem>& out);
+	bool IsHostListed(const RefEntry& entry);
 	void MakeItem(lua_State* L, int idx, VariableItem& item, const std::string& evaluateName);
 	void PushFrameEnv(lua_State* L, lua_State* thread, lua_Debug& ar); // 压入帧的 _ENV / 函数环境
 	bool BuildEvalEnv(lua_State* L, lua_State* thread, int level);    // 压入求值环境表

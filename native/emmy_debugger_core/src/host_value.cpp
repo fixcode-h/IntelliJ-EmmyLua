@@ -105,7 +105,7 @@ bool Describe(lua_State* L, int idx, uint64_t vmId, uint64_t pauseId, uint32_t m
 }
 
 bool ListChildren(uint64_t providerId, lua_State* L, int idx, const std::string& hostRef, uint64_t vmId,
-	uint64_t pauseId, uint32_t maxValueLength, json& out, std::string& err) {
+	uint64_t pauseId, uint32_t start, uint32_t count, uint32_t maxValueLength, json& out, std::string& err) {
 	Entry e;
 	if (!Find(providerId, e) || !e.p.listChildren) {
 		err = "提供者已注销";
@@ -116,6 +116,8 @@ bool ListChildren(uint64_t providerId, lua_State* L, int idx, const std::string&
 	else idx = lua::AbsIndex(L, idx);
 	EmmyHostValueQuery q = MakeQuery(L, idx, hostRef.empty() ? nullptr : hostRef.c_str(),
 		vmId, pauseId, maxValueLength, &buf);
+	q.start = start;
+	q.count = count;
 	const int top = lua_gettop(L);
 	int status = e.p.listChildren(e.p.userData, &q);
 	lua_settop(L, top);

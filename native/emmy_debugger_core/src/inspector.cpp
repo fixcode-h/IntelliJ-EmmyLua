@@ -541,20 +541,9 @@ void Inspector::Materialize(RefEntry& entry) {
 		return;
 	}
 
-	if (entry.kind == RefKind::HostList) {
-		if (entry.hostRef.empty()) PushAnchored(L, entry.slot);
-		HostChildren(L, entry.hostRef.empty() ? lua_gettop(L) : 0, entry, entry.children);
-		lua_settop(L, top);
-		return;
-	}
 	PushAnchored(L, entry.slot);
 	int obj = lua_gettop(L);
 	int t = lua_type(L, obj);
-	if (t == LUA_TUSERDATA && entry.providerId) {
-		HostChildren(L, obj, entry, entry.children);
-		lua_settop(L, top);
-		return;
-	}
 	if (t == LUA_TTABLE) {
 		size_t n = lua::RawLen(L, obj);
 		for (size_t i = 1; i <= n; ++i) {
@@ -679,7 +668,16 @@ bool Inspector::HostDescribe(lua_State* L, int idx, VariableItem& item, const st
 	return true;
 }
 
-void Inspector::HostChildren(lua_State* L, int idx, const RefEntry& entry, std::vector<VariableItem>& out) {
+bool Inspector::IsHostListed(const RefEntry& entry) {
+	if (entry.kind == RefKind::HostList) return true;
+	if (entry.kind != RefKind::Value || !entry.providerId) return false;
+	PushAnchored(pausedL_, entry.slot);
+	const bool ud = lua_type(pausedL_, -1) == LUA_TUSERDATA;
+	lua_pop(pausedL_, 1);
+	return ud;
+}
+
+int64_t Inspector::HostChildren(lua_State* L, int idx, const RefEntry& entry, int start, int count, std::vector<VariableItem>& out) {
 	json result;
 	std::string err;
 	bool ok;
@@ -687,7 +685,8 @@ void Inspector::HostChildren(lua_State* L, int idx, const RefEntry& entry, std::
 		HostCallGuard guard(evaluating_);
 		const int64_t prevDeadline = evalDeadlineMs_;
 		evalDeadlineMs_ = 0;
-		ok = host::ListChildren(entry.providerId, L, idx, entry.hostRef, vm_.id(), pauseIdForHost_, 1024, result, err);
+		ok = host::ListChildren(entry.providerId, L, idx, entry.hostRef, vm_.id(), pauseIdForHost_,
+			static_cast<uint32_t>(start), static_cast<uint32_t>(count), 1024, result, err);
 		evalDeadlineMs_ = prevDeadline;
 	}
 	NoteProvider(usedProviders_, entry.providerId);
@@ -699,7 +698,7 @@ void Inspector::HostChildren(lua_State* L, int idx, const RefEntry& entry, std::
 		e.value = err;
 		e.attrs.push_back("helperError");
 		out.push_back(std::move(e));
-		return;
+		return 1;
 	}
 	if (!result.value("valid", true)) {
 		VariableItem e;
@@ -709,7 +708,7 @@ void Inspector::HostChildren(lua_State* L, int idx, const RefEntry& entry, std::
 		e.value = "<已失效>";
 		e.attrs.push_back("invalid");
 		out.push_back(std::move(e));
-		return;
+		return 1;
 	}
 	auto str = [](const json& j, const char* k) {
 		auto it = j.find(k);
@@ -741,6 +740,8 @@ void Inspector::HostChildren(lua_State* L, int idx, const RefEntry& entry, std::
 		}
 		out.push_back(std::move(item));
 	}
+	if (result.contains("total") && result["total"].is_number_integer()) return result["total"].get<int64_t>();
+	return start + static_cast<int64_t>(children.size());
 }
 
 bool Inspector::Variables(uint64_t ref, int start, int count, const std::string& filter, json& body, ProtocolError& err) {
@@ -750,10 +751,28 @@ bool Inspector::Variables(uint64_t ref, int start, int count, const std::string&
 		return false;
 	}
 	RefEntry& entry = it->second;
-	if (!entry.materialized) Materialize(entry);
 	if (start < 0) start = 0;
 	if (count <= 0) count = 100;
 	if (count > 1000) count = 1000;
+	if (IsHostListed(entry)) {
+		// 宿主列的子项不缓存：分页原样交给宿主（大 TArray、属性很多的类）
+		lua_State* L = pausedL_;
+		const int top = lua_gettop(L);
+		lua_checkstack(L, 8);
+		int idx = 0;
+		if (entry.hostRef.empty()) {
+			PushAnchored(L, entry.slot);
+			idx = lua_gettop(L);
+		}
+		std::vector<VariableItem> items;
+		int64_t total = HostChildren(L, idx, entry, start, count, items);
+		lua_settop(L, top);
+		json vars = json::array();
+		for (const VariableItem& item : items) vars.push_back(item.ToJson());
+		body = {{"variables", std::move(vars)}, {"total", total}};
+		return true;
+	}
+	if (!entry.materialized) Materialize(entry);
 	json vars = json::array();
 	int64_t total = 0;
 	for (const VariableItem& item : entry.children) {

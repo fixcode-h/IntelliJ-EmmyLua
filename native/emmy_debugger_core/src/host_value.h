@@ -25,8 +25,9 @@ struct Described {
 bool Describe(lua_State* L, int idx, uint64_t vmId, uint64_t pauseId, uint32_t maxValueLength, Described& out);
 
 // 列子项。hostRef 为空时查 L 栈上 idx 处的值。成功时 out = 宿主写的 JSON（含 children / total）。
+// start / count 原样交给宿主（协议 variables 的分页）。
 bool ListChildren(uint64_t providerId, lua_State* L, int idx, const std::string& hostRef, uint64_t vmId,
-	uint64_t pauseId, uint32_t maxValueLength, json& out, std::string& err);
+	uint64_t pauseId, uint32_t start, uint32_t count, uint32_t maxValueLength, json& out, std::string& err);
 
 // 暂停结束：通知这次暂停里用过的提供者
 void ReleasePause(uint64_t vmId, uint64_t pauseId, const std::vector<uint64_t>& usedProviders);

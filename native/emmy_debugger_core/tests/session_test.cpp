@@ -395,8 +395,16 @@ int EMMY_HOST_API_CALL HostList(void*, const EmmyHostValueQuery* q) {
 		return EMMY_HOST_VALUE_OK;
 	}
 	if (q->hostRef) return EMMY_HOST_VALUE_UNAVAILABLE;
-	HostWrite(q, R"J({"total":2,"children":[{"name":"Capacity","type":"number","value":"20","typeName":"int32"},)J"
-		R"J({"name":"Location","type":"userdata","value":"(X=1.5)","kind":"ueStruct","expandable":true,"childRef":"c1"}]})J");
+	// 按 start / count 分页（验证 runtime 原样传下来）
+	const char* items[] = {R"J({"name":"Capacity","type":"number","value":"20","typeName":"int32"})J",
+		R"J({"name":"Location","type":"userdata","value":"(X=1.5)","kind":"ueStruct","expandable":true,"childRef":"c1"})J"};
+	std::string out = R"({"total":2,"children":[)";
+	for (uint32_t i = q->start, n = 0; i < 2 && n < q->count; ++i, ++n) {
+		if (n) out += ",";
+		out += items[i];
+	}
+	out += "]}";
+	HostWrite(q, out.c_str());
 	return EMMY_HOST_VALUE_OK;
 }
 
@@ -459,6 +467,10 @@ TEST_CASE("session.host_value_provider") {
 	uint64_t locRef = 0;
 	for (auto& v : ue["body"]["variables"]) if (v["name"] == "Location") locRef = v["ref"];
 	CHECK(locRef != 0);
+	json page2 = c.Request("variables", {{"ref", groupRef}, {"start", 1}, {"count", 1}});
+	CHECK_EQ(page2["body"]["variables"].size(), static_cast<size_t>(1));
+	CHECK_EQ(page2["body"]["variables"][0]["name"].get<std::string>(), std::string("Location"));
+	CHECK_EQ(page2["body"]["total"].get<int>(), 2);
 	json loc = c.Request("variables", {{"ref", locRef}});
 	CHECK(Ok(loc));
 	CHECK_EQ(loc["body"]["variables"][0]["name"].get<std::string>(), std::string("X"));
