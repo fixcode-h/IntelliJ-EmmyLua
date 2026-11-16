@@ -1,0 +1,218 @@
+name: Emmy Debugger Core
+
+on: [push]
+
+jobs:
+  validate:
+    name: Test ${{ matrix.os }} ${{ matrix.arch }} ${{ matrix.config }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, arch: x64, config: Debug }
+          - { os: windows-latest, arch: x64, config: Release }
+          - { os: windows-latest, arch: x86, config: Debug }
+          - { os: windows-latest, arch: x86, config: Release }
+          - { os: ubuntu-latest, arch: x64, config: Debug }
+          - { os: ubuntu-latest, arch: x64, config: Release }
+          - { os: macos-latest, arch: arm64, config: Debug }
+          - { os: macos-latest, arch: arm64, config: Release }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+        with:
+          arch: ${{ matrix.arch }}
+      - name: Build dynamic Lua API and native contracts
+        shell: bash
+        run: |
+          cmake -S . -B build-validation -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.config }} -DEMMY_VM_REGISTRY_TEST=ON -DEMMY_USE_LUA_SOURCE=OFF -DEMMY_LUA_VERSION=54
+          cmake --build build-validation --parallel 4
+          ctest --test-dir build-validation --output-on-failure --no-tests=error --timeout 45 --output-junit native-results.xml
+      - name: Build and run real Lua lifecycle and protocol harnesses
+        shell: bash
+        run: |
+          for lua_version in 51 52 53 54; do
+            build_dir="build-runtime-${lua_version}"
+            cmake -S . -B "${build_dir}" -G Ninja \
+              -DCMAKE_BUILD_TYPE=${{ matrix.config }} \
+              -DEMMY_VM_REGISTRY_TEST=ON \
+              -DEMMY_USE_LUA_SOURCE=ON \
+              -DEMMY_LUA_VERSION=${lua_version}
+            cmake --build "${build_dir}" --target \
+              emmy_vm_lifecycle_harness emmy_hook_dispatcher_test emmy_native_socket_harness \
+              --parallel 4
+            if [[ "${{ runner.os }}" == "Windows" ]]; then
+              harness_regex='emmy_vm_lifecycle_harness|emmy_hook_dispatcher_test|emmy_native_socket_harness|emmy_native_pipe_harness'
+            else
+              harness_regex='emmy_vm_lifecycle_harness|emmy_hook_dispatcher_test|emmy_native_socket_harness'
+            fi
+            ctest --test-dir "${build_dir}" -R "${harness_regex}" \
+              --output-on-failure --no-tests=error --timeout 45 \
+              --output-junit "runtime-results-${lua_version}.xml"
+          done
+      - name: Verify real Windows Lua DLL loading
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          for pair in '51 lua-5.1.5' '54 lua-5.4.6'; do
+            read -r lua_version lua_dir <<< "$pair"
+            build_dir="build-shared-${lua_version}"
+            cmake -S . -B "$build_dir" -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.config }} \
+              -DEMMY_USE_LUA_SOURCE=ON -DLUA_BUILD_AS_DLL=ON -DEMMY_LUA_VERSION="$lua_version"
+            cmake --build "$build_dir" --target "lua${lua_version}" --parallel 4
+            build-validation/emmy_debugger/emmy_dynamic_lua_loader_test.exe \
+              "$PWD/$build_dir/third-party/$lua_dir/lua${lua_version}.dll" "$lua_version"
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-tests-${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.config }}
+          if-no-files-found: error
+          path: |
+            build-validation/native-results.xml
+            build-validation/Testing/Temporary/LastTest.log
+            build-runtime-*/runtime-results-*.xml
+            build-runtime-*/Testing/Temporary/LastTest.log
+
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, target: windows, platform: win32-x64}
+          - { os: windows-latest, target: windows, platform: win32-x86, cmake_arch: "-A Win32"}
+          - { os: ubuntu-latest, target: linux, platform: linux-x64, zig_build: true}
+          - { os: macos-latest, target: darwin, platform: darwin-x64}
+          - { os: macos-latest, target: darwin, platform: darwin-arm64}
+    steps:
+    - name: Env
+      # set TAG=DEV if not a tag
+      run: |
+          if [[ ${{ github.ref }} = refs/tags/* ]]; then
+            export TAG=$(echo ${{ github.ref }} | sed -e "s/refs\/tags\///g")
+          else
+            export TAG=DEV
+          fi
+          echo "TAG=$TAG" >> $GITHUB_ENV
+      
+      shell: bash
+    - name: Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20.x
+    - uses: actions/checkout@v4
+    - name: Build-windows
+      if: startsWith(matrix.os, 'windows')
+      run: |
+        mkdir build
+        cd build
+        cmake .. ${{ matrix.cmake_arch }} -G "Visual Studio 17 2022" -DCMAKE_USER_MAKE_RULES_OVERRIDE="${{ github.workspace }}/cmake/flags_override.cmake" -DEMMY_CORE_VERSION=${{env.TAG}}
+        cmake --build . --config Release
+        cmake --install . --config Release --prefix ${{ github.workspace }}/artifact/
+    - name: Build-linux
+      if: startsWith(matrix.os, 'ubuntu')
+      run: |
+        if [[ "${{ matrix.zig_build }}" == "true" ]]; then
+          sudo snap install zig --classic --beta
+          mkdir -p build
+          # 使用zig-build.cmake配置文件编译C++项目
+          cmake -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/zig-build.cmake -DCMAKE_BUILD_TYPE=Release -DEMMY_CORE_VERSION=${{env.TAG}}
+          cmake --build build --config Release
+          cmake --install build --config Release --prefix ${{ github.workspace }}/artifact/
+        else
+          mkdir build
+          cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release -DEMMY_CORE_VERSION=${{env.TAG}}
+          cmake --build . --config Release
+          cmake --install . --config Release --prefix ${{ github.workspace }}/artifact/
+        fi
+    - name: Build-macosx
+      if: startsWith(matrix.os, 'macos')
+      run: |
+        mkdir build
+        cd build
+        if [[ "${{ matrix.platform }}" = darwin-arm64 ]]; then
+          cmake .. -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_BUILD_TYPE=Release -DEMMY_CORE_VERSION=${{env.TAG}}
+        else
+          cmake .. -DCMAKE_OSX_ARCHITECTURES=x86_64 -DCMAKE_BUILD_TYPE=Release -DEMMY_CORE_VERSION=${{env.TAG}}
+        fi
+        cmake --build . --config Release
+        cmake --install . --config Release --prefix ${{ github.workspace }}/artifact/
+
+
+    - name: Upload
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.platform }}
+        path: ${{ github.workspace }}/artifact/bin
+ 
+  upload-release:
+    name: Upload Release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [build, validate]
+    runs-on: [ubuntu-latest]
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Download
+        uses: actions/download-artifact@v4
+      - name: Display structure of downloaded files
+        run: ls -R   
+      - name: zip win32-x64
+        uses: TheDoctor0/zip-release@master
+        with:
+          filename: win32-x64.zip
+          directory: win32-x64
+          path: |
+            EasyHook.dll
+            emmy_core.dll
+            emmy_hook.dll
+            emmy_tool.exe
+
+      - name: zip win32-x86
+        uses: TheDoctor0/zip-release@master
+        with:
+          filename: win32-x86.zip
+          directory: win32-x86
+          path: |
+            EasyHook.dll
+            emmy_core.dll
+            emmy_hook.dll
+            emmy_tool.exe
+      - name: zip linux-x64
+        uses: TheDoctor0/zip-release@master
+        with:
+          filename: linux-x64.zip
+          directory: linux-x64
+          path: emmy_core.so
+      - name: zip darwin-x64
+        uses: TheDoctor0/zip-release@master
+        with:
+          filename: darwin-x64.zip
+          directory: darwin-x64
+          path: emmy_core.dylib   
+      - name: zip darwin-arm64
+        uses: TheDoctor0/zip-release@master
+        with:
+          filename: darwin-arm64.zip
+          directory: darwin-arm64
+          path: emmy_core.dylib
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          name: EmmyLuaDebugger
+          draft: false
+          generate_release_notes: true
+          files: |
+            win32-x64/win32-x64.zip
+            win32-x86/win32-x86.zip
+            darwin-arm64/darwin-arm64.zip
+            darwin-x64/darwin-x64.zip
+            linux-x64/linux-x64.zip
+          token: ${{ secrets.RELEASE }}
