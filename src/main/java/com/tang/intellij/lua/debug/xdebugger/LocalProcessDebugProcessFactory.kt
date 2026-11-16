@@ -11,6 +11,7 @@ import com.tang.intellij.lua.debug.engine.transport.TargetGoneException
 import com.tang.intellij.lua.debug.engine.transport.TcpConnector
 import com.tang.intellij.lua.debugger.resources.DebuggerResourceService
 import java.io.IOException
+import java.util.concurrent.TimeUnit
 
 /**
  * Windows 本机进程附加：每次建连（包括断线重连）先跑一遍 emmy_tool attach——已注入时它只更新 token、
@@ -58,7 +59,32 @@ class LocalProcessDebugProcessFactory : LuaDebugProcessFactory {
                 if (!isTargetAlive()) throw TargetGoneException("进程 $pid 已退出，调试结束")
                 throw e
             }
-            return TcpConnector(result.host, result.port, token = token).connect()
+            if (!result.waiting) return TcpConnector(result.host, result.port, token = token).connect()
+            return waitForLua(result)
+        }
+
+        /** 组件在等 Lua 加载：每秒连一次端口，直到 runtime 开始监听；进程退出就结束，期间不重新注入。 */
+        private fun waitForLua(result: LocalAttachTool.Result): MessageConnection {
+            val connector = TcpConnector(result.host, result.port, connectTimeoutMillis = 1000, token = token)
+            var lastLog = System.nanoTime()
+            while (true) {
+                if (!isTargetAlive()) throw TargetGoneException("进程 $pid 已退出，调试结束")
+                try {
+                    return connector.connect().also { log("Lua 已加载，连上调试 runtime（${result.host}:${result.port}）") }
+                } catch (_: IOException) {
+                    // 还没开始监听
+                }
+                if (System.nanoTime() - lastLog > TimeUnit.SECONDS.toNanos(30)) {
+                    lastLog = System.nanoTime()
+                    log("仍在等待目标进程加载 Lua …")
+                }
+                try {
+                    Thread.sleep(1000)
+                } catch (e: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    throw IOException("已取消等待 Lua 加载", e)
+                }
+            }
         }
     }
 }

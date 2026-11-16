@@ -38,4 +38,14 @@ class LocalAttachToolTest {
         assertTrue(a.matches(Regex("[0-9a-f]{32}")))
         assertTrue(a != LocalAttachTool.newToken())
     }
+
+    @Test
+    fun `还没加载 Lua 时返回 waiting`() {
+        val r = LocalAttachTool.parseResult(
+            """{"ok":true,"protocol":3,"host":"127.0.0.1","port":9966,"pid":7,"reinjected":false,"waiting":true,"message":"目标进程还没有加载 Lua"}""", 0
+        )
+        org.junit.Assert.assertTrue(r.waiting)
+        org.junit.Assert.assertEquals("目标进程还没有加载 Lua", r.message)
+        org.junit.Assert.assertEquals(9966, r.port)
+    }
 }
