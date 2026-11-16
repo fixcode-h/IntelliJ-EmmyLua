@@ -31,16 +31,16 @@ jobs:
       - name: Configure
         shell: bash
         run: >-
-          cmake -S native -B "$RUNNER_TEMP/emmy-native-${{ matrix.arch }}-${{ matrix.configuration }}"
+          cmake -S native -B "${{ runner.temp }}/emmy-native-${{ matrix.arch }}-${{ matrix.configuration }}"
           -DEMMY_VM_REGISTRY_TEST=ON
           -DCMAKE_BUILD_TYPE=${{ matrix.configuration }}
           ${{ runner.os == 'Windows' && format('-A {0}', matrix.arch == 'x86' && 'Win32' || 'x64') || '' }}
       - name: Build
-        run: cmake --build "$RUNNER_TEMP/emmy-native-${{ matrix.arch }}-${{ matrix.configuration }}" --config ${{ matrix.configuration }} --parallel
+        run: cmake --build "${{ runner.temp }}/emmy-native-${{ matrix.arch }}-${{ matrix.configuration }}" --config ${{ matrix.configuration }} --parallel
       - name: Run Native tests
         shell: bash
         run: |
-          ctest --test-dir "$RUNNER_TEMP/emmy-native-${{ matrix.arch }}-${{ matrix.configuration }}" \
+          ctest --test-dir "${{ runner.temp }}/emmy-native-${{ matrix.arch }}-${{ matrix.configuration }}" \
             -C "${{ matrix.configuration }}" --output-on-failure
       - name: Upload Native test report
         if: always()
@@ -61,12 +61,12 @@ jobs:
       - uses: lukka/get-cmake@latest
       - name: Configure and build source harness
         run: |
-          cmake -S native -B "$RUNNER_TEMP/emmy-lua54-source" \
+          cmake -S native -B "${{ runner.temp }}/emmy-lua54-source" \
             -DEMMY_VM_REGISTRY_TEST=ON -DEMMY_USE_LUA_SOURCE=ON -DEMMY_LUA_VERSION=54 \
             -DCMAKE_BUILD_TYPE=Debug
-          cmake --build "$RUNNER_TEMP/emmy-lua54-source" --target emmy_vm_lifecycle_harness --parallel
+          cmake --build "${{ runner.temp }}/emmy-lua54-source" --target emmy_vm_lifecycle_harness --parallel
       - name: Run source lifecycle harness
-        run: ctest --test-dir "$RUNNER_TEMP/emmy-lua54-source" -R emmy_vm_lifecycle_harness --output-on-failure
+        run: ctest --test-dir "${{ runner.temp }}/emmy-lua54-source" -R emmy_vm_lifecycle_harness --output-on-failure
       - name: Upload lifecycle test report
         if: always()
         uses: actions/upload-artifact@v4
