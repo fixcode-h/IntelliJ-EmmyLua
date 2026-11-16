@@ -1,0 +1,3 @@
+<spot>function M.add(a, b)</spot>
+    return a + b
+end

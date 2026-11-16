@@ -24,6 +24,9 @@
     每个版本的更新内容见 <a href="https://github.com/fixcode-h/IntelliJ-EmmyLua/releases">GitHub Releases</a>。
     ]]></change-notes>
     <!-- since-build / until-build 由 build.gradle.kts 写入（2025.2 起，不设上限） -->
+    <!-- 可选：JSON 插件在时给 .emmyrc.json 挂 schema；拼写检查模块在时挂 Lua 词典 -->
+    <depends optional="true" config-file="emmylua-json.xml">com.intellij.modules.json</depends>
+    <depends optional="true" config-file="emmylua-spellchecker.xml">com.intellij.modules.spellchecker</depends>
     <xi:include href="emmylua-core.xml" xpointer="xpointer(/idea-plugin/*)"/>
     <!-- 调试链路（附加 / Android 真机 / MCP / 变量视图） -->
     <xi:include href="emmylua-debug.xml" xpointer="xpointer(/idea-plugin/*)"/>
