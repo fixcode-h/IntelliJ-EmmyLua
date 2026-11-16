@@ -39,19 +39,12 @@
     ]]></change-notes>
     <idea-version since-build="252" until-build="252.*"/>
     <xi:include href="emmylua-core.xml" xpointer="xpointer(/idea-plugin/*)"/>
+    <!-- 新调试链路（附加 / Android 真机 / MCP / 变量视图）。用户要求先出包实机测试，提前注册；旧链路暂时保留作后备，P8 删除。 -->
+    <xi:include href="emmylua-debug.xml" xpointer="xpointer(/idea-plugin/*)"/>
     <depends optional="true" config-file="emmylua-project.xml">com.intellij.java</depends>
     <extensions defaultExtensionNs="com.intellij">
+        <!-- 旧调试链路的 CLI 网关：命令行工具 emmy-debug 已删除（改用 MCP），网关只剩旧链路的原生集成测试在用，
+             P8 切换到新引擎时和旧 debugger/ 一起删除。 -->
         <applicationService serviceImplementation="com.tang.intellij.lua.debugger.cli.CliGatewayApplicationService"/>
     </extensions>
-    <actions>
-        <!-- Granting is declarative now (the run configuration opt-in). What must
-             stay reachable is the kill switch: an already granted client has to
-             be withdrawable without tearing the debug session down. -->
-        <action id="EmmyLua.RevokeCliDebugAccess"
-                class="com.tang.intellij.lua.debugger.cli.RevokeCliDebugAccessAction"
-                text="撤销 EmmyLua CLI 调试权限..."
-                description="撤销本机 CLI 对选定调试会话的访问权限">
-            <add-to-group group-id="ToolsMenu" anchor="first"/>
-        </action>
-    </actions>
 </idea-plugin>

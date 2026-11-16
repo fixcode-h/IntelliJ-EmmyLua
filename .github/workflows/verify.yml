@@ -2,7 +2,7 @@ name: Verify Plugin
 
 on:
   push:
-    branches: [dev, master]
+    branches: [dev, main]
   pull_request:
 
 concurrency:
@@ -14,8 +14,6 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -26,7 +24,7 @@ jobs:
           arch: x64
       - name: Build real Lua fixture
         run: |
-          cmake -S EmmyLuaDebugger -B build/native-ide -G Ninja -DCMAKE_BUILD_TYPE=Debug -DEMMY_USE_LUA_SOURCE=ON -DEMMY_VM_REGISTRY_TEST=ON -DEMMY_LUA_VERSION=54
+          cmake -S native -B build/native-ide -G Ninja -DCMAKE_BUILD_TYPE=Debug -DEMMY_USE_LUA_SOURCE=ON -DLUA_BUILD_AS_DLL=ON -DEMMY_VM_REGISTRY_TEST=ON -DEMMY_LUA_VERSION=54
           cmake --build build/native-ide --target emmy_native_ide_fixture emmy_attach_lua_fixture --parallel 4
       - name: Verify Native to IDEA to CLI
         shell: pwsh
@@ -51,15 +49,20 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "21"
       - uses: gradle/actions/setup-gradle@v4
+      - name: Build native core host for engine end-to-end tests
+        run: |
+          cmake -S native/emmy_debugger_core -B build/core -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/core --target emmy_core_ide_host --parallel 4
       - name: Test, build and verify
-        run: ./gradlew --no-daemon -DIDEA_VER=${{ matrix.idea-version }} test buildPlugin verifyPlugin :tools:emmy-debug:installDist
+        env:
+          # 新引擎对着真的原生核心跑端到端用例（NativeRuntimeE2eTest）
+          EMMY_CORE_HOST: ${{ github.workspace }}/build/core/emmy_core_ide_host
+        run: ./gradlew --no-daemon -DIDEA_VER=${{ matrix.idea-version }} test buildPlugin verifyPlugin
       - name: Preserve JVM and plugin verification reports
         uses: actions/upload-artifact@v4
         if: always()
@@ -69,10 +72,7 @@ jobs:
           path: |
             build/test-results/test/*.xml
             modules/*/build/test-results/test/*.xml
-            tools/emmy-debug/build/test-results/test/*.xml
             build/reports/pluginVerifier/**
-      - name: Verify clean checkout and submodules
+      - name: Verify clean checkout
         shell: bash
-        run: |
-          git diff --exit-code --submodule=diff
-          git submodule foreach --recursive 'git diff --exit-code'
+        run: git diff --exit-code

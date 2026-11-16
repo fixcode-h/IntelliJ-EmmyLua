@@ -29,8 +29,8 @@ powershell -File tools/collect-emmy-native-resources.ps1 `
 
 ```powershell
 ./tools/collect-emmy-native-resources.ps1 `
-  -X86BuildDir ./EmmyLuaDebugger/build-x86-release-20260910 `
-  -X64BuildDir ./EmmyLuaDebugger/build-release-20260910 `
+  -X86BuildDir ./native/build-x86-release-20260910 `
+  -X64BuildDir ./native/build-release-20260910 `
   -Configuration Release -OutputRoot ./build/emmy-native-resources
 ```
 

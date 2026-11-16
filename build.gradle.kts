@@ -101,9 +101,15 @@ project(":") {
         implementation("org.eclipse.mylyn.github:org.eclipse.egit.github.core:2.1.5")
         implementation(project(":modules:debugger-core"))
         implementation(project(":modules:debugger-transport"))
+        implementation(project(":modules:debugger-android"))
         implementation(project(":modules:debugger-emmy-protocol"))
         implementation(project(":modules:debugger-cli-protocol"))
         implementation(project(":modules:debugger-luapanda-protocol"))
+        implementation(project(":modules:debugger-mcp"))
+        // 新调试链路（P8 前不注册到 plugin.xml）
+        implementation(project(":modules:debugger-protocol"))
+        implementation(project(":modules:debugger-engine"))
+        testImplementation(testFixtures(project(":modules:debugger-engine")))
         
         intellijPlatform {
             intellijIdeaCommunity(buildVersionData.ideaMainVersion)

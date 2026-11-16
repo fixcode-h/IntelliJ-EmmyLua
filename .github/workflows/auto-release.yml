@@ -13,7 +13,76 @@ env:
 
 # 工作流运行的任务
 jobs:
+  # 原生二进制在出包时现编（不提交进仓库）：Windows 附加用的工具和 dll、Android 真机附加的 agent
+  native-windows:
+    name: Native windows (${{ matrix.arch }})
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        include:
+          - { arch: x64, platform: x64 }
+          - { arch: x86, platform: Win32 }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build emmy_tool / emmy_hook / emmy_core / emmy_attach
+        run: |
+          cmake -S native -B build/native-${{ matrix.arch }} -A ${{ matrix.platform }}
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          cmake --build build/native-${{ matrix.arch }} --config Release --target emmy_tool emmy_hook emmy_core emmy_attach --parallel 4
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+      - name: Build cores (dynamic, one per Lua version)
+        run: |
+          foreach ($v in "51", "52", "53", "54") {
+            cmake -S native/emmy_debugger_core -B build/core-${{ matrix.arch }}-$v -A ${{ matrix.platform }} `
+              -DEMMY_CORE_LUA_MODE=dynamic "-DEMMY_CORE_LUA_VERSION=$v" -DEMMY_CORE_BUILD_SHARED=ON `
+              -DEMMY_CORE_BUILD_TESTS=OFF -DEMMY_CORE_BUILD_BENCH=OFF
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+            cmake --build build/core-${{ matrix.arch }}-$v --config Release --target emmy_debugger_core_shared --parallel 4
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+          }
+      - name: Collect
+        run: |
+          $out = "out/${{ matrix.arch }}"
+          New-Item -ItemType Directory -Force $out | Out-Null
+          foreach ($name in "emmy_tool.exe", "emmy_hook.dll", "emmy_core.dll", "emmy_attach.dll", "EasyHook.dll") {
+            $file = Get-ChildItem build/native-${{ matrix.arch }} -Recurse -Filter $name | Where-Object { $_.FullName -match "Release" } | Select-Object -First 1
+            if (-not $file) { Write-Error "缺少 $name"; exit 1 }
+            Copy-Item $file.FullName -Destination $out
+          }
+          foreach ($v in "51", "52", "53", "54") {
+            New-Item -ItemType Directory -Force "$out/lua$v" | Out-Null
+            Copy-Item build/core-${{ matrix.arch }}-$v/Release/emmy_debugger_core.dll "$out/lua$v/"
+          }
+          Get-ChildItem -Recurse $out | Select-Object FullName, Length
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-windows-${{ matrix.arch }}
+          path: out/${{ matrix.arch }}
+          if-no-files-found: error
+
+  android-agent:
+    name: Android agent
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          export ANDROID_NDK="${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}"
+          native/platforms/android/build_agent.sh "${{ runner.temp }}/android-agent"
+          mkdir -p out
+          for abi in arm64-v8a armeabi-v7a; do
+            mkdir -p "out/$abi"
+            cp "${{ runner.temp }}/android-agent/$abi/libemmylua_agent.so" "out/$abi/"
+          done
+          ls -lR out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-android-agent
+          path: out
+          if-no-files-found: error
+
   build-and-release:
+    needs: [native-windows, android-agent]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -74,6 +143,23 @@ jobs:
             echo 'EOF'
           } >> "$GITHUB_OUTPUT"
 
+      # 把现编的原生二进制放进插件资源（覆盖仓库里旧的 Windows 二进制）
+      - name: Download native binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: ${{ runner.temp }}/native
+      - name: Place native binaries into plugin resources
+        run: |
+          set -e
+          for arch in x64 x86; do
+            mkdir -p "src/main/resources/debugger/emmy/windows/$arch"
+            cp -R "${{ runner.temp }}/native/release-windows-$arch/." "src/main/resources/debugger/emmy/windows/$arch/"
+          done
+          mkdir -p src/main/resources/debugger/emmy/android
+          cp -R "${{ runner.temp }}/native/release-android-agent/." src/main/resources/debugger/emmy/android/
+          find src/main/resources/debugger/emmy/windows src/main/resources/debugger/emmy/android -type f | sort
+
       # 第六步：执行 Gradle 打包命令
       # --- 核心修正点：在这里通过 -P 参数将版本号传递给 Gradle ----
       - name: Build with Gradle
@@ -101,6 +187,7 @@ jobs:
           echo "LAST_RELEASE_DATE=$(date +'%Y-%m-%d')" >> version.properties
           git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
+          git checkout -- src/main/resources/debugger/emmy/windows
           git add version.properties
           git commit -m "chore(release): 自动更新版本至 ${{ env.NEW_VERSION }}" -m "[skip ci]"
           git push
