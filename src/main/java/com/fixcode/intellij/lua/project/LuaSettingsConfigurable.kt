@@ -164,7 +164,7 @@ class LuaSettingsConfigurable(private val project: Project) :
         declStatus?.text = "正在连 UE 编辑器…"
         ApplicationManager.getApplication().executeOnPooledThread {
             val text = try {
-                UnrealDecl.refresh(project, mode, checked)
+                UnrealDecl.refresh(project, mode, checked).also { UnrealDecl.watchInBackground(project, it) }
             } catch (e: IOException) {
                 e.message ?: "失败"
             }

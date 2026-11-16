@@ -4,7 +4,9 @@ import com.fixcode.intellij.lua.lsp.EmmyLuaWorkspaceConfig
 import com.google.gson.JsonObject
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
-import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.progress.ProcessCanceledException
+import com.intellij.openapi.progress.ProgressIndicator
+import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
 import java.io.IOException
 import java.nio.file.Path
@@ -71,19 +73,66 @@ object UnrealDecl {
         }
     }
 
-    /** 后台跑，结果弹通知 */
+    /**
+     * 后台任务跑 [task]（连 UE 编辑器、发命令），然后像 IDEA 的索引那样在底部状态栏跟着 UE 那边的生成进度走，
+     * 完成后弹通知。点进度条上的取消只是不再跟进度，UE 编辑器里照样生成完。
+     */
     fun runInBackground(project: Project, task: () -> String) {
-        ApplicationManager.getApplication().executeOnPooledThread {
-            val (text, type) = try {
-                task() to NotificationType.INFORMATION
-            } catch (e: IOException) {
-                (e.message ?: "失败") to NotificationType.WARNING
+        object : Task.Backgroundable(project, "UE 反射声明", true) {
+            override fun run(indicator: ProgressIndicator) {
+                indicator.isIndeterminate = true
+                indicator.text = "正在连接 UE 编辑器…"
+                val (text, type) = try {
+                    track(project, indicator, task()) to NotificationType.INFORMATION
+                } catch (e: IOException) {
+                    (e.message ?: "失败") to NotificationType.WARNING
+                } catch (e: ProcessCanceledException) {
+                    "不再跟进度；UE 编辑器里照样会生成完" to NotificationType.INFORMATION
+                }
+                notify(project, text, type)
             }
-            if (!project.isDisposed) {
-                NotificationGroupManager.getInstance().getNotificationGroup(NOTIFICATION_GROUP)
-                    .createNotification("UE 反射声明", text, type)
-                    .notify(project)
+        }.queue()
+    }
+
+    /** 设置页的刷新按钮已经发过命令了（[started] 是它的结果文本），只在状态栏跟进度。 */
+    fun watchInBackground(project: Project, started: String) = runInBackground(project) { started }
+
+    /**
+     * 每隔 [POLL_MS] 查一次 luadecl.status 更新进度条，空闲了返回完成摘要。
+     * 刚发完命令 UE 可能还没开始（或者没什么要做的）：一直空闲超过 [IDLE_GRACE_MS] 就按 [started] 收尾。
+     */
+    private fun track(project: Project, indicator: ProgressIndicator, started: String): String {
+        val editor = try { editor(project) } catch (e: IOException) { return started }
+        val begin = System.currentTimeMillis()
+        var busy = false
+        while (true) {
+            indicator.checkCanceled()
+            val status = UELinkClient.call(editor, "luadecl.status")
+            if (status.get("active")?.asBoolean != true) return started
+            val progress = UnrealDeclProgress.of(status)
+            if (progress == null) {
+                if (busy) {
+                    UnrealDeclWatcher.getInstance(project).checkSoon()
+                    return UnrealDeclProgress.summary(status)
+                }
+                if (System.currentTimeMillis() - begin > IDLE_GRACE_MS) return started
+            } else {
+                busy = true
+                indicator.text = "UE 反射声明：${progress.text}"
+                indicator.isIndeterminate = progress.fraction == null
+                progress.fraction?.let { indicator.fraction = it }
             }
+            Thread.sleep(POLL_MS)
         }
+    }
+
+    private const val POLL_MS = 500L
+    private const val IDLE_GRACE_MS = 3000L
+
+    private fun notify(project: Project, text: String, type: NotificationType) {
+        if (project.isDisposed) return
+        NotificationGroupManager.getInstance().getNotificationGroup(NOTIFICATION_GROUP)
+            .createNotification("UE 反射声明", text, type)
+            .notify(project)
     }
 }
