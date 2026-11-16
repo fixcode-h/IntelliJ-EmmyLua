@@ -159,13 +159,13 @@ internal fun loadChildren(
             val v = handle.variable
             // 宿主给的分组（UE 对象按声明类分组、组件、方法）是 kind=group 的普通子项，按顺序放在顶部
             if (v.kind == "group" && v.ref > 0) {
-                handle.children()?.let { list.addTopGroup(LuaV3VariableGroup(engine, it, v.value, ctx)) }
+                handle.children()?.let { list.addTopGroup(LuaV3VariableGroup(engine, it, groupComment(v), ctx)) }
             } else {
                 list.add(LuaV3Value(engine, v, container, ctx))
             }
         }
         // 继承成员、方法、元表放在底部分组（variable-view.md 5.4），只在第一页给
-        page.groups.forEach { group -> group.children()?.let { list.addBottomGroup(LuaV3VariableGroup(engine, it, group.variable.value, ctx)) } }
+        page.groups.forEach { group -> group.children()?.let { list.addBottomGroup(LuaV3VariableGroup(engine, it, groupComment(group.variable), ctx)) } }
         val loaded = start + page.variables.size
         val remaining = if (end != null) {
             // 数组区间按下标算：空洞会让这一页少几项，但区间之外的不再取
@@ -181,6 +181,12 @@ internal fun loadChildren(
         node.addChildren(list, remaining <= 0)
         if (remaining > 0) node.tooManyChildren(remaining) { loadChildren(engine, container, node, loaded, ctx, filter, end) }
     }
+}
+
+/** 分组名后面的灰字：runtime 把数量放在 namedCount、来源放在 value（例「module UI.BagPanel」），不拼进名字 */
+internal fun groupComment(v: VariableDto): String {
+    val count = v.namedCount ?: v.length?.toInt()
+    return listOfNotNull(count?.let { "($it)" }, v.value.takeIf { it.isNotBlank() }).joinToString("  ")
 }
 
 /**
