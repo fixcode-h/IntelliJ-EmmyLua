@@ -60,10 +60,13 @@ typedef struct EmmyHostValueProviderV2 {
 	EmmyHostReleaseFn releasePause; /* 暂停结束时调用，宿主释放这次暂停发出的句柄 */
 } EmmyHostValueProviderV2;
 
-/* 返回提供者 id（0 表示参数不对）。provider 内容会被复制，name 也会复制。 */
+/* 返回提供者 id（0 表示参数不对）。provider 内容会被复制，name 也会复制。
+   同一组回调 + userData 重复注册返回原来的 id（宿主可以定期重注册，不会出现重复项）。 */
 EMMY_API uint64_t EMMY_HOST_API_CALL Emmy_RegisterHostValueProviderV2(const EmmyHostValueProviderV2* provider);
 /* 成功返回 0。注销后不再发起新的回调；回调都在暂停循环里、VM 线程上发出。 */
 EMMY_API int EMMY_HOST_API_CALL Emmy_UnregisterHostValueProviderV2(uint64_t providerId);
+/* 这个 id 当前是否已注册（1 / 0）。宿主用它发现核心被卸载后在同一地址重新加载、注册已经丢了的情况。 */
+EMMY_API int EMMY_HOST_API_CALL Emmy_HasHostValueProviderV2(uint64_t providerId);
 
 #ifdef __cplusplus
 }

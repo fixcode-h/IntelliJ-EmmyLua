@@ -187,6 +187,7 @@ bool Inspector::CallFormatter(lua_State* L, int nargs, std::string& err) {
 }
 
 bool Inspector::FormatterDescribe(lua_State* L, int idx, VariableItem& item, const std::string& evaluateName) {
+	if (!pausedL_ || !L) return false; // formatter 只在暂停里跑（要锚表、要预算）
 	idx = lua::AbsIndex(L, idx);
 	const int top = lua_gettop(L);
 	if (fmtPause_ != pauseIdForHost_) {
