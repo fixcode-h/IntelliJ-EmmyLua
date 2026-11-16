@@ -35,6 +35,23 @@ class SourceMapperTest {
     }
 
     @Test
+    fun `不带 @ 的路径和模块名也当文件 代码串不当`() {
+        assertEquals("D:/Game/Content/Script/Tutorials/BP.lua".let(SourcePaths::normalize), SourcePaths.chunkToPath("D:\\Game\\Content\\Script\\Tutorials\\BP.lua"))
+        assertEquals("Tutorials/BP_CharacterBase", SourcePaths.chunkToPath("Tutorials.BP_CharacterBase"))
+        assertEquals("main.lua", SourcePaths.chunkToPath("main.lua"))
+        assertNull(SourcePaths.chunkToPath("return 1"))
+        assertNull(SourcePaths.chunkToPath("local a = 1\nreturn a"))
+        assertNull(SourcePaths.chunkToPath("print('a/b.lua')"))
+
+        // UnLua 用模块名当 chunkname 时按路径段后缀对上项目文件
+        val mapper = SourceMapper(index = MemoryIndex("D:/Game/Content/Script/Tutorials/BP_CharacterBase.lua"))
+        assertEquals(
+            SourceResolution.Mapped("d:/Game/Content/Script/Tutorials/BP_CharacterBase.lua", learned = true),
+            mapper.resolve("Tutorials.BP_CharacterBase")
+        )
+    }
+
+    @Test
     fun `规则表按最长前缀匹配`() {
         val index = MemoryIndex("D:/Game/Content/Script/UI/Bag.lua", "D:/Override/UI/Bag.lua")
         val mapper = SourceMapper(

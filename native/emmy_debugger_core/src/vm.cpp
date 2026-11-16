@@ -185,6 +185,8 @@ bool Vm::AnyHotFrame(lua_State* L, lua_Debug* ar) {
 }
 
 int Vm::OnHook(lua_State* L, lua_Debug* ar) {
+	// 单写者计数：不用原子加，避免热路径上的锁总线指令
+	hookEvents_.store(hookEvents_.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
 	if (pending_.load(std::memory_order_acquire) != 0) {
 		ProcessPending(L);
 	}
@@ -272,6 +274,7 @@ Vm::SourceEntry* Vm::Lookup(const char* source, size_t) {
 		e.rtlLine = runToLine_->line;
 	}
 	e.hot = !e.match.bps.empty() || e.rtl;
+	DiagRecordSource(e);
 	e.lines.clear();
 	for (const Breakpoint* bp : e.match.bps) e.lines.push_back(bp->line);
 	if (e.rtl) e.lines.push_back(e.rtlLine);
@@ -522,6 +525,58 @@ void Vm::RefreshIndex() {
 		lastSource_ = nullptr;
 	}
 	anyBreakpoints_.store(index_ && index_->AnyFor(id_), std::memory_order_relaxed);
+	{
+		std::lock_guard<std::mutex> lock(diagMutex_);
+		if (diagIndex_ != index_.get()) {
+			diagIndex_ = index_.get();
+			diagSources_.clear();
+			diagSourceTotal_ = 0;
+			diagMatched_ = false;
+			diagReported_ = false;
+			diagEventsBase_ = hookEvents_.load(std::memory_order_relaxed);
+		}
+	}
+}
+
+void Vm::DiagRecordSource(const SourceEntry& e) {
+	std::lock_guard<std::mutex> lock(diagMutex_);
+	if (!e.match.bps.empty()) diagMatched_ = true;
+	if (e.chunk.empty() || e.chunk[0] == '=') return; // =[C] 之类没有参考价值
+	for (const std::string& s : diagSources_) {
+		if (s == e.chunk) return;
+	}
+	++diagSourceTotal_;
+	if (diagSources_.size() < kDiagMaxSources) diagSources_.push_back(e.chunk);
+}
+
+std::string Vm::BreakpointDiagnostics(const void* currentIndex) {
+	if (!anyBreakpoints_.load(std::memory_order_relaxed)) return {};
+	std::lock_guard<std::mutex> lock(diagMutex_);
+	if (diagReported_ || diagMatched_) return {};
+	diagReported_ = true;
+	const uint64_t events = hookEvents_.load(std::memory_order_relaxed) - diagEventsBase_;
+	std::string text = "VM " + std::to_string(id_) + "：断点下发后还没有匹配上任何执行过的脚本。";
+	if (diagIndex_ != currentIndex) {
+		text += "这批断点还没在这个 VM 上生效：从下发起它没有执行过 Lua，或者调试钩子没挂到实际执行脚本的 lua_State 上。";
+		return text;
+	}
+	if (diagSources_.empty()) {
+		text += "这段时间钩子收到 " + std::to_string(events) +
+			" 个事件，但没有执行过任何脚本文件里的函数（断点所在的代码可能还没跑到）。";
+		return text;
+	}
+	text += "这段时间执行过的脚本 chunk 名（去重，共 " + std::to_string(diagSourceTotal_) + " 个";
+	if (diagSourceTotal_ > diagSources_.size()) text += "，只列前 " + std::to_string(diagSources_.size()) + " 个";
+	text += "）：";
+	for (const std::string& s : diagSources_) {
+		std::string line = s.size() > 200 ? s.substr(0, 200) + "…" : s;
+		for (char& c : line) {
+			if (c == '\n' || c == '\r') c = ' ';
+		}
+		text += "\n  " + line;
+	}
+	text += "\n如果断点所在的文件不在里面，是那段代码还没执行；如果在里面但没断下，是 chunk 名和 IDE 里的文件路径没对上，请把这段日志附到问题报告里。";
+	return text;
 }
 
 void Vm::SetRunToLine(std::shared_ptr<Breakpoint> bp) {

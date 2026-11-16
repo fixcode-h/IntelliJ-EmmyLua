@@ -327,6 +327,25 @@ TEST_CASE("session.condition_hit_logpoint_probe") {
 	c.Request("disconnect");
 }
 
+TEST_CASE("session.breakpoint_diagnostics") {
+	// 断点 5 秒没匹配上任何执行过的脚本：报出执行过的 chunk 名
+	TestClient c;
+	CHECK(c.Connect("127.0.0.1", g_port));
+	CHECK(Ok(Hello(c)));
+	g_rev = 0;
+	CHECK(Ok(c.Request("configurationDone")));
+	json bp = {{"id", "nowhere"}, {"source", {{"path", "D:/proj/other/nothing.lua"}}}, {"line", 3}};
+	CHECK(Ok(SetBps(c, json::array({bp}))));
+	json diag = c.WaitEvent("output", 8000, [](const json& b) { return b["category"] == "runtime"; });
+	CHECK(diag.is_object());
+	if (diag.is_object()) {
+		const std::string text = diag["body"]["text"].get<std::string>();
+		CHECK(text.find("@game/main.lua") != std::string::npos);
+		std::printf("  %s", text.c_str());
+	}
+	c.Request("disconnect");
+}
+
 TEST_CASE("session.pause_runToLine_output_disconnect") {
 	TestClient c;
 	CHECK(c.Connect("127.0.0.1", g_port));

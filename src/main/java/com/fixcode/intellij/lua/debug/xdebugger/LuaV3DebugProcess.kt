@@ -171,16 +171,26 @@ class LuaV3DebugProcess(
         if (stopping) return
         notifyModel(event)
         when (event) {
-            is DebugEvent.Paused -> if (event.focused) present(event.pause)
+            is DebugEvent.Paused -> {
+                logPauseLocation(event.pause)
+                if (event.focused) present(event.pause)
+            }
             is DebugEvent.FocusChanged -> event.pause?.let(::present)
             is DebugEvent.Resumed -> {
                 // 用户在 IDE 里点的继续，XDebugger 已经切到运行态；Agent / 断线 / 宿主恢复的要通知 UI
                 if (event.initiator != Initiator.USER && engine.focusedPause() == null) session.sessionResumed()
             }
-            is DebugEvent.BreakpointsChanged -> event.breakpoints.forEach(::updateBreakpointState)
+            is DebugEvent.BreakpointsChanged -> {
+                event.breakpoints.forEach(::updateBreakpointState)
+                event.breakpoints.forEach(::logBreakpointState)
+                event.removedIds.forEach { loggedStates.remove(it) }
+            }
             is DebugEvent.Output -> printOutput(event)
             is DebugEvent.Disconnected -> print("[EmmyLua] 连接断开：${event.reason}，正在重连…\n", ConsoleViewContentType.LOG_WARNING_OUTPUT)
-            is DebugEvent.Connected -> if (event.reconnect) print("[EmmyLua] 已重新连接，断点已重新下发。\n", ConsoleViewContentType.SYSTEM_OUTPUT)
+            is DebugEvent.Connected -> {
+                if (event.reconnect) print("[EmmyLua] 已重新连接，断点已重新下发。\n", ConsoleViewContentType.SYSTEM_OUTPUT)
+                schedulePendingHint()
+            }
             is DebugEvent.SourceMismatch -> print(
                 "[EmmyLua] ${event.chunkName ?: event.breakpointId}：设备上的代码和本地文件不一致，断点行号可能不准。\n",
                 ConsoleViewContentType.LOG_WARNING_OUTPUT
@@ -208,6 +218,53 @@ class LuaV3DebugProcess(
         }
     }
 
+    // ---------- 控制台诊断：断点有没有对上代码、停在哪个 chunk ----------
+
+    /** 每个断点最近打印过的状态，同一状态不重复打印。 */
+    private val loggedStates = ConcurrentHashMap<String, BreakpointVerification>()
+
+    private fun logBreakpointState(view: BreakpointView) {
+        if (view.request.origin == BreakpointOrigin.TEMPORARY) return
+        if (loggedStates.put(view.id, view.verification) == view.verification) return
+        val where = "${view.request.file.substringAfterLast('/')}:${view.request.line}"
+        val (text, type) = when (view.verification) {
+            BreakpointVerification.PENDING -> "断点 $where 已下发，等这段代码执行时生效" to ConsoleViewContentType.LOG_DEBUG_OUTPUT
+            BreakpointVerification.VERIFIED -> {
+                val moved = view.actualLine?.takeIf { it != view.request.line }?.let { "（实际在第 $it 行）" } ?: ""
+                "断点 $where 已生效$moved" to ConsoleViewContentType.LOG_INFO_OUTPUT
+            }
+            BreakpointVerification.MISMATCH -> "断点 $where 已生效，但设备上的代码和本地文件不一致" to ConsoleViewContentType.LOG_WARNING_OUTPUT
+            BreakpointVerification.AMBIGUOUS -> "断点 $where 同时对上了多个同名文件，没有生效：${view.message ?: "在调试窗口的「映射」页指定对应的文件"}" to ConsoleViewContentType.LOG_WARNING_OUTPUT
+            BreakpointVerification.INVALID -> "断点 $where 无效：${view.message ?: "未知原因"}" to ConsoleViewContentType.LOG_WARNING_OUTPUT
+        }
+        print("[EmmyLua] $text\n", type)
+    }
+
+    /**
+     * 连上 20 秒后还有断点一直是「已下发」：多半是代码没执行，或 runtime 看到的文件名对不上本地路径。
+     * 提示一次怎么查，不要让用户对着不触发的断点干等。
+     */
+    private fun schedulePendingHint() {
+        com.intellij.util.concurrency.AppExecutorUtil.getAppScheduledExecutorService().schedule({
+            if (stopping) return@schedule
+            val pending = engine.breakpoints().filter { it.request.origin == BreakpointOrigin.IDE && it.verification == BreakpointVerification.PENDING }
+            if (pending.isEmpty()) return@schedule
+            print(
+                "[EmmyLua] 有 ${pending.size} 个断点连上 20 秒后仍没对上代码。确认这段代码执行过；如果执行过还不停，" +
+                    "点调试工具栏的「暂停」，控制台会打印游戏实际执行的文件名（chunkName）；点了也停不下来说明调试钩子没生效。把控制台这几行发给我们。\n",
+                ConsoleViewContentType.LOG_WARNING_OUTPUT
+            )
+        }, 20, java.util.concurrent.TimeUnit.SECONDS)
+    }
+
+    private fun logPauseLocation(pause: PauseInfo) {
+        val top = pause.top ?: return
+        if (!top.hasSource) return
+        val local = engine.localPathOfChunk(top.chunkName)
+        val mapped = local?.let { "本地文件 $it" } ?: "没有找到对应的本地文件，断点下在这个文件上不会生效"
+        print("[EmmyLua] 暂停在 chunkName=\"${top.chunkName}\" 第 ${top.line} 行（$mapped）\n", ConsoleViewContentType.LOG_INFO_OUTPUT)
+    }
+
     private fun breakpointFor(ids: List<String>): XLineBreakpoint<*>? {
         if (ids.isEmpty()) return null
         return breakpointIds.entries.firstOrNull { (_, future) -> future.getNow(null) in ids }?.key
@@ -216,7 +273,11 @@ class LuaV3DebugProcess(
     private fun printOutput(event: DebugEvent.Output) {
         val type = when (event.output.category) {
             OutputCategories.STDERR -> ConsoleViewContentType.ERROR_OUTPUT
-            OutputCategories.RUNTIME -> if (event.output.level == "error") ConsoleViewContentType.ERROR_OUTPUT else ConsoleViewContentType.LOG_INFO_OUTPUT
+            OutputCategories.RUNTIME -> when (event.output.level) {
+                "error" -> ConsoleViewContentType.ERROR_OUTPUT
+                "warn", "warning" -> ConsoleViewContentType.LOG_WARNING_OUTPUT
+                else -> ConsoleViewContentType.LOG_INFO_OUTPUT
+            }
             OutputCategories.LOGPOINT -> ConsoleViewContentType.LOG_DEBUG_OUTPUT
             else -> ConsoleViewContentType.NORMAL_OUTPUT
         }

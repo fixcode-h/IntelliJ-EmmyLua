@@ -294,6 +294,12 @@ runtime 对每个 chunk（按 `source` 字符串指针缓存）计算一次匹�
 3. 否则按**路径段后缀**匹配：chunk 的路径段是断点路径段的后缀（常见：chunk 是相对路径 `Content/Script/UI/BagPanel.lua`，断点是绝对路径），或断点路径段是 chunk 路径段的后缀（设备上是绝对路径）。比较前两边都去掉扩展名 `.lua` / `.luac` / `.txt` / `.bytes`。
 4. 一个 chunk 同时匹配多个不同 `source.path` 时，取匹配段数最多的那个；仍并列时都不匹配，并对这些断点发 `breakpointStatus { state: "ambiguous" }`，提示用户配置 chunkName 映射。
 5. `=[C]`、`=?` 等非文件源永不匹配；`[string "..."]`（`load` 的代码串）只能用 `source.chunkName` 精确匹配。
+6. 不带 `@` 的 chunk 也可能是文件（UnLua 及其改过的分支常直接用路径或模块名当 chunkname），满足其一就按文件匹配：单行、不超过 1024 字，并且
+   - 以 `.lua` / `.luac` / `.txt` / `.bytes` 结尾，不含 `(){}=;"'`，没有路径分隔符时也不含空白；或
+   - 含 `/` 或 `\`，不含代码里才会出现的符号（`(){}=;"'`、制表符、`,+*<>[]#~`）；或
+   - 是模块名：只有字母、数字、`_` 和点（`Tutorials.BP_CharacterBase`），不是关键字。规范化时点换成 `/`，按 `require` 的规则当路径比后缀。
+
+断点下发 5 秒后，如果某个 VM 还没有任何 chunk 匹配上这批断点，runtime 发一次 `output { category: "runtime", level: "warn", vmId }`，正文列出这段时间执行过的 chunk 原文（去重，最多 20 个）；一个都没执行过时说明钩子收到的事件数，或者断点还没在这个 VM 上生效。用于区分「路径对不上」和「代码没跑 / 钩子没挂上」。
 
 ### 7.3 `hitCondition` 语法
 

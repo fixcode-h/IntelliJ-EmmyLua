@@ -35,11 +35,30 @@ object SourcePaths {
         return prefix + parts.joinToString("/")
     }
 
-    /** chunkName → 路径：去掉开头的 `@`；`=[C]`、`[string "..."]` 这类不是文件，返回 null。 */
+    /**
+     * chunkName → 路径。和 runtime 的规则一致（protocol-v3.md 7.2）：
+     * - `@path` 是文件；`=[C]`、`=?` 不是。
+     * - 不带 `@` 的（UnLua 等宿主直接用路径或模块名当 chunkname）在像路径时也当文件：单行、不超过 1024 字，
+     *   并且以 .lua/.luac/.txt/.bytes 结尾、或含 `/` `\` 且没有代码符号、或是模块名（只有字母数字 `_` 和点，点当目录分隔）。
+     * - 其余（load 进来的代码串）返回 null。
+     */
     fun chunkToPath(chunkName: String): String? {
-        if (chunkName.isEmpty() || chunkName.startsWith("=") || chunkName.startsWith("[")) return null
-        return normalize(chunkName.removePrefix("@"))
+        if (chunkName.isEmpty() || chunkName.startsWith("=")) return null
+        if (chunkName.startsWith("@")) return normalize(chunkName.substring(1))
+        if (chunkName.length > 1024 || chunkName.any { it == '\n' || it == '\r' }) return null
+        val lower = chunkName.lowercase()
+        val hasCode = chunkName.any { it in CODE_CHARS }
+        return when {
+            LUA_EXTENSIONS.any { lower.endsWith(it) } && !hasCode && (chunkName.contains('/') || chunkName.contains('\\') || chunkName.none { it.isWhitespace() }) ->
+                normalize(chunkName)
+            (chunkName.contains('/') || chunkName.contains('\\')) && !hasCode -> normalize(chunkName)
+            MODULE_NAME.matches(chunkName) -> normalize(chunkName.replace('.', '/'))
+            else -> null
+        }
     }
+
+    private const val CODE_CHARS = "(){}=;\"'"
+    private val MODULE_NAME = Regex("[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)*")
 
     /** 比较用的路径段：去掉扩展名 .lua/.luac/.txt/.bytes（协议 7.2），按需忽略大小写。 */
     fun segments(path: String, caseSensitive: Boolean): List<String> {

@@ -48,6 +48,10 @@ public:
 	Vm(uint64_t id, lua_State* L, std::string discovery);
 	~Vm() override;
 
+	// 断点诊断（任意线程）：当前这批断点下发后还没匹配上任何执行过的脚本时，返回给用户看的说明
+	// （执行过的 chunk 原文、钩子事件数），每批断点只返回一次；已匹配或已报过返回空串。
+	std::string BreakpointDiagnostics(const void* currentIndex);
+
 	void Install();   // VM 线程
 	void Uninstall(); // VM 线程
 
@@ -153,6 +157,18 @@ private:
 	std::atomic<int> pauseReason_{0}; // 0 pause 1 entry
 	std::atomic<bool> active_{false};
 	std::atomic<bool> anyBreakpoints_{false};
+
+	// 断点诊断：VM 线程写（只在 Lookup 慢路径和 RefreshIndex），诊断时别的线程读
+	std::mutex diagMutex_;
+	const void* diagIndex_ = nullptr;     // 诊断数据对应的断点索引
+	std::vector<std::string> diagSources_; // 这批断点生效后执行过的 chunk（去重，最多 kDiagMaxSources 个）
+	size_t diagSourceTotal_ = 0;
+	bool diagMatched_ = false;
+	bool diagReported_ = false;
+	std::atomic<uint64_t> hookEvents_{0}; // 只有 VM 线程写
+	uint64_t diagEventsBase_ = 0;
+	static constexpr size_t kDiagMaxSources = 20;
+	void DiagRecordSource(const SourceEntry& e);
 
 	// 只在 VM 线程
 	uint64_t sessionGen_ = 0;

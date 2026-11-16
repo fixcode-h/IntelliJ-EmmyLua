@@ -17,6 +17,8 @@ NormalizedPath NormalizePath(std::string_view raw, bool caseSensitive);
 
 // chunk 源是不是文件（'=[C]'、'=?'、'[string ...]' 都不是）
 bool IsFileChunk(std::string_view source);
+// 只由标识符和点组成的模块名（UnLua 按模块名加载时的 chunkname）
+bool IsModuleChunk(std::string_view source);
 
 // 两条路径的段是否构成后缀关系；返回匹配的段数，不匹配返回 0。
 size_t SuffixMatchSegments(const NormalizedPath& a, const NormalizedPath& b);
