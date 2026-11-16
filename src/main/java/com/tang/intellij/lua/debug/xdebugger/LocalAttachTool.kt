@@ -24,8 +24,8 @@ class LocalAttachTool(
 ) {
     data class Result(val host: String, val port: Int, val pid: Int, val reinjected: Boolean)
 
-    fun attach(pid: Int, token: String): Result {
-        val arch = detectArch(pid)
+    /** [arch] 为空时现查；同一个会话里应该只查一次（进程退出后 arch_pid 会失败，不能拿它的结果回退成 x86）。 */
+    fun attach(pid: Int, token: String, arch: String = detectArch(pid)): Result {
         val dir = File(toolsRoot, arch)
         val tool = File(dir, TOOL)
         if (!tool.isFile) throw IOException("插件里缺少 $arch/$TOOL，请确认插件包完整")
@@ -36,11 +36,16 @@ class LocalAttachTool(
         return result
     }
 
-    private fun detectArch(pid: Int): String {
+    /** 目标进程的位数（x64 / x86）。emmy_tool arch_pid 退出码 0 = x64，1 = x86，其他是出错（进程不存在、没权限）。 */
+    fun detectArch(pid: Int): String {
         val probe = File(File(toolsRoot, "x86"), TOOL).takeIf { it.isFile } ?: File(File(toolsRoot, "x64"), TOOL)
         if (!probe.isFile) throw IOException("插件里缺少 $TOOL，请确认插件包完整")
-        val (exit, _) = run(listOf(probe.path, "arch_pid", pid.toString()), probe.parentFile)
-        return if (exit == 0) "x64" else "x86"
+        val (exit, output) = run(listOf(probe.path, "arch_pid", pid.toString()), probe.parentFile)
+        return when (exit) {
+            0 -> "x64"
+            1 -> "x86"
+            else -> throw IOException("无法判断进程 $pid 的位数（emmy_tool 退出码 $exit）：${output.trim().takeLast(200)}")
+        }
     }
 
     private fun run(command: List<String>, dir: File): Pair<Int, String> {
