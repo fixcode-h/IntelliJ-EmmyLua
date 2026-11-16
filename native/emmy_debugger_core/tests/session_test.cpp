@@ -823,6 +823,189 @@ TEST_CASE("session.exceptions") {
 	c.Request("disconnect");
 }
 
+namespace {
+
+std::string ReadHelper(const char* name) {
+#ifdef EMMY_HELPERS_V3_DIR
+	std::string path = std::string(EMMY_HELPERS_V3_DIR) + "/" + name + ".lua";
+	FILE* f = std::fopen(path.c_str(), "rb");
+	if (!f) return "";
+	std::string out;
+	char buf[4096];
+	size_t n;
+	while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) out.append(buf, n);
+	std::fclose(f);
+	return out;
+#else
+	(void)name;
+	return "";
+#endif
+}
+
+std::vector<std::string> Names(const json& page) {
+	std::vector<std::string> out;
+	for (auto& v : page["body"]["variables"]) out.push_back(v["name"].get<std::string>());
+	return out;
+}
+
+bool HasAttr(const json& v, const char* attr) {
+	for (auto& a : v.value("attrs", json::array())) if (a == attr) return true;
+	return false;
+}
+
+} // namespace
+
+// variable-view 11.1 / 11.2 / 13.4：显示规则（摘要模板、固定、隐藏、类名字段）和 helper v2 formatter
+TEST_CASE("session.view_rules_and_formatters") {
+	const std::string emmyLua = ReadHelper("emmy"), ueLua = ReadHelper("emmy_ue");
+	if (emmyLua.empty() || ueLua.empty()) {
+		std::printf("  跳过：找不到 helper v2 脚本\n");
+		return;
+	}
+	TestClient c;
+	CHECK(c.Connect("127.0.0.1", g_port));
+	json hello = Hello(c, json::array({"valuePath", "luaEval", "richVariables", "viewRules", "helpers"}));
+	CHECK(Ok(hello));
+	bool viewRules = false;
+	for (auto& cap : hello["body"]["caps"]) if (cap == "viewRules") viewRules = true;
+	CHECK(viewRules);
+
+	// 测试用的入口：真 emmy.lua / emmy_ue.lua，再注册几个 formatter
+	const char* testMain = R"L(
+local emmy = require("emmy")
+require("emmy_ue")
+emmy.registerFormatter {
+  name = "Vec", match = { typeName = "Vec" },
+  summary = function(v) return "(" .. v.x .. ", " .. v.y .. ")" end,
+  count = function(v) return #v.items end,
+  children = function(v, start, count)
+    local out = {}
+    for i = start + 1, math.min(#v.items, start + count) do out[#out + 1] = { name = "[" .. i .. "]", value = v.items[i] } end
+    if start == 0 then out[1] = { name = "first", summary = "固定显示" } end
+    return out
+  end,
+}
+emmy.registerFormatter { name = "Bad", match = { typeName = "Bad" }, summary = function() error("boom") end }
+emmy.registerFormatter { name = "Slow", match = function(obj, tn) return tn == "Slow" end, summary = function() while true do end end }
+local Old = emmy.getProcessorBase():extend()
+function Old:processSpecific(variable, obj)
+  variable.value = "old:" .. obj.v
+  local child = emmy.createNode()
+  child.name = "v"
+  child:query(obj.v, 1, true)
+  variable:addChild(child)
+end
+emmy.registerProcessor("Old", Old)
+return emmy
+)L";
+	json lh = c.Request("loadHelpers", {{"main", "test_main"}, {"scripts", json::array({
+		{{"name", "emmy"}, {"source", emmyLua}},
+		{{"name", "emmy_ue"}, {"source", ueLua}},
+		{{"name", "test_main"}, {"source", testMain}},
+	})}});
+	CHECK(Ok(lh));
+	json rules = {
+		{"version", 1},
+		{"classNameFields", {"__myclass"}},
+		{"builtinGlobals", {"MY_GLOBAL"}},
+		{"types", {
+			{"BagPanel", {{"summary", "#{item2} {Name} {missing.x}"}, {"pin", {"name", "item10"}}, {"hide", {"item10", "speed"}}}},
+			{"Pinned", {{"pin", {"b"}}}},
+			{"Broken", {{"summary", "{a b}"}}},
+		}},
+	};
+	json sr = c.Request("setViewRules", {{"rules", rules}});
+	CHECK(Ok(sr));
+	CHECK_EQ(sr["body"]["accepted"].get<int>(), 2);
+	CHECK_EQ(sr["body"]["warnings"].size(), static_cast<size_t>(1));
+	CHECK_EQ(sr["body"]["warnings"][0]["type"].get<std::string>(), std::string("Broken"));
+	CHECK(Ok(c.Request("setOptions", {{"variableView", {{"helperBudgetMs", 50}}}})));
+	g_rev = 0;
+	CHECK(Ok(SetBps(c, json::array({Bp("vr", 9)}))));
+	CHECK(Ok(c.Request("configurationDone")));
+	json pz = c.WaitEvent("paused");
+	CHECK(pz.is_object());
+	if (!pz.is_object()) return;
+	uint64_t vmId = pz["body"]["vmId"], pauseId = pz["body"]["pauseId"];
+	json stack = c.Request("stackTrace", {{"vmId", vmId}, {"pauseId", pauseId}});
+	uint64_t frameId = stack["body"]["frames"][0]["frameId"];
+	auto eval = [&](const char* expr) {
+		return c.Request("evaluate", {{"frameId", frameId}, {"expression", expr}, {"mode", "lua"}});
+	};
+
+	// ---- 显示规则 ----
+	json ev = eval(R"L((function()
+  local Base = { speed = 5, Show = function(self) end } Base.__index = Base
+  local Panel = setmetatable({}, {__index = Base}) Panel.__index = Panel
+  Panel.__myclass = "BagPanel"
+  return setmetatable({item10 = 1, item2 = 2, Name = "N", name = "x", zeta = true}, Panel)
+end)())L");
+	CHECK(Ok(ev));
+	CHECK_EQ(ev["body"]["typeName"].get<std::string>(), std::string("BagPanel")); // classNameFields 生效
+	CHECK_EQ(ev["body"]["value"].get<std::string>(), std::string("#2 N ?"));
+	json ov = c.Request("variables", {{"ref", ev["body"]["ref"]}});
+	CHECK((Names(ov) == std::vector<std::string>{"name", "item2", "Name", "zeta"}));
+	CHECK(HasAttr(ov["body"]["variables"][0], "pinned"));
+	CHECK(!HasAttr(ov["body"]["variables"][1], "pinned"));
+	for (auto& g : ov["body"]["groups"]) {
+		if (g["name"].get<std::string>().rfind("继承自", 0) != 0) continue;
+		json b = c.Request("variables", {{"ref", g["ref"]}});
+		for (auto& v : b["body"]["variables"]) CHECK(v["name"] != "speed"); // 继承来的也按实例类型的规则隐藏
+	}
+	// 原始视图不受规则影响
+	json raw = c.Request("variables", {{"ref", ev["body"]["ref"]}, {"view", "raw"}});
+	bool rawHasHidden = false;
+	for (auto& v : raw["body"]["variables"]) if (v["name"] == "item10") rawHasHidden = true;
+	CHECK(rawHasHidden);
+	// 只有 pin 时摘要优先列固定字段
+	json pv = eval("setmetatable({a = 1, b = 2}, {__name = 'Pinned'})");
+	CHECK_EQ(pv["body"]["value"].get<std::string>(), std::string("{b=2, …}"));
+
+	// ---- helper v2 ----
+	json vec = eval("setmetatable({x = 1, y = 2, items = (function() local t = {} for i = 1, 250 do t[i] = i * 10 end return t end)()}, {__name = 'Vec'})");
+	CHECK(Ok(vec));
+	CHECK_EQ(vec["body"]["value"].get<std::string>(), std::string("(1, 2)"));
+	CHECK_EQ(vec["body"]["typeName"].get<std::string>(), std::string("Vec"));
+	json p1 = c.Request("variables", {{"ref", vec["body"]["ref"]}, {"start", 0}, {"count", 100}});
+	CHECK(Ok(p1));
+	CHECK_EQ(p1["body"]["total"].get<int>(), 250);
+	CHECK_EQ(p1["body"]["variables"].size(), static_cast<size_t>(100));
+	CHECK_EQ(p1["body"]["variables"][0]["name"].get<std::string>(), std::string("first"));
+	CHECK_EQ(p1["body"]["variables"][0]["value"].get<std::string>(), std::string("固定显示"));
+	json p3 = c.Request("variables", {{"ref", vec["body"]["ref"]}, {"start", 200}, {"count", 100}});
+	CHECK_EQ(p3["body"]["variables"].size(), static_cast<size_t>(50));
+	CHECK_EQ(p3["body"]["variables"][0]["name"].get<std::string>(), std::string("[201]"));
+	CHECK_EQ(p3["body"]["variables"][0]["value"].get<std::string>(), std::string("2010"));
+
+	json bad = eval("setmetatable({k = 1}, {__name = 'Bad'})");
+	CHECK(Ok(bad));
+	CHECK(HasAttr(bad["body"], "helperError"));
+	CHECK(bad["body"]["hint"].get<std::string>().find("boom") != std::string::npos);
+	CHECK(bad["body"]["value"].get<std::string>().find("k=1") != std::string::npos); // 退回默认显示
+
+	auto t0 = std::chrono::steady_clock::now();
+	json slow = eval("setmetatable({}, {__name = 'Slow'})");
+	auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+	CHECK(Ok(slow));
+	CHECK(HasAttr(slow["body"], "helperError")); // 死循环被预算打断
+	CHECK(ms < 2000);
+
+	json old = eval("setmetatable({v = 7}, {__name = 'Old'})");
+	CHECK_EQ(old["body"]["value"].get<std::string>(), std::string("old:7"));
+	json oc = c.Request("variables", {{"ref", old["body"]["ref"]}});
+	CHECK_EQ(oc["body"]["variables"][0]["name"].get<std::string>(), std::string("v"));
+	CHECK_EQ(oc["body"]["variables"][0]["value"].get<std::string>(), std::string("7"));
+
+	// 规则清空后恢复默认
+	CHECK(Ok(c.Request("setViewRules", {{"rules", json::object()}})));
+	json ev3 = c.Request("variables", {{"ref", ev["body"]["ref"]}});
+	CHECK(ev3.is_object());
+
+	CHECK(Ok(SetBps(c, json::array())));
+	CHECK(Ok(Continue(c, pz)));
+	c.Request("disconnect");
+}
+
 int main() {
 	g_port = 39000 + static_cast<int>(std::chrono::steady_clock::now().time_since_epoch().count() % 2000);
 	char err[256] = {0};

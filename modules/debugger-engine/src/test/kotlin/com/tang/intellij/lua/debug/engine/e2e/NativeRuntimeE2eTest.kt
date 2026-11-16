@@ -175,8 +175,7 @@ class NativeRuntimeE2eTest {
         val loader = threads.firstOrNull { it.threadId != pause.threadId && it.status == "suspended" }
         assertTrue("应该列出挂起的 loader 协程：$threads", loader != null)
         val frames = session.stackTrace(pause, threadId = loader!!.threadId).await().frames
-        // emmy_debugger_core 目前 stackTrace 忽略 threadId（总是返回暂停线程的栈），等 native 补上后这里自动生效
-        assumeTrue("runtime 还没按 threadId 取协程的栈", frames.all { it.frame.threadId == loader.threadId })
+        assertTrue("取到的应该是 loader 协程的栈：${frames.map { it.frame }}", frames.all { it.frame.threadId == loader.threadId })
         val luaFrame = frames.firstOrNull { it.frame.hasSource } ?: error("协程栈里没有 Lua 帧：${frames.map { it.frame }}")
         val scopes = session.scopes(luaFrame).await()
         val locals = scopes.firstOrNull { it.name == "locals" } ?: error("没有 locals：${scopes.map { it.name }}")

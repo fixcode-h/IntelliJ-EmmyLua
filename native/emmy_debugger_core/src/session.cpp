@@ -2,6 +2,7 @@
 
 #include "core.h"
 #include "lua_shim.h"
+#include "view_rules.h"
 #include "vm.h"
 
 #include <chrono>
@@ -29,7 +30,7 @@ namespace {
 
 const char* const kRuntimeCaps[] = {
 	"cbor", "valuePath", "luaEval", "setVariable", "condition", "hitCondition", "logpoint", "capture",
-	"runToLine", "coroutines", "output", "helpers", "sourceHash", "hookMux", "richVariables", "exceptions",
+	"runToLine", "coroutines", "output", "helpers", "sourceHash", "hookMux", "richVariables", "exceptions", "viewRules",
 };
 
 const char* PlatformName() {
@@ -234,6 +235,7 @@ void Session::Dispatch(uint64_t id, const std::string& command, const json& args
 	if (command == "setBreakpoints") return CmdSetBreakpoints(id, args);
 	if (command == "setOptions") return CmdSetOptions(id, args);
 	if (command == "loadHelpers") return CmdLoadHelpers(id, args);
+	if (command == "setViewRules") return CmdSetViewRules(id, args);
 	if (command == "configurationDone") {
 		core.ConfigurationDone();
 		return Reply(id, json::object());
@@ -440,6 +442,9 @@ void Session::CmdSetOptions(uint64_t id, const json& args) {
 		flag("showMetatable", o.viewShowMetatable);
 		flag("hideStdGlobals", o.viewHideStdGlobals);
 		flag("showTemporaries", o.viewShowTemporaries);
+		if (v.contains("helperBudgetMs") && v["helperBudgetMs"].is_number_integer()) {
+			o.viewHelperBudgetMs = std::max(1, std::min(1000, v["helperBudgetMs"].get<int>()));
+		}
 		if (v.contains("maxSortKeys") && v["maxSortKeys"].is_number_integer()) {
 			o.viewMaxSortKeys = std::max(0, std::min(1000000, v["maxSortKeys"].get<int>()));
 		}
@@ -460,6 +465,19 @@ void Session::CmdSetOptions(uint64_t id, const json& args) {
 	if (o.CaseSensitive() != oldCase) core.RebuildIndex();
 	core.NotifyVms(kFlagRefresh);
 	Reply(id, json::object());
+}
+
+// variable-view 13.4：整体替换显示规则；非法的单条规则跳过并在 warnings 里说明。
+// 新规则对之后新建的引用生效（IDE 刷新变量树即可在本次暂停里看到）
+void Session::CmdSetViewRules(uint64_t id, const json& args) {
+	if (!args.contains("rules") || !args["rules"].is_object()) return Fail(id, "INVALID_ARGS", "setViewRules 需要 rules 对象（显示规则文件的内容）。");
+	int accepted = 0;
+	json warnings;
+	auto rules = ParseViewRules(args["rules"], accepted, warnings);
+	Core::Get().SetViewRules(std::move(rules));
+	json body = {{"accepted", accepted}};
+	if (!warnings.empty()) body["warnings"] = std::move(warnings);
+	Reply(id, std::move(body));
 }
 
 void Session::CmdLoadHelpers(uint64_t id, const json& args) {
@@ -630,6 +648,8 @@ void Session::CmdPaused(uint64_t id, const std::string& command, const json& arg
 	vo.showTemporaries = o.viewShowTemporaries.load();
 	vo.maxSortKeys = o.viewMaxSortKeys.load();
 	vo.toString = o.viewToString.load();
+	vo.helperBudgetMs = o.viewHelperBudgetMs.load();
+	if (vo.rich) vo.rules = core.ViewRules();
 	vo.maxValueLength = static_cast<size_t>(std::max(16, std::min(1024, GetInt(args, "maxValueLength", 256))));
 	std::weak_ptr<Session> weak = shared_from_this();
 	vm->Post([vm, weak, id, command, args, objId, eo, vo](lua_State*) {

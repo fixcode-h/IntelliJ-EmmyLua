@@ -129,10 +129,21 @@ internal fun iconOf(v: VariableDto): Icon = when {
     }
 }
 
-/** 展开时带下去的上下文：所在帧（查看完整值时在哪一帧求值）、祖先的 objectId（判断循环引用）。 */
-internal data class ExpandContext(val frame: FrameHandle?, val ancestors: List<String> = emptyList()) {
-    fun child(objectId: String?) = if (objectId.isNullOrEmpty()) this else copy(ancestors = ancestors + objectId)
+/**
+ * 展开时带下去的上下文：所在帧（查看完整值时在哪一帧求值）、祖先的 objectId（判断循环引用）、
+ * 子项所属对象的类名（右键「固定 / 隐藏字段」写进显示规则文件的哪个类型，11.1）。
+ */
+internal data class ExpandContext(
+    val frame: FrameHandle?,
+    val ancestors: List<String> = emptyList(),
+    val ownerType: String? = null
+) {
+    fun child(objectId: String?, ownerType: String? = null): ExpandContext =
+        copy(ancestors = if (objectId.isNullOrEmpty()) ancestors else ancestors + objectId, ownerType = ownerType)
 }
+
+/** 有类名的对象才能按类型写显示规则；数组、普通 table、模块里的函数这类没有可匹配的类型。 */
+private val RULE_KINDS = setOf("object", "record", "class", "module", "userdata")
 
 /**
  * 子项加载：分页、过期时静默显示提示（协议第 18 节：STALE 不弹错误）。
@@ -271,7 +282,7 @@ class LuaV3Value internal constructor(
         val pause = parent?.pause ?: return node.addChildren(XValueChildrenList.EMPTY, true)
         if (!variable.expandable || variable.hasAttr("invalid")) return node.addChildren(XValueChildrenList.EMPTY, true)
         val container = VariableContainer(pause, variable.ref, variable.name)
-        val childCtx = ctx.child(variable.objectId)
+        val childCtx = ctx.child(variable.objectId, variable.typeName?.takeIf { it.isNotBlank() && variable.kind in RULE_KINDS })
         val indexed = variable.indexedCount ?: 0
         if (indexed > childrenPage()) {
             // 大数组：数组段切成区间放在顶部，字段段（和底部分组）照常分页
@@ -285,6 +296,16 @@ class LuaV3Value internal constructor(
     }
 
     override fun getEvaluationExpression(): String? = variable.evaluateName
+
+    /** 右键「固定 / 隐藏字段」用：所属对象的类名和字符串键原文；不能按规则处理的返回 null。 */
+    internal fun ruleTarget(): Pair<String, String>? {
+        val owner = ctx.ownerType ?: return null
+        if (variable.nameType != null && variable.nameType != "string") return null
+        if (variable.kind == "group" || variable.hasAttr("metamethod")) return null
+        return owner to fieldName(variable.name)
+    }
+
+    internal val pinned: Boolean get() = variable.hasAttr("pinned")
 
     override fun canNavigateToSource(): Boolean = variable.location != null
 
@@ -311,6 +332,10 @@ class LuaV3Value internal constructor(
     }
 
     private companion object {
+        /** 非标识符的字符串键显示成 `["end"]`，规则文件里写原文 */
+        fun fieldName(name: String): String =
+            if (name.startsWith("[\"") && name.endsWith("\"]")) unescape(name.substring(2, name.length - 2)) else name
+
         /** runtime 摘要里的转义还原成原文（查看完整内容时显示原文） */
         fun unescape(text: String): String {
             if ('\\' !in text) return text

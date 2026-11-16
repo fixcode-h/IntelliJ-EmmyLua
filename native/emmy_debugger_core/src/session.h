@@ -41,6 +41,7 @@ private:
 	void CmdSetBreakpoints(uint64_t id, const json& args);
 	void CmdSetOptions(uint64_t id, const json& args);
 	void CmdLoadHelpers(uint64_t id, const json& args);
+	void CmdSetViewRules(uint64_t id, const json& args);
 	void CmdContinue(uint64_t id, const json& args);
 	void CmdStep(uint64_t id, const std::string& command, const json& args);
 	void CmdRunToLine(uint64_t id, const json& args);

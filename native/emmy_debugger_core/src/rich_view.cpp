@@ -5,6 +5,7 @@
 
 #include "host_value.h"
 #include "inspector_util.h"
+#include "view_rules.h"
 #include "vm.h"
 
 #include <algorithm>
@@ -264,6 +265,9 @@ std::string Inspector::ClassName(lua_State* L, int idx) {
 		name = RawGetString(L, mt, f);
 		if (name.empty() && indexTable) name = RawGetString(L, index, f);
 	}
+	// 显示规则里追加的类名字段（11.1 classNameFields）
+	if (name.empty()) name = RuleClassName(L, mt);
+	if (name.empty() && indexTable) name = RuleClassName(L, index);
 	if (name.empty()) name = LastSegment(LoadedName(L, mt));
 	if (name.empty() && indexTable) name = LastSegment(LoadedName(L, index));
 	lua_pop(L, 2);
@@ -473,6 +477,7 @@ void Inspector::RichTable(lua_State* L, int idx, VariableItem& item) {
 			if (!cn.empty()) break;
 			cn = RawGetString(L, idx, f);
 		}
+		if (cn.empty()) cn = RuleClassName(L, idx);
 		if (cn.empty()) cn = LastSegment(loaded);
 		item.value = "class " + (cn.empty() ? std::string("table") : cn) + " (" + std::to_string(funcs) + " 个方法)";
 	} else if (!loaded.empty()) {
@@ -506,6 +511,9 @@ void Inspector::RichTable(lua_State* L, int idx, VariableItem& item) {
 			item.hint = "__tostring 出错：" + err;
 		}
 	}
+	// 显示规则的摘要模板 / 固定字段（11.1）：只用于实例，类表和模块表照常
+	const TypeViewRule* rule = item.kind == "class" || item.kind == "module" ? nullptr : RuleFor(cn);
+	if (rule && (rule->hasSummary || !rule->pin.empty())) item.value = RenderRuleSummary(L, idx, *rule);
 	Truncate(item.value, view_.maxValueLength);
 	bool hasMeta = lua_getmetatable(L, idx) != 0;
 	if (hasMeta) lua_pop(L, 1);
@@ -513,6 +521,7 @@ void Inspector::RichTable(lua_State* L, int idx, VariableItem& item) {
 		item.ref = NewRef(RefKind::Value, 0, Anchor(L, idx), item.evaluateName);
 		RefEntry& e = refs_[item.ref];
 		e.owner = item.kind == "module" ? LastSegment(cn) : cn;
+		e.ruleType = cn;
 	}
 }
 
@@ -527,6 +536,8 @@ void Inspector::MakeItemRich(lua_State* L, int idx, VariableItem& item, const st
 		if (item.objectId.empty()) item.objectId = PtrString(lua_topointer(L, idx));
 		return;
 	}
+	// 宿主不认领的再问 helper v2 formatter（11.2）；出错时退回默认显示并标 helperError
+	if ((t == LUA_TUSERDATA || t == LUA_TTABLE) && FormatterDescribe(L, idx, item, evaluateName)) return;
 	item.evaluateName = evaluateName;
 	switch (t) {
 	case LUA_TNIL: item.value = "nil"; break;
@@ -728,7 +739,7 @@ void Inspector::BuildTableKeys(RefEntry& entry, int obj) {
 			const char* ks = lua_tolstring(L, keyIdx, &kl);
 			k.field.assign(ks, kl);
 			ownKeys.push_back(k.field);
-			if (globals && view_.hideStdGlobals && InList(kBuiltinGlobals, ks, kl)) {
+			if (globals && view_.hideStdGlobals && (InList(kBuiltinGlobals, ks, kl) || IsRuleBuiltinGlobal(ks, kl))) {
 				builtins.push_back(std::move(k));
 				return;
 			}
@@ -744,6 +755,12 @@ void Inspector::BuildTableKeys(RefEntry& entry, int obj) {
 	}
 	SortKeys(L, data, sorted);
 	entry.sorted = sorted;
+	// 显示规则：隐藏字段、固定字段排最前（11.1）
+	const TypeViewRule* rule = globals ? nullptr : RuleFor(entry.ruleType);
+	if (rule) {
+		ApplyRuleToKeys(*rule, data);
+		ApplyRuleToKeys(*rule, funcs);
+	}
 	for (RichKey& k : data) entry.keys.push_back(std::move(k));
 	if (splitMethods) {
 		bool s = true;
@@ -811,6 +828,7 @@ void Inspector::BuildGroups(RefEntry& entry, int obj, const std::vector<std::str
 				if (!cn.empty()) break;
 				cn = RawGetString(L, index, f);
 			}
+			if (cn.empty()) cn = RuleClassName(L, index);
 			if (cn.empty()) cn = LastSegment(loaded);
 			if (cn.empty()) cn = RawGetString(L, cur, "__name");
 			if (cn.empty()) cn = ClassName(L, index);
@@ -837,6 +855,8 @@ void Inspector::BuildGroups(RefEntry& entry, int obj, const std::vector<std::str
 			SortKeys(L, data, s);
 			SortKeys(L, funcs, s);
 			for (RichKey& k : funcs) data.push_back(std::move(k));
+			// 实例类型的规则也管继承来的成员（隐藏 / 固定）
+			if (const TypeViewRule* rule = RuleFor(entry.ruleType)) ApplyRuleToKeys(*rule, data);
 			const int64_t cnt = static_cast<int64_t>(data.size());
 			const std::string label = cn.empty() ? "table" : cn;
 			uint64_t ref = NewGroup(Anchor(L, index), std::move(data), s);
@@ -1024,6 +1044,15 @@ bool Inspector::RichVariables(RefEntry& entry, int start, int count, const std::
 	case RefKind::Value:
 	case RefKind::Globals:
 	case RefKind::Group: {
+		if (entry.formatter) {
+			// helper v2：分页原样交给 formatter.children（11.2），不缓存
+			std::vector<VariableItem> items;
+			FormatterChildren(entry, start, count, items, total);
+			for (const VariableItem& item : items) {
+				if (!add(item)) break;
+			}
+			break;
+		}
 		PushAnchored(L, entry.slot);
 		const int obj = lua_gettop(L);
 		const int t = lua_type(L, obj);
@@ -1143,6 +1172,7 @@ bool Inspector::RichVariables(RefEntry& entry, int start, int count, const std::
 				item.hint = "被更近一层的同名成员覆盖";
 			}
 			if (k.attrs & kAttrMetamethod) item.attrs.push_back("metamethod");
+			if (k.attrs & kAttrPinned) item.attrs.push_back("pinned");
 			if (!add(item)) break;
 			++taken;
 		}

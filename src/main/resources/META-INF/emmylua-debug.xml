@@ -33,6 +33,8 @@
     </extensions>
     <extensions defaultExtensionNs="com.intellij">
         <xdebugger.breakpointType implementation="com.tang.intellij.lua.debug.xdebugger.LuaExceptionBreakpointType"/>
+        <!-- 暂停时在编辑器行尾显示变量值 -->
+        <editor.linePainter implementation="com.tang.intellij.lua.debug.xdebugger.LuaInlineValuePainter"/>
     </extensions>
 
     <!-- ===== Android 真机 ===== -->
@@ -77,6 +79,13 @@
             <action id="EmmyLua.Debug.OpenSettings"
                     class="com.tang.intellij.lua.debug.ui.settings.OpenLuaDebugSettingsAction"/>
             <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </group>
+        <!-- 变量树右键：按类型固定 / 隐藏字段，写进显示规则文件（variable-view.md 11.1、16） -->
+        <group id="EmmyLua.Debug.ViewRules">
+            <separator/>
+            <action id="EmmyLua.Debug.PinField" class="com.tang.intellij.lua.debug.xdebugger.LuaPinFieldAction" text="固定到顶部"/>
+            <action id="EmmyLua.Debug.HideField" class="com.tang.intellij.lua.debug.xdebugger.LuaHideFieldAction" text="隐藏此字段"/>
+            <add-to-group group-id="XDebugger.ValueGroup" anchor="last"/>
         </group>
     </actions>
 </idea-plugin>
