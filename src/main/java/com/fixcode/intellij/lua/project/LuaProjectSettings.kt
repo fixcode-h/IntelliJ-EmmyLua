@@ -18,6 +18,9 @@ class LuaProjectSettings : PersistentStateComponent<LuaProjectSettings> {
     /** 往上找 `.uproject`，把 UnLua 生成的 IntelliSense 目录加进库。 */
     var detectUnrealProject: Boolean = true
 
+    /** 让 UE 编辑器（UELink 2.5+）后台生成 UE 反射的 Lua 声明；默认关（用户 2026-11-16 要求不默认生成）。 */
+    var unrealLuaDecl: Boolean = false
+
     override fun getState(): LuaProjectSettings = this
 
     override fun loadState(state: LuaProjectSettings) {

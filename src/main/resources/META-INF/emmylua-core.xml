@@ -32,6 +32,7 @@
         <projectService serviceImplementation="com.fixcode.intellij.lua.project.LuaProjectSettings"/>
         <!-- UE 声明目录（UELink 后台生成 / UnLua）出现或换了时重启 emmylua_ls -->
         <postStartupActivity implementation="com.fixcode.intellij.lua.project.UnrealDeclWatcherActivity"/>
+        <notificationGroup id="EmmyLua UE Declarations" displayType="BALLOON"/>
         <projectConfigurable groupId="language" id="preferences.Lua" displayName="EmmyLua"
                              instance="com.fixcode.intellij.lua.project.LuaSettingsConfigurable"/>
 
@@ -66,5 +67,14 @@
                 text="Copy Lua Require Path" id="lua.copyReference.copyRequirePath">
             <add-to-group group-id="CopyReferencePopupGroup"/>
         </action>
+        <group id="lua.unrealDecl" text="UE 反射声明（EmmyLua）" popup="true">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+            <action class="com.fixcode.intellij.lua.actions.RefreshUnrealDeclAction" id="lua.unrealDecl.refresh"
+                    text="刷新 UE 反射声明" description="让 UE 编辑器马上比对一遍，只写变了的声明文件"/>
+            <action class="com.fixcode.intellij.lua.actions.LoadBlueprintsUnrealDeclAction" id="lua.unrealDecl.loadBlueprints"
+                    text="补全全部蓝图声明" description="让 UE 编辑器在后台逐个加载没打开过的蓝图，补全成员"/>
+            <action class="com.fixcode.intellij.lua.actions.RebuildUnrealDeclAction" id="lua.unrealDecl.rebuild"
+                    text="全部重写 UE 反射声明" description="不看清单，重写全部声明文件"/>
+        </group>
     </actions>
 </idea-plugin>

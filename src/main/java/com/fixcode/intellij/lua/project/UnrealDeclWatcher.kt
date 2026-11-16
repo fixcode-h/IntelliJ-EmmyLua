@@ -35,13 +35,37 @@ class UnrealDeclWatcher(private val project: Project) : Disposable {
     private fun current(): List<Path> =
         if (LuaProjectSettings.getInstance(project).detectUnrealProject) EmmyLuaWorkspaceConfig.unrealLibraries(project) else emptyList()
 
+    /** 上次确认过「已开」的 UE 编辑器进程：编辑器重开（换了 PID）再确认一次，不每轮都发请求。 */
+    @Volatile private var syncedPid: Long = -1
+
+    /** 设置里关掉时清掉，下次勾上重新确认 */
+    fun resetSync() {
+        syncedPid = -1
+    }
+
     @Synchronized
     private fun check() {
         if (project.isDisposed) return
+        syncEditor()
         val now = runCatching { current() }.getOrNull() ?: return
         if (now == last) return
         last = now
         EmmyLuaServer.restart(project)
+    }
+
+    /** IDE 里勾了开关、UE 编辑器后开（或重开）的，补一次 luadecl.enable；没勾时不动 UE 那边（可能是在控制台里开的） */
+    private fun syncEditor() {
+        if (!LuaProjectSettings.getInstance(project).unrealLuaDecl) return
+        val ue = UnrealDecl.ueRoot(project) ?: return
+        val editor = UELinkClient.findEditor(ue) ?: return
+        if (editor.pid == syncedPid) return
+        runCatching {
+            val status = UELinkClient.call(editor, "luadecl.status")
+            if (status.get("active")?.asBoolean != true) {
+                UELinkClient.call(editor, "luadecl.enable", com.google.gson.JsonObject().apply { addProperty("enabled", true) })
+            }
+            syncedPid = editor.pid
+        }
     }
 
     override fun dispose() {
