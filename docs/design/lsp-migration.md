@@ -128,7 +128,7 @@ IntelliSense 目录重新生成时，emmylua_ls 的文件监听会增量更新�
 ## 6. 出包
 
 - `gradle.properties` 写 `emmyLuaLsVersion`。`auto-release.yml` 和 `verify.yml` 在打包前按版本从 emmylua-analyzer-rust 的 Release 下载各平台压缩包，解出可执行文件放到 `build/emmylua-ls/<平台>/`，Gradle 的 `prepareSandbox` 把它拷进插件的 `server/` 目录。下载失败直接让出包失败，不出没有服务器的包。
-- 本地开发：`./gradlew downloadEmmyLuaLs` 下当前平台的；不下也能编，运行时用设置里的路径或 PATH 里的 `emmylua_ls`。
+- 本地开发：运行 `.github/scripts/fetch-emmylua-ls.sh "" build/emmylua-ls <平台>` 下当前平台的（不写平台就下全部）；不下也能编，运行时用设置里的路径或 PATH 里的 `emmylua_ls`。
 - 自动版本号、按提交生成更新日志、回写 `version.properties` 的流程不变。
 
 ## 7. 性能目标

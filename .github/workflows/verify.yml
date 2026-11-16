@@ -28,6 +28,11 @@ jobs:
         run: |
           cmake -S native/emmy_debugger_core -B build/core -DCMAKE_BUILD_TYPE=Release
           cmake --build build/core --target emmy_core_ide_host --parallel 4
+      # 推到 dev 就验证 emmylua_ls 能下到；产物在 build/ 下（已忽略），不影响末尾的干净检查
+      - name: Fetch emmylua_ls binaries
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash .github/scripts/fetch-emmylua-ls.sh "" build/emmylua-ls
       - name: Test, build and verify
         env:
           # 新引擎对着真的原生核心跑端到端用例（NativeRuntimeE2eTest）

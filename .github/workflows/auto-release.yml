@@ -160,10 +160,30 @@ jobs:
           cp -R "${{ runner.temp }}/native/release-android-agent/." src/main/resources/debugger/emmy/android/
           find src/main/resources/debugger/emmy/windows src/main/resources/debugger/emmy/android -type f | sort
 
+      # 下载 emmylua_ls 各平台可执行文件到 build/emmylua-ls，prepareSandbox 会放进插件的 server/ 目录
+      - name: Fetch emmylua_ls binaries
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash .github/scripts/fetch-emmylua-ls.sh "" build/emmylua-ls
+
       # 第六步：执行 Gradle 打包命令
       # --- 核心修正点：在这里通过 -P 参数将版本号传递给 Gradle ----
       - name: Build with Gradle
         run: ./gradlew buildPlugin -x buildSearchableOptions -PpluginVersion=${{ env.NEW_VERSION }}
+
+      # 没带上语言服务器的包不发布
+      - name: Check emmylua_ls in plugin zip
+        run: |
+          set -e
+          zips=(build/distributions/*.zip)
+          [ -f "${zips[0]}" ] || { echo "::error::build/distributions 下没有插件 zip"; exit 1; }
+          for zip in "${zips[@]}"; do
+            if ! unzip -l "$zip" | grep -qE '/server/win32-x64/emmylua_ls\.exe$'; then
+              echo "::error::$zip 里没有 server/win32-x64/emmylua_ls.exe"
+              exit 1
+            fi
+            unzip -l "$zip" | grep '/server/'
+          done
 
       # 第七步：创建 GitHub Release 并上传构建产物
       - name: Create Release and Upload Asset

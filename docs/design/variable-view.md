@@ -811,7 +811,7 @@ val groups: List<VariableDto>?, val sorted: Boolean?, val truncated: Boolean?
 | --- | --- | --- |
 | V0 | 本文评审；协议增量合进 `protocol-v3.md`（加变更记录） | 本线程 + 协议 / 原生核心线程 |
 | V1 | runtime：`richVariables` 全部（键快照、智能排序、分组、继承、摘要、`expand`、`objectId`、函数 / 协程显示、作用域规则、安全调用）；fixture + golden + `bench_variables` | 原生核心线程（本线程可承担 fixture 和 golden） |
-| V2 | IDE：`VariableDto` 可选字段、XDebugger 渲染（区间、分页、分组、图标、循环引用、完整值、跳转）和右键动作（挂在 `com.tang.intellij.lua.debug.xdebugger` 的 XValue 上）、MCP 文本渲染 | IDE 引擎线程；「变量视图」设置页（15.3）由本线程在 UI 线程的设置类上补 |
+| V2 | IDE：`VariableDto` 可选字段、XDebugger 渲染（区间、分页、分组、图标、循环引用、完整值、跳转）和右键动作（挂在 `com.fixcode.intellij.lua.debug.xdebugger` 的 XValue 上）、MCP 文本渲染 | IDE 引擎线程；「变量视图」设置页（15.3）由本线程在 UI 线程的设置类上补 |
 | V3 | `viewRules`：显示规则文件、`setViewRules`、固定 / 隐藏动作；helper v2 `registerFormatter`，UE 结构体 / 容器改写到 `v3/emmy_ue.lua`（已完成） | 本线程 |
 | V4 | UE 来源 A：runtime 实现 13.6 的 v2 注册入口和调用；UEKit UELink 侧已完成（UELink 2.4.0-beta.4） | 原生核心线程 |
 | V5（可选） | Mark Object、复制为 JSON、Android 来源 C（原生反射）。变化高亮已用平台机制做掉（15.2） | 视 V1–V4 结果再排 |

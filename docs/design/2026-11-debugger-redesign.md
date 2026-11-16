@@ -62,7 +62,7 @@
 
 | 部分 | 位置 | 规模 | 说明 |
 | --- | --- | --- | --- |
-| 语言支持 | `src/main/java/.../lua/{psi,editor,codeInsight,...}`、`gen/` | 占代码大头 | 保留，本次不动 |
+| 语言支持 | `src/main/java/.../lua/{psi,editor,codeInsight,...}`、`gen/` | 占代码大头 | 保留，本次不动（之后迁到 LSP，`gen/` 等已删，见 [lsp-migration.md](lsp-migration.md)） |
 | 调试 IDE 层 | `src/main/java/.../lua/debugger/**` | ~13,000 行 | Emmy、Attach、LuaPanda、CLI 网关全在主模块里 |
 | 调试模块 | `modules/debugger-{core,transport,emmy-protocol,cli-protocol,luapanda-protocol}` | ~4,000 行 | 状态机、事件循环、请求注册、协议编解码 |
 | CLI 工具 | `tools/emmy-debug` | ~740 行 | 独立分发的命令行 |
