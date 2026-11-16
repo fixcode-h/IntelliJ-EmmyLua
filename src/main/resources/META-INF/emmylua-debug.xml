@@ -30,6 +30,7 @@
 
     <!-- ===== Android 真机 ===== -->
     <extensions defaultExtensionNs="com.tang.intellij.lua">
+        <debug.deviceService implementation="com.tang.intellij.lua.debug.android.AndroidLuaDeviceService"/>
     </extensions>
 
     <!-- ===== MCP =====（注册放在 MCP 线程自己的文件里，互不冲突） -->
