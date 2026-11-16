@@ -21,6 +21,7 @@ namespace emmy {
 class Vm;
 class Session;
 class Transport;
+struct ViewRuleSet;
 using json = nlohmann::json;
 
 struct Options {
@@ -41,6 +42,7 @@ struct Options {
 	std::atomic<bool> viewShowTemporaries{false};
 	std::atomic<int> viewMaxSortKeys{10000};
 	std::atomic<int> viewToString{0}; // 0 tables / 1 all / 2 never（__tostring 还没接，先记下）
+	std::atomic<int> viewHelperBudgetMs{20}; // 11.2：每次调用 helper v2 formatter 的时间预算
 
 	bool CaseSensitive() const;
 	void Reset();
@@ -98,6 +100,10 @@ public:
 	void SetHelpers(std::vector<HelperScript> scripts, std::string mainName);
 	std::shared_ptr<const std::pair<std::vector<HelperScript>, std::string>> Helpers() const;
 
+	// ---- 显示规则（variable-view 11.1 / 13.4）----
+	void SetViewRules(std::shared_ptr<const ViewRuleSet> rules);
+	std::shared_ptr<const ViewRuleSet> ViewRules() const;
+
 	// ---- 引用路由：frameId / ref → vmId ----
 	uint64_t AllocObjectId(uint64_t vmId);
 	void ReleaseObjectIds(const std::vector<uint64_t>& ids);
@@ -141,6 +147,7 @@ private:
 
 	mutable std::mutex helperMutex_;
 	std::shared_ptr<const std::pair<std::vector<HelperScript>, std::string>> helpers_;
+	std::shared_ptr<const ViewRuleSet> viewRules_;
 
 	std::mutex objMutex_;
 	std::unordered_map<uint64_t, uint64_t> objOwner_;

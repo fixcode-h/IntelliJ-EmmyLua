@@ -15,6 +15,8 @@ namespace emmy {
 
 using json = nlohmann::json;
 class Vm;
+struct ViewRuleSet;
+struct TypeViewRule;
 
 struct ProtocolError {
 	std::string code;
@@ -32,6 +34,8 @@ struct ViewOptions {
 	bool showTemporaries = false;
 	int maxSortKeys = 10000;
 	size_t maxValueLength = 256;
+	int helperBudgetMs = 20;                    // 11.2
+	std::shared_ptr<const ViewRuleSet> rules;   // 11.1，没下发时为空
 };
 
 struct EvalOptions {
@@ -110,7 +114,7 @@ private:
 	// HostList：子项来自宿主值提供者（slot 处的值，或 hostRef 句柄）
 	// Group：底部分组，子项来自 slot 处的表、键在建分组时就定好；Static：子项是现成的 VariableItem
 	enum class RefKind { Locals, Upvalues, Varargs, Globals, Value, HostList, Group, Static };
-	enum : uint8_t { kAttrInherited = 1, kAttrShadowed = 2, kAttrMetamethod = 4 };
+	enum : uint8_t { kAttrInherited = 1, kAttrShadowed = 2, kAttrMetamethod = 4, kAttrPinned = 8 };
 	// 键快照里的一项（variable-view 10.2）：数组段只记下标，其他键放进锚表，C++ 只记槽位
 	struct RichKey {
 		int64_t index = 0;   // 数组段的下标
@@ -142,6 +146,9 @@ private:
 		std::vector<VariableItem> richChildren;
 		std::vector<VariableItem> groups;
 		std::string owner; // 子项函数名的前缀（类名）
+		std::string ruleType; // 显示规则按这个类型名匹配（11.1）：类名或模块全名
+		bool formatter = false; // 子项由 helper v2 formatter 列（11.2）
+		std::string fmtType;    // 匹配 formatter 时用的类型名
 	};
 
 	uint64_t NewFrameId(lua_State* thread, int level);
@@ -178,6 +185,16 @@ private:
 	std::string ClassName(lua_State* L, int idx);
 	const std::string& LoadedName(lua_State* L, int idx);
 	std::string TableSummary(lua_State* L, int idx, size_t maxLen);
+	// ---- 显示规则（rich_rules.cpp） ----
+	const TypeViewRule* RuleFor(const std::string& type) const;
+	std::string RenderRuleSummary(lua_State* L, int idx, const TypeViewRule& rule);
+	void ApplyRuleToKeys(const TypeViewRule& rule, std::vector<RichKey>& keys);
+	bool IsRuleBuiltinGlobal(const char* s, size_t len) const;
+	std::string RuleClassName(lua_State* L, int t);
+	// ---- helper v2 formatter（rich_rules.cpp） ----
+	bool FormatterDescribe(lua_State* L, int idx, VariableItem& item, const std::string& evaluateName);
+	bool FormatterChildren(RefEntry& entry, int start, int count, std::vector<VariableItem>& out, int64_t& total);
+	bool CallFormatter(lua_State* L, int nargs, std::string& err);
 
 	Vm& vm_;
 	lua_State* pausedL_ = nullptr;
@@ -193,6 +210,12 @@ private:
 	std::vector<uint64_t> usedProviders_; // 本次暂停里调用过的宿主值提供者，暂停结束时通知释放
 	uint64_t pauseIdForHost_ = 0;
 	ViewOptions view_;
+	// helper v2：每次暂停重新问一次注册了哪些类型（fmtPause_ 和 pauseIdForHost_ 不同就重置）
+	uint64_t fmtPause_ = ~0ull;
+	int fmtState_ = 0; // 0 未知 / 1 没有 formatter / 2 有
+	bool fmtDynamic_ = false;
+	std::unordered_map<std::string, bool> fmtTypes_;
+	std::unordered_map<std::string, int> fmtErrors_; // 同一类型连续出错 3 次后本次暂停不再调用
 	// 本次暂停内的缓存（variable-view 14.4）
 	std::unordered_map<const void*, std::string> classNames_;
 	std::unordered_map<const void*, std::string> loadedNames_;

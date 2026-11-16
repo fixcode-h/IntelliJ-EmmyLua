@@ -690,6 +690,10 @@ void Vm::ApplyHelpers(lua_State* L) {
 void Vm::LoadHelpers(lua_State* L, json& result) {
 	auto helpers = Core::Get().Helpers();
 	result = {{"vmId", id_}, {"ok", true}};
+	// 重新加载前先清掉上一份 formatter 调度函数
+	lua_pushstring(L, "emmy.formatter.dispatch");
+	lua_pushnil(L);
+	lua_rawset(L, LUA_REGISTRYINDEX);
 	if (!helpers || helpers->first.empty()) return;
 	int top = lua_gettop(L);
 	// 私有模块表：{ name = source 函数 }，helper 里的 require 先查这里
@@ -733,6 +737,31 @@ void Vm::LoadHelpers(lua_State* L, json& result) {
 		std::string err;
 		if (lua_pcall(L, 2, 1, 0) != LUA_OK) {
 			if (firstError.empty()) firstError = lua_tostring(L, -1) ? lua_tostring(L, -1) : "执行失败";
+		} else if (lua_type(L, -1) == LUA_TTABLE) {
+			// helper v2（variable-view 11.2）：主模块返回 emmy 表，调度函数放进 registry 给 Inspector 用；
+			// 不放全局，不依赖 debug 库
+			const int mod = lua_gettop(L);
+			lua_pushstring(L, "__dispatch");
+			lua_rawget(L, mod);
+			if (lua_type(L, -1) == LUA_TFUNCTION) {
+				lua_pushstring(L, "emmy.formatter.dispatch");
+				lua_insert(L, -2);
+				lua_rawset(L, LUA_REGISTRYINDEX);
+			} else {
+				lua_pop(L, 1);
+			}
+			// 某个类型脚本加载失败（emmy.loadErrors）：其余照常，失败的报到输出
+			lua_pushstring(L, "loadErrors");
+			lua_rawget(L, mod);
+			if (lua_type(L, -1) == LUA_TTABLE) {
+				const size_t n = lua::RawLen(L, -1);
+				for (size_t i = 1; i <= n && firstError.empty(); ++i) {
+					lua_rawgeti(L, -1, static_cast<lua_Integer>(i));
+					if (lua_type(L, -1) == LUA_TSTRING) firstError = lua_tostring(L, -1);
+					lua_pop(L, 1);
+				}
+			}
+			lua_pop(L, 1);
 		}
 	}
 	lua_settop(L, top);

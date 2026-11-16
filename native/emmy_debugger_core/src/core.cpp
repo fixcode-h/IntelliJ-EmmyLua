@@ -4,6 +4,7 @@
 #include "hook_mux.h"
 #include "lua_internal.h"
 #include "session.h"
+#include "view_rules.h"
 #include "transport.h"
 #include "vm.h"
 
@@ -45,6 +46,7 @@ void Options::Reset() {
 	viewShowTemporaries = false;
 	viewMaxSortKeys = 10000;
 	viewToString = 0;
+	viewHelperBudgetMs = 20;
 }
 
 // ---------------------------------------------------------------- Core
@@ -141,6 +143,7 @@ bool Core::Activate(const std::shared_ptr<Session>& session) {
 	{
 		std::lock_guard<std::mutex> lock(helperMutex_);
 		helpers_.reset();
+		viewRules_.reset();
 	}
 	NotifyVms(kFlagSession | kFlagRefresh);
 	for (auto& vm : Vms()) vm->Kick();
@@ -264,6 +267,16 @@ void Core::SetHelpers(std::vector<HelperScript> scripts, std::string mainName) {
 std::shared_ptr<const std::pair<std::vector<HelperScript>, std::string>> Core::Helpers() const {
 	std::lock_guard<std::mutex> lock(helperMutex_);
 	return helpers_;
+}
+
+void Core::SetViewRules(std::shared_ptr<const ViewRuleSet> rules) {
+	std::lock_guard<std::mutex> lock(helperMutex_);
+	viewRules_ = std::move(rules);
+}
+
+std::shared_ptr<const ViewRuleSet> Core::ViewRules() const {
+	std::lock_guard<std::mutex> lock(helperMutex_);
+	return viewRules_;
 }
 
 uint64_t Core::AllocObjectId(uint64_t vmId) {
