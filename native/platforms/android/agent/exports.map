@@ -1,0 +1,8 @@
+{
+  global:
+    Agent_OnAttach;
+    Agent_OnLoad;
+    JNI_OnLoad;
+  local:
+    *;
+};

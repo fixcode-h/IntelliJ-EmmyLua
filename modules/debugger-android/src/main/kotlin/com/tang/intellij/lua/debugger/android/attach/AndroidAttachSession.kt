@@ -96,12 +96,12 @@ class AndroidAttachSession(
             verifyRemoteBuildId(device, process, request.moduleName, symbols)
             reuseExisting(device, process, configPath)?.let { token ->
                 log("进程里已经有 agent，直接复用")
-                return finish(device, pid, token, symbols, reused = true, statusPath = "$dataDir/$REMOTE_DIR/$STATUS_FILE", packageName = request.packageName)
+                return finish(device, pid, token, symbols, reused = true, statusPath = "$dataDir/$REMOTE_DIR/$STATUS_FILE", packageName = request.packageName, launched = false)
             }
             val token = newToken()
             deploy(device, request.packageName, agentBinary, AgentConfig.from(symbols, token, request.moduleName, request.packageName, waitForIde = false))
             inject(device, process, agentPath, configPath)
-            return finish(device, pid, token, symbols, reused = false, statusPath = "$dataDir/$REMOTE_DIR/$STATUS_FILE", packageName = request.packageName)
+            return finish(device, pid, token, symbols, reused = false, statusPath = "$dataDir/$REMOTE_DIR/$STATUS_FILE", packageName = request.packageName, launched = false)
         }
 
         // 启动模式：先停掉应用，部署好 agent 再带着 agent 启动
@@ -109,7 +109,7 @@ class AndroidAttachSession(
         adb.shellChecked(device.serial, "am force-stop ${request.packageName}")
         deploy(device, request.packageName, agentBinary, AgentConfig.from(symbols, token, request.moduleName, request.packageName, waitForIde = true))
         val pid = launch(device, request.packageName, agentPath, configPath)
-        return finish(device, pid, token, symbols, reused = false, statusPath = "$dataDir/$REMOTE_DIR/$STATUS_FILE", packageName = request.packageName)
+        return finish(device, pid, token, symbols, reused = false, statusPath = "$dataDir/$REMOTE_DIR/$STATUS_FILE", packageName = request.packageName, launched = true)
     }
 
     /** 断开：只撤掉本机端口转发。agent 留在进程里继续监听，下次附加直接复用（JVMTI agent 无法卸载）。 */
@@ -258,9 +258,11 @@ class AndroidAttachSession(
         throw AndroidAttachException("$pkg 启动后 10 秒内没有找到进程")
     }
 
-    private fun finish(device: DeviceInfo, pid: Int, token: String, symbols: LuaSymbolTable, reused: Boolean, statusPath: String, packageName: String): AndroidAttachResult {
-        val status = waitAgent(device, packageName, statusPath)
-        val socket = status?.socket ?: "$SOCKET_PREFIX$pid"
+    private fun finish(device: DeviceInfo, pid: Int, token: String, symbols: LuaSymbolTable, reused: Boolean, statusPath: String, packageName: String, launched: Boolean): AndroidAttachResult {
+        // 启动模式下 libUnreal.so 还没加载，agent 处于 waiting-module 就可以先建转发；
+        // 运行中附加时 so 早已加载，必须等到 listening，否则会错过随后的 Build ID 校验错误
+        val status = waitAgent(device, packageName, statusPath, acceptWaitingModule = launched)
+        val socket = status.socket ?: "$SOCKET_PREFIX$pid"
         val port = adb.forward(device.serial, "localabstract:$socket")
         forwardedPort = port
         forwardedSerial = device.serial
@@ -269,7 +271,7 @@ class AndroidAttachSession(
     }
 
     /** 轮询 agent 写的状态文件。agent 报错（Build ID 不符、找不到符号、hook 失败）在这里变成给用户的提示。 */
-    private fun waitAgent(device: DeviceInfo, pkg: String, statusPath: String, timeoutMs: Long = 10_000): AgentStatus? {
+    private fun waitAgent(device: DeviceInfo, pkg: String, statusPath: String, acceptWaitingModule: Boolean, timeoutMs: Long = 10_000): AgentStatus {
         val deadline = System.currentTimeMillis() + timeoutMs
         var last: AgentStatus? = null
         while (System.currentTimeMillis() < deadline) {
@@ -278,14 +280,14 @@ class AndroidAttachSession(
                 val s = AgentStatus.parse(r.stdout)
                 last = s
                 if (s.isError) throw AndroidAttachException("agent 报错：${s.error ?: "未知错误"}（详细日志：adb logcat -s EmmyLuaAgent）")
-                if (s.isListening || s.state == "waiting-module") return s
+                if (s.isListening || (acceptWaitingModule && s.state == "waiting-module")) return s
             }
             sleeper(200)
         }
         if (last == null) {
             throw AndroidAttachException("agent 没有启动（10 秒内没有状态）：查看 adb logcat -s EmmyLuaAgent")
         }
-        return last
+        throw AndroidAttachException("agent 10 秒内没有就绪（当前状态 ${last.state}）：查看 adb logcat -s EmmyLuaAgent")
     }
 
     private fun newToken(): String {

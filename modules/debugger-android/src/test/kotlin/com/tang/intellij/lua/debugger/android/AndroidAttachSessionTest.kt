@@ -169,6 +169,14 @@ class AndroidAttachSessionTest {
     }
 
     @Test
+    fun launchModeAcceptsAgentWaitingForModule() {
+        adb.onShell("cmd package resolve-activity --brief $pkg", "com.studio.game/.Main\n")
+        adb.onShell("run-as $pkg cat $dataDir/code_cache/emmylua/agent.status", "state=waiting-module\npid=12345\n")
+        val result = session().attach(AndroidAttachRequest("SER123", pkg, symbolFile = symbolFile, launch = true))
+        assertEquals("emmylua-12345", result.socketName)
+    }
+
+    @Test
     fun rejectsBadPackageName() {
         try {
             session().attach(AndroidAttachRequest("SER123", "com.x; rm -rf /", symbolFile = symbolFile))
