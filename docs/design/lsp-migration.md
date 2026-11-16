@@ -114,7 +114,8 @@ UnLua 的 Generate IntelliSense 要手动点、整遍生成。UEKit 的 UELink 2
 - 输出 `<UE项目>/Intermediate/UELink/LuaDecl/`（`Native/`、`Blueprint/`、`UE.lua`、拷来的 `UnLua/` 静态声明），清单 `.uelink-luadecl.json` 记每个文件的内容哈希；蓝图编译、资源保存 / 改名 / 删除、Live Coding 后只写内容变了的文件。
 - `UnrealIntelliSenseRoots.find`：这个目录有清单时**只用它**，不再加 UnLua 生成的目录（同名类型重复定义会让跳转出现两个目标）；没有时照旧。
 - 文件增删改由 emmylua_ls 自己监听库目录（库目录在工作区外时它用 notify 监听），不用重启；只有库目录本身变了（第一次生成完、删掉目录退回 UnLua）才要重启，`UnrealDeclWatcher` 每 15 秒看一眼几个路径，变了就重启。
-- 开关在 UE 那边（存 UE 的本机个人配置）。设置页的「让 UE 编辑器后台生成 / 关闭」按名片 `Saved/UELink/instances/*.json` 找开着的编辑器，调 `/rpc` 的 `luadecl.enable`（`UELinkClient`）。
+- 开关在 IDE 设置里（项目设置 `unrealLuaDecl`，默认关）：勾上 / 取消时按名片 `Saved/UELink/instances/*.json` 找开着的编辑器调 `/rpc` 的 `luadecl.enable`（`UELinkClient`）；UE 那边也记在本机个人配置里。勾着时 `UnrealDeclWatcher` 发现新开的编辑器（PID 变了）还没开就补开；没勾时不动 UE 那边（可能是在 UE 控制台开的）。
+- 主动刷新：工具菜单「UE 反射声明（EmmyLua）」和设置页按钮，`luadecl.run`：刷新（只写变了的）、补全全部蓝图（`loadBlueprints`）、全部重写（`force`）。
 
 ## 4. 调试链路
 
