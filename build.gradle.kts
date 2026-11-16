@@ -122,7 +122,9 @@ project(":") {
                 // 默认只校验编译用的版本；CI 用 -PverifyIdes=2025.3,2026.1,... 再加上之后的版本
                 val extra = providers.gradleProperty("verifyIdes").orNull
                     ?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }.orEmpty()
-                (listOf(buildVersionData.ideaMainVersion) + extra).distinct().forEach { create("IC", it) }
+                create("IC", buildVersionData.ideaMainVersion)
+                // 2025.3 起 IC 不再出安装包，只能从 Maven 仓库取
+                (extra - buildVersionData.ideaMainVersion).distinct().forEach { create("IC", it) { useInstaller = false } }
             }
         }
     }
