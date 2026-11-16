@@ -41,7 +41,10 @@ ANDROID_NDK=/path/to/ndk native/platforms/android/build_agent.sh [输出目录]
 - ShadowHook 默认按 `EMMY_SHADOWHOOK_TAG`（v2.0.1）从 GitHub 下载并静态编进 agent，符号全部隐藏；离线时设 `EMMY_SHADOWHOOK_DIR`。
 - 同一 CMake 构建里有 `emmy_debugger_core` 目标就链接它；没有时用 `core_stub.cpp` 占位，附加时状态文件会报"没有编入调试核心"。
 
-主机单测（配置解析、基址 + 偏移 = 运行地址、Build ID、抓 L 的状态机、状态文件）：
+主机单测（配置解析、基址 + 偏移 = 运行地址、Build ID、抓 L 的状态机、状态文件），以及端到端测试 `agent_core_e2e_test`：
+把 Lua 5.4.6 编成符号全隐藏的 `libfakeunreal.so`（dlsym 找不到 lua_*，和设备上一样），按 `.symtab` 生成 agent.cfg，
+跑 agent 主流程（`RunAgent`）+ dynamic 模式的真调试核心，测试客户端经抽象 socket 握手（错令牌被拒）、下条件断点、停下、求值、继续。
+只有内联 hook 换成了假后端：
 
 ```bash
 cmake -S native/platforms/android/agent -B build/agent-host -DEMMY_AGENT_BUILD_TESTS=ON

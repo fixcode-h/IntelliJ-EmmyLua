@@ -3,6 +3,7 @@
 #include "frame.h"
 
 #include <chrono>
+#include <cstddef>
 #include <cstring>
 
 #if defined(_WIN32)
@@ -14,6 +15,7 @@
 #  include <netinet/in.h>
 #  include <netinet/tcp.h>
 #  include <sys/socket.h>
+#  include <sys/un.h>
 #  include <unistd.h>
 #  define tc_close ::close
 #endif
@@ -43,6 +45,36 @@ bool TestClient::Connect(const std::string& host, int port, int timeoutMs) {
 		std::this_thread::sleep_for(std::chrono::milliseconds(20));
 	}
 	return false;
+}
+
+bool TestClient::ConnectAbstract(const std::string& name, int timeoutMs) {
+#if defined(__linux__)
+	auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+	while (std::chrono::steady_clock::now() < deadline) {
+		int s = socket(AF_UNIX, SOCK_STREAM, 0);
+		sockaddr_un addr{};
+		addr.sun_family = AF_UNIX;
+		if (name.size() + 1 > sizeof(addr.sun_path)) {
+			tc_close(s);
+			return false;
+		}
+		addr.sun_path[0] = '\0';
+		std::memcpy(addr.sun_path + 1, name.data(), name.size());
+		auto len = static_cast<socklen_t>(offsetof(sockaddr_un, sun_path) + 1 + name.size());
+		if (connect(s, reinterpret_cast<sockaddr*>(&addr), len) == 0) {
+			sock_ = static_cast<intptr_t>(s);
+			reader_ = std::thread([this] { ReadLoop(); });
+			return true;
+		}
+		tc_close(s);
+		std::this_thread::sleep_for(std::chrono::milliseconds(20));
+	}
+	return false;
+#else
+	(void)name;
+	(void)timeoutMs;
+	return false;
+#endif
 }
 
 void TestClient::SendRaw(const std::string& bytes) {

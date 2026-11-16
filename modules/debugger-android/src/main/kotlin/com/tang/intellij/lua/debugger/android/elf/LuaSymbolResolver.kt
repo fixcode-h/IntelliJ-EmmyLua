@@ -4,57 +4,67 @@ import java.io.File
 import java.util.Properties
 
 /**
- * agent 需要的 Lua 函数清单。名字必须和 native/emmy_debugger/src/api/lua_api_loader.cpp 里
- * SetupLuaAPI 用到的一致（有单测对账）。
+ * agent 需要的 Lua 函数。调试核心（native/emmy_debugger_core，dynamic 模式）的 lua_* 全部经函数指针调用宿主的 Lua，
+ * 所以把 so 里所有 lua_* 函数都交给 agent；其中 [requiredFor] 列出的缺一个核心就拒绝附加（有单测和 lua_dyn.c 对账）。
+ * luaL_* 核心自带，不需要宿主提供。
  */
 object LuaApiSymbols {
-    /** 缺了就无法调试：挂钩子、读栈、读局部变量、抓 lua_State 必须的函数。 */
+    /** 缺了就无法调试：挂钩子、读栈、读局部变量。 */
     val critical = listOf(
         "lua_sethook", "lua_gethook", "lua_getstack", "lua_getinfo", "lua_getlocal",
         "lua_gettop", "lua_settop", "lua_type", "lua_tolstring",
     )
 
-    /** SetupLuaAPI 里用 LOAD_LUA_API 加载的函数（PC 上缺一个就整体失败）。 */
-    val required = listOf(
-        "lua_gettop", "lua_settop", "lua_type", "lua_typename", "lua_tolstring", "lua_toboolean",
-        "lua_tothread", "lua_pushnil", "lua_pushnumber", "lua_pushlstring", "lua_pushstring",
-        "lua_pushcclosure", "lua_pushboolean", "lua_pushvalue", "lua_getfield", "lua_next",
-        "lua_createtable", "lua_setfield", "lua_setmetatable", "lua_getstack", "lua_getinfo",
-        "lua_getlocal", "lua_getupvalue", "lua_setupvalue", "lua_sethook", "lua_gethook",
-        "lua_gethookmask", "lua_gethookcount", "luaL_loadstring", "luaL_checklstring",
-        "luaL_checknumber", "lua_topointer", "lua_getmetatable", "lua_rawget", "lua_rawset",
-        "lua_pushlightuserdata", "lua_touserdata", "luaL_newstate", "lua_close", "lua_pushthread",
-        "lua_rawseti", "lua_rawgeti",
+    /** native/emmy_debugger_core/src/lua_dyn.c 的 kRequired 里属于 Lua 5.4 API 的部分（其余在 5.4 是宏）。 */
+    val required54 = listOf(
+        "lua_newstate", "lua_close", "lua_newthread", "lua_status", "lua_resume", "lua_xmove",
+        "lua_absindex", "lua_gettop", "lua_settop", "lua_pushvalue", "lua_rotate",
+        "lua_checkstack", "lua_type", "lua_typename", "lua_toboolean", "lua_tolstring",
+        "lua_tonumberx", "lua_tointegerx", "lua_isinteger", "lua_topointer",
+        "lua_tothread", "lua_touserdata", "lua_rawlen", "lua_rawequal",
+        "lua_pushnil", "lua_pushnumber", "lua_pushinteger", "lua_pushlstring", "lua_pushstring",
+        "lua_pushvfstring", "lua_pushfstring", "lua_pushcclosure", "lua_pushboolean", "lua_pushthread",
+        "lua_pushlightuserdata", "lua_concat",
+        "lua_getfield", "lua_getglobal", "lua_gettable", "lua_rawget", "lua_rawgeti", "lua_createtable",
+        "lua_getmetatable", "lua_setfield", "lua_rawset", "lua_rawseti", "lua_setmetatable", "lua_next",
+        "lua_settable", "lua_setglobal",
+        "lua_callk", "lua_pcallk", "lua_load", "lua_error",
+        "lua_getstack", "lua_getinfo", "lua_getlocal", "lua_setlocal", "lua_getupvalue", "lua_setupvalue",
+        "lua_sethook", "lua_gethook", "lua_gethookmask", "lua_gethookcount",
+        "lua_newuserdatauv",
     )
 
-    /** LOAD_LUA_API_E 和 lua_getfenv：按 Lua 版本可有可无。 */
-    val optional = listOf(
-        "lua_getfenv", "lua_setfenv", "lua_tointeger", "lua_tonumber", "lua_call", "lua_pcall",
-        "lua_remove", "lua_insert", "lua_tointegerx", "lua_tonumberx", "lua_getglobal", "lua_setglobal",
-        "lua_callk", "lua_pcallk", "luaL_setfuncs", "lua_absindex", "lua_rawgetp", "lua_rawsetp",
-        "lua_newuserdata", "lua_rotate", "lua_newuserdatauv", "luaopen_jit",
-    )
+    /** agent 的调试核心目前一份 so 只对应一个 Lua 大版本，Android 构建用 5.4（UnLua 用的就是 5.4）。 */
+    val supportedVersions = setOf(DetectedLuaVersion.LUA_54)
+
+    fun requiredFor(version: DetectedLuaVersion): List<String> = when (version) {
+        DetectedLuaVersion.LUA_54 -> required54
+        else -> critical
+    }
 
     /** agent 用来抓 lua_State 和跟踪 VM 生命周期的 hook 点。 */
-    val hookTargets = listOf("lua_pcall", "lua_pcallk", "lua_resume", "lua_newstate", "lua_newthread", "lua_close")
+    val hookTargets = listOf("lua_pcall", "lua_pcallk", "lua_resume", "lua_newstate", "luaL_newstate", "lua_close")
 
     /**
      * 只用来判断 Lua 版本的内部函数（不传给 agent）。
      * 静态链接 + --gc-sections 时没被游戏用到的 lua_* 会被链接器丢掉，
-     * 所以不能像 PC 上那样靠 lua_newuserdatauv 等 API 是否存在来判断版本，改看虚拟机内部一定存在的函数。
+     * 所以不能只靠 lua_newuserdatauv 等 API 是否存在来判断版本，改看虚拟机内部一定存在的函数。
      */
     val versionMarkers = listOf("lj_state_new", "luaE_warning", "luaV_div", "luaE_extendCI", "luaV_execute")
 
-    val all: Set<String> = (required + optional + hookTargets).toSet()
-    private val wanted: Set<String> = all + versionMarkers
-    private val firstBytes: Set<Byte> = wanted.map { it[0].code.toByte() }.toSet()
+    private val API_NAME = Regex("^lua_[A-Za-z0-9_]+$")
+
+    /** 是否交给 agent：所有 lua_* 函数，加上 hook 用的 luaL_newstate。 */
+    fun isApi(name: String): Boolean = API_NAME.matches(name) || name in hookTargets
+
+    private fun isWanted(name: String): Boolean = isApi(name) || name in versionMarkers || name == "luaopen_jit"
 
     /** 按字节快速判断一个符号名是否可能是我们要的（含 C++ 编译时的 _Z 修饰名）。 */
     fun mayMatch(bytes: ByteArray, start: Int, len: Int): Boolean {
         if (len < 4) return false
         val c = bytes[start]
         if (c == '_'.code.toByte() && bytes[start + 1] == 'Z'.code.toByte()) return true
-        return c in firstBytes
+        return c == 'l'.code.toByte()
     }
 
     /**
@@ -62,7 +72,7 @@ object LuaApiSymbols {
      * 这时 lua_gettop 变成 _Z10lua_gettopP9lua_State，取 _Z 后的长度前缀部分。
      */
     fun canonicalName(symbol: String): String? {
-        if (symbol in wanted) return symbol
+        if (isWanted(symbol)) return symbol
         if (!symbol.startsWith("_Z")) return null
         var i = 2
         while (i < symbol.length && symbol[i].isDigit()) i++
@@ -70,7 +80,7 @@ object LuaApiSymbols {
         val len = symbol.substring(2, i).toIntOrNull() ?: return null
         if (i + len > symbol.length) return null
         val base = symbol.substring(i, i + len)
-        return base.takeIf { it in wanted }
+        return base.takeIf { isWanted(it) }
     }
 }
 
@@ -89,7 +99,9 @@ data class LuaSymbolTable(
     val conflicts: Map<String, List<Long>>,
     val sourcePath: String,
 ) {
-    val usable: Boolean get() = missingCritical.isEmpty() && conflicts.isEmpty() && hasCaptureHook
+    val versionSupported: Boolean get() = luaVersion in LuaApiSymbols.supportedVersions
+    val usable: Boolean get() = missingCritical.isEmpty() && missingRequired.isEmpty() && conflicts.isEmpty() &&
+        hasCaptureHook && versionSupported
     val hasCaptureHook: Boolean get() = functions.containsKey("lua_pcallk") || functions.containsKey("lua_pcall") ||
         functions.containsKey("lua_resume")
 
@@ -98,9 +110,10 @@ data class LuaSymbolTable(
         append("Build ID ${buildId.take(12)}…，找到 ${functions.size} 个 Lua 函数")
         if (luaVersion != DetectedLuaVersion.UNKNOWN) append("（Lua ${luaVersion.code}）")
         if (conflicts.isNotEmpty()) append("；同名函数有多份实现：${conflicts.keys.joinToString()}，so 里可能静态链接了两份 Lua")
-        if (missingCritical.isNotEmpty()) append("；缺少调试必需的函数：${missingCritical.joinToString()}")
+        if (!versionSupported) append("；真机附加的调试核心目前只支持 Lua 5.4")
+        else if (missingCritical.isNotEmpty()) append("；缺少调试必需的函数：${missingCritical.joinToString()}")
         else if (!hasCaptureHook) append("；找不到 lua_pcall / lua_pcallk / lua_resume，无法抓到 lua_State")
-        else if (missingRequired.isNotEmpty()) append("；以下函数被链接器裁掉，相关功能不可用：${missingRequired.joinToString()}")
+        else if (missingRequired.isNotEmpty()) append("；以下函数被链接器裁掉，调试核心无法工作：${missingRequired.joinToString()}")
     }
 }
 
@@ -131,8 +144,8 @@ class LuaSymbolResolver(private val cacheDir: File?) {
             val version = detectVersion(found.keys)
             val functions = LinkedHashMap<String, Long>()
             val conflicts = LinkedHashMap<String, List<Long>>()
-            for (name in LuaApiSymbols.all.sorted()) {
-                val values = found[name] ?: continue
+            for (name in found.keys.filter(LuaApiSymbols::isApi).sorted()) {
+                val values = found.getValue(name)
                 if (values.size == 1) functions[name] = values.first()
                 else conflicts[name] = values.sorted()
             }
@@ -142,7 +155,7 @@ class LuaSymbolResolver(private val cacheDir: File?) {
                 luaVersion = version,
                 functions = functions,
                 missingCritical = LuaApiSymbols.critical.filter { it !in functions },
-                missingRequired = LuaApiSymbols.required.filter { it !in functions },
+                missingRequired = LuaApiSymbols.requiredFor(version).filter { it !in functions },
                 conflicts = conflicts,
                 sourcePath = file.absolutePath,
             )
@@ -181,13 +194,14 @@ class LuaSymbolResolver(private val cacheDir: File?) {
                 if (key.startsWith("conflict.")) conflicts[key.removePrefix("conflict.")] =
                     p.getProperty(key).split(',').map { it.removePrefix("0x").toLong(16) }
             }
+            val version = DetectedLuaVersion.entries.firstOrNull { it.name == p.getProperty("lua") } ?: DetectedLuaVersion.UNKNOWN
             LuaSymbolTable(
                 buildId = buildId,
                 abi = p.getProperty("abi")?.takeIf { it.isNotEmpty() },
-                luaVersion = DetectedLuaVersion.entries.firstOrNull { it.name == p.getProperty("lua") } ?: DetectedLuaVersion.UNKNOWN,
+                luaVersion = version,
                 functions = functions.toSortedMap(),
                 missingCritical = LuaApiSymbols.critical.filter { it !in functions },
-                missingRequired = LuaApiSymbols.required.filter { it !in functions },
+                missingRequired = LuaApiSymbols.requiredFor(version).filter { it !in functions },
                 conflicts = conflicts,
                 sourcePath = source.absolutePath,
             )
@@ -246,7 +260,7 @@ class LuaSymbolResolver(private val cacheDir: File?) {
     }
 
     companion object {
-        private const val CACHE_FORMAT = "1"
+        private const val CACHE_FORMAT = "2"
         private val SKIP_DIRS = setOf(".git", ".svn", "node_modules", "DerivedDataCache", "Saved", "Content")
     }
 }

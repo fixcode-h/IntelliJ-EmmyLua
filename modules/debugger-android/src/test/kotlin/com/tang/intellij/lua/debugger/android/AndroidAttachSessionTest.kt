@@ -93,8 +93,8 @@ class AndroidAttachSessionTest {
         assertTrue(shell.contains("rm -f /data/local/tmp/emmylua/$pkg.cfg"))
         val cfg = adb.pushed["/data/local/tmp/emmylua/$pkg.cfg"]!!
         assertEquals(result.token, AgentConfig.parseToken(cfg))
-        assertTrue(cfg.contains("buildId=60e566a71d04c16832f66552a95c98d475075427"))
-        assertTrue(cfg.contains("fn.lua_sethook=0x25ac"))
+        assertTrue(cfg.contains("buildId=80f8b0d491d008719b432c77aa605ae035341cd5"))
+        assertTrue(cfg.contains("fn.lua_sethook=0x2dfc"))
         assertTrue(cfg.contains("waitIde=0"))
         // 执行顺序：部署在注入之前，注入在转发之前
         val idxCopy = shell.indexOfFirst { it.contains("cp /data/local/tmp/emmylua/") }
@@ -195,7 +195,7 @@ class AndroidAttachSessionTest {
         val byTitle = items.associateBy { it.title }
         assertEquals(CheckStatus.OK, byTitle["adb"]!!.status)
         assertEquals(CheckStatus.OK, byTitle["系统版本"]!!.status)
-        assertEquals(CheckStatus.WARNING, byTitle["符号"]!!.status) // 夹具缺 luaL_newstate
+        assertEquals(CheckStatus.OK, byTitle["符号"]!!.status)
         assertEquals(CheckStatus.OK, byTitle["ABI"]!!.status)
         assertEquals(CheckStatus.OK, byTitle["应用"]!!.status)
         assertEquals(CheckStatus.OK, byTitle["Build ID"]!!.status)
