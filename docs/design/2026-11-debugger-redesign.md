@@ -49,7 +49,7 @@
 
 **功能不缩水、性能有量化目标。** 逐项对照见 [2.5](#25-功能完整性改造后不缩水)：除命名管道和纯 Lua 调试器两项（给出理由和兜底），现有能力全部保留，并新增修改变量、出错即停、协程视图、Agent 附加/连设备等。性能目标与验收方法见 [5.3](#53-性能目标与验收)：不下断点时游戏侧开销目标 ≤ 1.05 倍，USB 下命中断点到显示变量 ≤ 100 ms。
 
-**EmmyLuaDebugger 结论：必须保留，必须重构（性能和移动端），并入本仓库 `native/` 目录（已确认）。** 它是引擎无关的调试 runtime（附加注入、5 个 Lua 版本、非 UE 宿主都靠它）；并入后协议两端可以在一个 PR 里同时改。UE 项目的真机调试另在 UEKit 里新增一个 `LuaDebug` 插件，从本仓库 `native/` 按 tag 同步源码编进游戏，并和 UELink 已有的 Lua 钩子共用一个钩子分发器。详见[第 8 节](#8-emmyluadebugger-是否保留迁移到哪里)。
+**EmmyLuaDebugger 结论：必须保留，必须重构（性能和移动端），并入本仓库 `native/` 目录（已确认）。** 它是引擎无关的调试 runtime（附加注入、5 个 Lua 版本、非 UE 宿主都靠它）；并入后协议两端可以在一个 PR 里同时改。UE 项目的真机调试**不新增插件、不改打包**：复用已随开发包进到设备上的 UELink，在里面加一个 Lua 调试通道，引用 `native/` 拆出的无依赖调试核心。详见[第 8 节](#8-emmyluadebugger-是否保留迁移到哪里)。
 
 ---
 
@@ -156,7 +156,7 @@
 | 命名管道 | Emmy NEW `pipe-*` | ⚠️ 删除：只能本机用，TCP 回环完全覆盖，且多一个原生依赖 |
 | 纯 Lua 调试器（无需原生编译） | LuaPanda | ⚠️ 删除。代价：宿主**无法编译原生库**时就没法调试。缓解：这种情况很少（Unity/UE/自研引擎都能链接 C 库）；若确有需要，P7 之后可以用 Lua 写一个实现 v3 子集的 runtime 兜底，复用同一套 IDE 和 MCP |
 | Android / iOS 真机 | 无正式支持 | 🆕 |
-| UE 进程免注入直连 | 无 | 🆕 经 UEKit `LuaDebug` + UELink 名片 |
+| UE 进程免注入直连 | 无 | 🆕 经 UELink 调试通道 + 名片 |
 
 **Agent 能力（CLI → MCP）**
 
@@ -371,6 +371,7 @@ FindBreakPoint(ar)       → manager->GetLineSet()：breakpointsMtx 加锁 + 复
 
 | 项 | 改动 |
 | --- | --- |
+| 核心拆分 | 拆出 `emmy_debugger_core`：钩子状态机、断点索引、变量读取、受限求值、协议编解码，不含网络 / 线程 / 注入，宿主通过小接口提供 IO；`emmy_core`、附加注入、UELink 都基于它 |
 | C++ 标准 | C++11 → C++17（`std::optional`、`string_view`、`shared_mutex`、结构化绑定），清理手写锁宏 |
 | 协议 | 实现 v3；删除 v1 消息、v2 Envelope、管道传输（`pipeline_*_transporter.cpp`） |
 | `EmmyFacade` | 1327 行单例拆成 `Session`（连接 + 协议）、`VmHub`（VM 注册）、`HookDispatcher`；单例只留 C ABI 入口 |
@@ -558,7 +559,7 @@ sequenceDiagram
 
 | 宿主 | 集成 |
 | --- | --- |
-| UE + UnLua（真机） | UEKit 新插件 `LuaDebug`，见第 8 节 |
+| UE + UnLua（真机） | 复用 UELink（开发包里已有），加 Lua 调试通道，见 8.4 |
 | Unity（xLua / toLua / slua） | 提供 native plugin 包：Android `.so`、iOS 静态库；C# 一行 `EmmyDebug.Start(luaEnv.L, 9966)` |
 | 其他 C/C++ 引擎 | 链接 `emmy_debugger` 静态库，调用 C ABI：`Emmy_StartServer`、`Emmy_RegisterLuaVm`、`Emmy_RegisterLuaSource` |
 | 纯 Lua 环境（PC） | 现有 `emmy_core`：`require("emmy_core").tcpListen(...)` |
@@ -631,7 +632,7 @@ IntelliJ-EmmyLua/
     shared/ tests/ cmake/ third-party/
     platforms/android/        🆕 NDK 构建脚本
     platforms/ios/            🆕 xcframework 构建脚本
-    integrations/ue/          🆕 给 UEKit LuaDebug 插件用的 UE 胶水源码（见 8.4）
+    emmy_debugger_core/       🆕 从 emmy_debugger 拆出的无 IO、无第三方依赖的调试核心，供 UELink 等宿主以源码引用（见 8.4）
   modules/ src/ ...           插件
 ```
 
@@ -644,28 +645,46 @@ IntelliJ-EmmyLua/
 5. 原 EmmyLuaDebugger 仓库：README 写明"已迁移到 IntelliJ-EmmyLua/native"，然后归档（只读）。外部若有人直接引用旧仓库，旧 tag 仍可用。
 6. 插件资源目录 `src/main/resources/debugger/emmy/**` 的二进制改为由同一次 CI 构建产出、打进插件包，不再提交到仓库。
 
-**和 UEKit 的关系**：UEKit 仍然需要一个 `LuaDebug` 插件把 runtime 编进 UE 游戏（UBT 只能编源码，不能直接用 CMake 产物），但它的源码来源从"EmmyLuaDebugger 仓库"改为"IntelliJ-EmmyLua 的 `native/` 目录"，按 tag 同步。
+**和 UEKit 的关系**：UE 项目真机调试**不新增插件、不改打包流程**，复用已经随开发包进到设备上的 UELink，见 8.4。为此 `native/` 里把调试核心拆出一个无 IO、无第三方依赖的 `emmy_debugger_core`，UELink 以源码方式引用它。
 
-### 8.4 UEKit `LuaDebug` 插件设计
+### 8.4 UE 真机调试：复用 UELink，不新增插件
+
+**为什么不单独做 `LuaDebug` 插件**：再加一个插件意味着每个项目都要改 `.uproject`、改打包配置、处理 libuv 等第三方库在 Android/iOS 上的 UBT 编译，落地成本高（已与用户确认不现实）。
+
+**UELink 已经具备的条件**（`fixcode-h/UEKit` 现状）：
+
+| 条件 | 现状 |
+| --- | --- |
+| 随开发包进设备 | `UELinkCore` 是 Runtime 模块，只排除 Shipping，没有平台限制，Development / Test 包里本来就有 |
+| 能拿到 Lua VM | 已链接 UnLua 的 Lua（`SetupLua`），有 `StateFor()` 取 `lua_State` |
+| 已经在用调试钩子 | `lua.snap`（快照点）、`lua.profile`（采样）用 `lua_sethook` |
+| 只监听本机 | HTTP 绑定 `127.0.0.1`，真机上配合 `adb forward` / usbmux 正好安全 |
+
+**方案：在 UELink 里加一个"Lua 调试通道"**
 
 ```text
-plugins/LuaDebug/
-  LuaDebug.uplugin        Runtime 模块；Shipping 不加载；依赖 UnLua（可选）
-  kit.json                kind: extension，requires: UELink（用于名片和面板）
-  Source/LuaDebugRuntime/
-    ThirdParty/emmy/      由 scripts/sync-emmy.mjs 从 IntelliJ-EmmyLua@tag 的 native/emmy_debugger 与 native/integrations/ue 拷入
-    Private/
-      LuaDebugModule.cpp  模块启动：读配置 / 命令行，启动 runtime 监听
-      UnLuaVmBridge.cpp   订阅 UnLua 的 Lua 环境创建/销毁，调用 Host API 注册 VM 和 source hash
-      HookMuxBridge.cpp   让 UELink 的 lua.snap / lua.profile 通过 HookMux 共用钩子
+plugins/UELink/Source/UELinkCore/Private/
+  LuaDebug/
+    LuaDebugChannel.cpp     独立线程 + FSocket 监听 127.0.0.1:<端口>，收发协议 v3 帧
+    LuaDebugHost.cpp        把 UnLua 的 lua_State 注册给调试核心；PIE / 重建 Lua 环境时注销
+    ThirdParty/emmy_core/   从 IntelliJ-EmmyLua@tag 的 native/emmy_debugger_core 同步的源码（约 10 个文件）
 ```
 
-- **启用**：`-LuaDebug` 命令行或 `DefaultLuaDebug.ini`（端口、是否局域网、配对码）；默认开发包启用监听 `127.0.0.1:9966`（只能 USB 转发连，安全）。
-- **VM 注册**：在 UnLua 的 Lua 环境创建后调用 `Emmy_RegisterLuaVm`，销毁前调 `Emmy_BeginLuaVmClose`。PIE 重启自然产生新 VM / 新 epoch。
-- **source hash**：在 UnLua 的加载器里对实际交给 Lua 的字节算 SHA-256 并注册，真机热更新也能对得上。
-- **名片**：PC 上把调试端口写进 UELink 名片的 `features` / `luaDebugPort`，IDE 插件扫描 `<项目>/Saved/UELink/instances/*.json` 就能直接列出"可调试的 UE 进程"（编辑器 / PIE / -game），**不需要注入**，比附加更稳。
-- **与 UELink 现有 Lua 能力的关系**：UELink 的 `lua.snap`（快照点）、`lua.profile`（采样）保留，它们面向 Agent 面板、不停游戏；`LuaDebug` 面向 IDE 断点调试。二者通过 `HookMux` 共存，不再互相"记住上一个钩子再转发"（这种做法在一方先卸载时会把另一方的钩子丢掉）。
-- **与 Agent 面板的关系**：面板已经把 UE 能力做成 `ue_*` MCP 工具；Lua 断点调试的 MCP 由 IDE 插件提供（第 6 节），面板可在 `kit.json` 里声明"配套 IDE 插件"，安装 `LuaDebug` 时提示安装 IDE 插件。
+- **不用 UE 的 HTTPServer 做调试通道**：断点会让游戏线程停住，而 UELink 的 HTTP 请求在游戏线程上处理，停住后就没人回包了（这也是 UELink 注释里说"不做断点"的原因）。调试通道用自己的线程收包；游戏线程停在断点里时，钩子循环从队列里取"查栈 / 取变量 / 继续"等命令，在 Lua 所属线程上执行。这正是 Emmy 现在暂停时的工作方式。
+- **`emmy_debugger_core`**：从 `native/emmy_debugger` 拆出纯逻辑部分（钩子状态机、断点索引、变量读取、受限求值、协议 v3 编解码），网络、线程、日志通过一个很小的接口由宿主提供。没有 libuv，没有 `emmy_hook` / EasyHook，UBT 直接编，iOS 也能用。PC 端的 `emmy_core` / 附加注入同样基于这个核心，两边行为一致。
+- **端口与发现**：调试端口写进 UELink 名片（新字段 `luaDebug`）。PC 上 IDE 扫 `<项目>/Saved/UELink/instances/*.json` 直接列出可调试的编辑器 / PIE / `-game` 进程，**不需要注入**；真机上 IDE 通过 `adb forward` / usbmux 转发到设备的 `127.0.0.1:<端口>`。
+- **开关**：默认不监听，需要 `-LuaDebug` 命令行或 `DefaultUELink.ini` 里 `bLuaDebug=True`；未连接时不挂任何钩子，零开销。
+- **钩子共存**：调试通道、`lua.snap`、`lua.profile` 在 UELink 内部共用一个钩子分发（`HookMux`），不再"记住上一个钩子再转发"。
+- **source hash**：在 UnLua 的加载回调里对实际交给 Lua 的字节算 SHA-256 并注册，真机热更新也能对上。
+- **与 Agent 面板的关系**：面板的 `ue_*` MCP 工具不变；Lua 断点调试的 MCP 由 IDE 插件提供（第 6 节）。
+
+**按项目情况的降级方案**
+
+| 情况 | 可用能力 |
+| --- | --- |
+| 包里有 UELink（推荐） | 完整断点调试：断点、单步、看变量、求值、出错即停 |
+| 包里有 UELink 但不能加调试通道代码 | 只能"不停游戏的快照点"：IDE / MCP 通过 UELink 已有的 `lua.snap` 在指定行采集局部变量和调用栈，相当于日志断点 + Probe，不能单步 |
+| 包里什么都不加 | Android 可调试包（`debuggable=true`）理论上可以用 `cmd activity attach-agent` 加载一个 JVMTI agent，再由它加载调试核心，配合本地未裁剪的 `libUnreal.so` 符号找到 Lua 函数地址，实现"真机附加"。iOS 无法做到。实现复杂、依赖符号文件，列为后续调研项，不进首期 |
 
 ---
 
@@ -728,7 +747,7 @@ plugins/LuaDebug/
 
 - 架构从 PE 头自动判断，删除"选择 x86/x64"选项。
 - 按模块是否加载 `lua*.dll` / 导出 `lua_*` 符号识别 Lua 进程；UE 进程类型识别作为一种"进程标签提供者"扩展，而不是写死在通用列表里。
-- 装了 UEKit `LuaDebug` 的 UE 进程直接显示"可直连（无需注入）"，选它走 TCP 直连。
+- 开启了 UELink 调试通道的 UE 进程直接显示"可直连（无需注入）"，选它走 TCP 直连。
 - 仍提供"Lua 附加"运行配置，给需要固定进程名、自动附加的场景用。
 
 ### 10.3 连接设备
@@ -821,7 +840,7 @@ MCP Server
 | P3 引擎拆分 | 新建 `debugger-protocol` / `debugger-engine`，拆上帝类，XDebugger 适配层 | 本仓库 | 对接 runtime 3.0（可与 P2 在同一系列 PR 中推进） |
 | P4 MCP | `debugger-mcp` 模块、HTTP 宿主、权限确认、Agent 页、安装器与未安装提示 | 插件 | Agent 可调试 |
 | P5 真机 | 设备运行配置、adb / iproxy / 局域网发现、源码映射 UI | 插件 | Android / iOS 可用 |
-| P6 UE 集成 | `native/integrations/ue` 胶水代码；UEKit `LuaDebug` 插件（按 tag 同步）、UnLua VM 桥、UELink 名片与 `HookMux` 接入 | 本仓库 + UEKit | UE 真机 + 免注入直连 |
+| P6 UE 集成 | `native/emmy_debugger_core` 拆分；UELink 加 Lua 调试通道（同步核心源码）、名片 `luaDebug` 字段、`HookMux` 接入 | 本仓库 + UEKit(UELink) | UE 真机 + 免注入直连，不改项目打包 |
 | P7 UI 打磨 | Attach to Process 集成、设置页、状态栏、i18n | 插件 | — |
 
 P2 与 P1 可并行；P3 依赖 P2 的协议定稿（可以先定协议文档，两边同时做）。
@@ -837,5 +856,5 @@ P2 与 P1 可并行；P3 依赖 P2 的协议定稿（可以先定协议文档，
 | iOS usbmux 内置实现 | 协议非公开，Windows 依赖 iTunes/Apple 设备服务 | 第一期只用 iproxy |
 | MCP 客户端配置格式变化 | 各家格式还在变 | 每个客户端一个独立写入器，配格式测试 |
 | 默认端口冲突 | 9330 / 9966 被占用 | 顺延并在 UI / 安装器中提示 |
-| UnLua 定制分支 | Lua ABI 与官方不同 | `LuaDebug` 与游戏共用同一份 Lua 头文件编译；Host API 中对 ABI 描述做对账（已有 `lua_abi_descriptor`） |
+| UnLua 定制分支 | Lua ABI 与官方不同 | UELink 调试通道与游戏共用同一份 Lua 头文件编译（UELink 已经这样做）；Host API 中对 ABI 描述做对账（已有 `lua_abi_descriptor`） |
 | 待定 | MCP 默认端口号、配对码展示方式（日志 / 屏幕浮层）、是否去掉 251 构建 | 评审时确认 |
