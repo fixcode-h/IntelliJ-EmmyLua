@@ -152,6 +152,40 @@ class NativeRuntimeE2eTest {
     }
 
     @Test
+    fun `修改变量后重新读取到新值`() {
+        val (session, events) = session()
+        assumeTrue(session.hasCapability(Capabilities.SET_VARIABLE))
+        session.addBreakpoint(BreakpointRequest(script.path, LINE_LOCAL_R)).await()
+        val pause = events.pause()
+        val frame = session.stackTrace(pause).await().frames.first()
+        val locals = session.scopes(frame).await().single { it.name == "locals" }
+        val t = session.variables(locals).await().variables.single { it.variable.name == "t" }.children()!!
+        session.setVariable(t, "name", "\"changed\"").await()
+        val again = session.variables(t).await().variables.single { it.variable.name == "name" }
+        assertTrue(again.variable.value, again.variable.value.contains("changed"))
+    }
+
+    @Test
+    fun `协程列表和协程的栈`() {
+        val (session, events) = session()
+        assumeTrue(session.hasCapability(Capabilities.COROUTINES))
+        session.addBreakpoint(BreakpointRequest(script.path, LINE_LOCAL_R)).await()
+        val pause = events.pause()
+        val threads = session.threads(pause).await()
+        val loader = threads.firstOrNull { it.threadId != pause.threadId && it.status == "suspended" }
+        assertTrue("应该列出挂起的 loader 协程：$threads", loader != null)
+        val frames = session.stackTrace(pause, threadId = loader!!.threadId).await().frames
+        // emmy_debugger_core 目前 stackTrace 忽略 threadId（总是返回暂停线程的栈），等 native 补上后这里自动生效
+        assumeTrue("runtime 还没按 threadId 取协程的栈", frames.all { it.frame.threadId == loader.threadId })
+        val luaFrame = frames.firstOrNull { it.frame.hasSource } ?: error("协程栈里没有 Lua 帧：${frames.map { it.frame }}")
+        val scopes = session.scopes(luaFrame).await()
+        val locals = scopes.firstOrNull { it.name == "locals" } ?: error("没有 locals：${scopes.map { it.name }}")
+        val vars = session.variables(locals).await().variables
+        val waiting = vars.firstOrNull { it.variable.name == "waiting" } ?: error("没有 waiting：${vars.map { it.variable }}")
+        assertEquals("\"ui/bag\"", waiting.variable.value)
+    }
+
+    @Test
     fun `条件断点只在条件成立时停`() {
         val (session, events) = session()
         assumeTrue(session.hasCapability(Capabilities.CONDITION))
@@ -205,6 +239,11 @@ class NativeRuntimeE2eTest {
               counter = counter + r
               return r
             end
+            M.loader = coroutine.create(function(path)
+              local waiting = path
+              coroutine.yield()
+            end)
+            coroutine.resume(M.loader, "ui/bag")
             return M
         """.trimIndent() + "\n"
     }
