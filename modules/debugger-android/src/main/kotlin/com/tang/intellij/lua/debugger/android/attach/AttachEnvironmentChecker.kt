@@ -71,7 +71,7 @@ class AttachEnvironmentChecker(
                 val table = symbolResolver.resolve(symbolFile)
                 symbolAbi = table.abi
                 symbolBuildId = table.buildId
-                items += CheckItem("符号", if (table.usable) (if (table.missingRequired.isEmpty()) CheckStatus.OK else CheckStatus.WARNING) else CheckStatus.FAILED,
+                items += CheckItem("符号", if (table.usable) (if (table.missingOptional.isEmpty()) CheckStatus.OK else CheckStatus.WARNING) else CheckStatus.FAILED,
                     table.describe(), if (table.usable) null else "确认指定的是静态链接了 Lua 的未裁剪 so")
             } catch (e: Exception) {
                 items += CheckItem("符号", CheckStatus.FAILED, e.message ?: "读取失败", "确认文件是未裁剪的 ELF so")

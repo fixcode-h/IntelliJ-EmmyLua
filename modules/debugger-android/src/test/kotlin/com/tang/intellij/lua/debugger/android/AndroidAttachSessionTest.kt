@@ -93,8 +93,8 @@ class AndroidAttachSessionTest {
         assertTrue(shell.contains("rm -f /data/local/tmp/emmylua/$pkg.cfg"))
         val cfg = adb.pushed["/data/local/tmp/emmylua/$pkg.cfg"]!!
         assertEquals(result.token, AgentConfig.parseToken(cfg))
-        assertTrue(cfg.contains("buildId=80f8b0d491d008719b432c77aa605ae035341cd5"))
-        assertTrue(cfg.contains("fn.lua_sethook=0x2dfc"))
+        assertTrue(cfg.contains("buildId=67dce0dff707ac8d48d3ca83d8a7e5ed2ec1a2e1"))
+        assertTrue(cfg.contains("fn.lua_sethook=0x2ed4"))
         assertTrue(cfg.contains("waitIde=0"))
         // 执行顺序：部署在注入之前，注入在转发之前
         val idxCopy = shell.indexOfFirst { it.contains("cp /data/local/tmp/emmylua/") }
