@@ -1,0 +1,75 @@
+<!--
+  新调试链路（附加 + 真机 + MCP）的注册。
+
+  按设计文档 12.1「新建后一次性切换」：P8 之前这个文件不被 plugin.xml 引用，
+  新旧两套不会同时出现在用户面前。本地试用时在 plugin.xml 里临时加一行
+      <xi:include href="emmylua-debug.xml" xpointer="xpointer(/idea-plugin/*)"/>
+  即可（不要提交这行）。P8 切换 PR 正式加上并删掉旧的 debugger/ 注册。
+
+  各并行线程只往自己的段落里加注册，避免互相冲突：
+    - 引擎：debug.processFactory
+    - Android 真机：debug.deviceService
+    - MCP：debug.mcpService 以及 MCP 自己的服务
+    - UI：其余
+-->
+<idea-plugin xmlns:xi="http://www.w3.org/2001/XInclude">
+    <extensionPoints>
+        <extensionPoint qualifiedName="com.tang.intellij.lua.debug.processFactory"
+                        interface="com.tang.intellij.lua.debug.api.LuaDebugProcessFactory" dynamic="true"/>
+        <extensionPoint qualifiedName="com.tang.intellij.lua.debug.deviceService"
+                        interface="com.tang.intellij.lua.debug.api.LuaDeviceService" dynamic="true"/>
+        <extensionPoint qualifiedName="com.tang.intellij.lua.debug.mcpService"
+                        interface="com.tang.intellij.lua.debug.api.LuaMcpService" dynamic="true"/>
+        <extensionPoint qualifiedName="com.tang.intellij.lua.debug.processTagProvider"
+                        interface="com.tang.intellij.lua.debug.api.LuaProcessTagProvider" dynamic="true"/>
+    </extensionPoints>
+
+    <!-- ===== 引擎 ===== -->
+    <extensions defaultExtensionNs="com.tang.intellij.lua">
+        <debug.processFactory implementation="com.tang.intellij.lua.debug.xdebugger.LuaV3DebugProcessFactory"/>
+    </extensions>
+
+    <!-- ===== Android 真机 ===== -->
+    <extensions defaultExtensionNs="com.tang.intellij.lua">
+    </extensions>
+
+    <!-- ===== MCP =====（注册放在 MCP 线程自己的文件里，互不冲突） -->
+    <xi:include href="emmylua-debug-mcp.xml" xpointer="xpointer(/idea-plugin/*)"/>
+
+    <!-- ===== UI ===== -->
+    <extensions defaultExtensionNs="com.tang.intellij.lua">
+        <debug.processTagProvider implementation="com.tang.intellij.lua.debug.ui.process.UnrealProcessTagProvider"/>
+    </extensions>
+    <extensions defaultExtensionNs="com.intellij">
+        <configurationType implementation="com.tang.intellij.lua.debug.ui.attach.LuaAttachConfigurationType"/>
+        <configurationType implementation="com.tang.intellij.lua.debug.ui.device.LuaDeviceConfigurationType"/>
+        <programRunner implementation="com.tang.intellij.lua.debug.ui.session.LuaDebugRunner"/>
+        <xdebugger.attachDebuggerProvider implementation="com.tang.intellij.lua.debug.ui.attach.LuaAttachDebuggerProvider"/>
+        <xdebugger.attachDebuggerProvider implementation="com.tang.intellij.lua.debug.ui.device.LuaDeviceAttachDebuggerProvider"/>
+        <xdebugger.attachHostProvider implementation="com.tang.intellij.lua.debug.ui.device.LuaDeviceAttachHostProvider"/>
+
+        <applicationConfigurable parentId="tools"
+                                 id="emmylua.debug"
+                                 bundle="messages.LuaDebugBundle"
+                                 key="settings.title"
+                                 instance="com.tang.intellij.lua.debug.ui.settings.LuaDebugConfigurable"/>
+
+        <statusBarWidgetFactory id="EmmyLuaDebugMcp"
+                                implementation="com.tang.intellij.lua.debug.ui.mcp.LuaMcpStatusBarWidgetFactory"
+                                order="after positionWidget"/>
+        <postStartupActivity implementation="com.tang.intellij.lua.debug.ui.mcp.LuaMcpInstallPromptActivity"/>
+        <notificationGroup id="EmmyLua Debug" displayType="BALLOON" bundle="messages.LuaDebugBundle" key="notification.group"/>
+    </extensions>
+
+    <actions>
+        <group id="EmmyLua.Debug.Tools" popup="true" text="EmmyLua 调试">
+            <action id="EmmyLua.Debug.InstallMcp"
+                    class="com.tang.intellij.lua.debug.ui.mcp.InstallMcpAction"/>
+            <action id="EmmyLua.Debug.McpStatus"
+                    class="com.tang.intellij.lua.debug.ui.mcp.ShowMcpStatusAction"/>
+            <action id="EmmyLua.Debug.OpenSettings"
+                    class="com.tang.intellij.lua.debug.ui.settings.OpenLuaDebugSettingsAction"/>
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </group>
+    </actions>
+</idea-plugin>

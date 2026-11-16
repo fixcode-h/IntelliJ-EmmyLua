@@ -1,7 +1,9 @@
 package com.tang.intellij.lua.debug.xdebugger
 
 import com.intellij.execution.ui.ConsoleViewContentType
+import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.ui.MessageType
 import com.intellij.openapi.vfs.VirtualFileManager
 import com.intellij.xdebugger.XDebugProcess
@@ -13,6 +15,12 @@ import com.intellij.xdebugger.breakpoints.XBreakpointProperties
 import com.intellij.xdebugger.breakpoints.XLineBreakpoint
 import com.intellij.xdebugger.evaluation.XDebuggerEditorsProvider
 import com.intellij.xdebugger.frame.XSuspendContext
+import com.tang.intellij.lua.debug.api.LuaDebugSessionModel
+import com.tang.intellij.lua.debug.api.LuaDebugTarget
+import com.tang.intellij.lua.debug.api.LuaMappingStatus
+import com.tang.intellij.lua.debug.api.LuaSourceMappingEntry
+import com.tang.intellij.lua.debug.api.LuaVmInfo
+import com.tang.intellij.lua.debug.api.LuaVmState
 import com.tang.intellij.lua.debug.engine.BreakpointOrigin
 import com.tang.intellij.lua.debug.engine.BreakpointRequest
 import com.tang.intellij.lua.debug.engine.BreakpointVerification
@@ -21,13 +29,16 @@ import com.tang.intellij.lua.debug.engine.DebugEvent
 import com.tang.intellij.lua.debug.engine.DebugSession
 import com.tang.intellij.lua.debug.engine.Initiator
 import com.tang.intellij.lua.debug.engine.PauseInfo
+import com.tang.intellij.lua.debug.engine.SourceResolution
 import com.tang.intellij.lua.debug.protocol.OutputCategories
 import com.tang.intellij.lua.debug.protocol.PauseReasons
+import com.tang.intellij.lua.debug.protocol.VmStates
 import com.tang.intellij.lua.debugger.LuaDebuggerEditorsProvider
 import com.tang.intellij.lua.debugger.LuaLineBreakpointType
 import com.tang.intellij.lua.debugger.LuaTracebackFilter
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * XDebugger 适配层：把引擎会话（[DebugSession]）接到 IntelliJ 的调试 UI 上。
@@ -38,17 +49,25 @@ import java.util.concurrent.ConcurrentHashMap
  */
 class LuaV3DebugProcess(
     session: XDebugSession,
-    val engine: DebugSession
-) : XDebugProcess(session) {
+    val engine: DebugSession,
+    val target: LuaDebugTarget
+) : XDebugProcess(session), LuaDebugSessionModel {
     private val editorsProvider = LuaDebuggerEditorsProvider()
     private val breakpointIds = ConcurrentHashMap<XLineBreakpoint<*>, CompletableFuture<String>>()
     private val subscription: AutoCloseable
     @Volatile
     private var stopping = false
+    private val modelListeners = CopyOnWriteArrayList<LuaDebugSessionModel.Listener>()
+    /** runtime 报过内容不一致的 chunk（热更新、没同步），「映射」页标成 HASH_MISMATCH。 */
+    private val mismatchedChunks = ConcurrentHashMap.newKeySet<String>()
+    /** 用户在 VM 页选的 VM；没有暂停时栈和变量为空，选择只是记下来。 */
+    @Volatile
+    private var selectedVmId: Long? = null
 
     init {
         session.setPauseActionSupported(true)
         subscription = engine.events.subscribe(::onEvent)
+        LuaDebugSessionManager.getInstance(session.project).register(LuaDebugSessionManager.Entry(engine, target, session))
     }
 
     override fun getEditorsProvider(): XDebuggerEditorsProvider = editorsProvider
@@ -94,6 +113,7 @@ class LuaV3DebugProcess(
         stopping = true
         subscription.close()
         breakpointIds.clear()
+        if (!session.project.isDisposed) LuaDebugSessionManager.getInstance(session.project).unregister(engine.id)
         ApplicationManager.getApplication().executeOnPooledThread { engine.close() }
     }
 
@@ -115,6 +135,7 @@ class LuaV3DebugProcess(
 
     private fun onEvent(event: DebugEvent) {
         if (stopping) return
+        notifyModel(event)
         when (event) {
             is DebugEvent.Paused -> if (event.focused) present(event.pause)
             is DebugEvent.FocusChanged -> event.pause?.let(::present)
@@ -211,5 +232,85 @@ class LuaV3DebugProcess(
             autoContinue = breakpoint.suspendPolicy == SuspendPolicy.NONE,
             origin = BreakpointOrigin.IDE
         )
+    }
+
+    // ---------- 调试窗口的 VM / 映射页（LuaDebugSessionModel） ----------
+
+    override fun vms(): List<LuaVmInfo> = engine.vms().map { vm ->
+        LuaVmInfo(
+            vmId = vm.vmId.toString(),
+            displayName = vm.name,
+            state = when {
+                vm.paused -> LuaVmState.PAUSED
+                vm.state == VmStates.CLOSING -> LuaVmState.CLOSED
+                else -> LuaVmState.RUNNING
+            },
+            sourceEpoch = vm.sourceEpoch,
+            luaVersion = vm.luaVersion
+        )
+    }
+
+    override fun currentVmId(): String? {
+        val vms = engine.vms()
+        val id = engine.focusedPause()?.vmId
+            ?: selectedVmId?.takeIf { selected -> vms.any { it.vmId == selected } }
+            ?: vms.firstOrNull()?.vmId
+        return id?.toString()
+    }
+
+    override fun selectVm(vmId: String) {
+        val id = vmId.toLongOrNull() ?: return
+        selectedVmId = id
+        // 选中的 VM 停着时切焦点，引擎发 FocusChanged，onEvent 里重新呈现它的栈
+        if (engine.pauses().any { it.vmId == id }) engine.focus(id)
+        fireModel { it.vmsChanged() }
+    }
+
+    override fun sourceMappings(): List<LuaSourceMappingEntry> = engine.sourceMapper.entries().mapNotNull { entry ->
+        when (val resolution = entry.resolution) {
+            is SourceResolution.Mapped -> LuaSourceMappingEntry(
+                entry.chunkName, resolution.localPath,
+                if (entry.chunkName in mismatchedChunks) LuaMappingStatus.HASH_MISMATCH else LuaMappingStatus.MAPPED
+            )
+            is SourceResolution.Ambiguous -> LuaSourceMappingEntry(entry.chunkName, null, LuaMappingStatus.AMBIGUOUS, resolution.candidates)
+            SourceResolution.Unmapped -> LuaSourceMappingEntry(entry.chunkName, null, LuaMappingStatus.UNMAPPED)
+            SourceResolution.NotAFile -> null
+        }
+    }
+
+    override fun overrideMapping(chunkName: String, localPath: String) {
+        mismatchedChunks.remove(chunkName)
+        engine.overrideMapping(chunkName, localPath).whenComplete { _, error ->
+            if (error != null) reportError(error)
+            fireModel { it.mappingsChanged() }
+        }
+    }
+
+    override fun addListener(listener: LuaDebugSessionModel.Listener, parent: Disposable) {
+        modelListeners += listener
+        Disposer.register(parent) { modelListeners -= listener }
+    }
+
+    private fun notifyModel(event: DebugEvent) {
+        if (modelListeners.isEmpty()) return
+        when (event) {
+            is DebugEvent.VmAdded, is DebugEvent.VmChanged, is DebugEvent.VmClosed,
+            is DebugEvent.Resumed, is DebugEvent.FocusChanged -> fireModel { it.vmsChanged() }
+            // 暂停时栈帧会解析新的 chunk，映射表可能多出几项
+            is DebugEvent.Paused -> fireModel { it.vmsChanged(); it.mappingsChanged() }
+            is DebugEvent.SourceMismatch -> {
+                event.chunkName?.let(mismatchedChunks::add)
+                fireModel { it.mappingsChanged() }
+            }
+            is DebugEvent.BreakpointsChanged -> fireModel { it.mappingsChanged() }
+            else -> Unit
+        }
+    }
+
+    /** 接口约定监听器在 EDT 上收到通知。 */
+    private fun fireModel(action: (LuaDebugSessionModel.Listener) -> Unit) {
+        ApplicationManager.getApplication().invokeLater {
+            if (!session.project.isDisposed) modelListeners.forEach(action)
+        }
     }
 }

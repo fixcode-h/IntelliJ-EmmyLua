@@ -128,7 +128,8 @@ class SourceMapper(
     /** 用户在「映射」页给某个 chunk 手动指定本地文件。 */
     fun override(chunkName: String, localPath: String) = synchronized(lock) {
         overrides[chunkName] = SourcePaths.normalize(localPath)
-        cache.clear()
+        // 只影响这一个 chunk；全清会让「映射」页在下次暂停前变空
+        cache.remove(chunkName)
     }
 
     fun addRule(rule: MappingRule) = synchronized(lock) {

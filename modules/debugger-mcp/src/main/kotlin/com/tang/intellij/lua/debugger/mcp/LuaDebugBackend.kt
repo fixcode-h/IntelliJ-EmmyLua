@@ -1,0 +1,331 @@
+package com.tang.intellij.lua.debugger.mcp
+
+import java.util.concurrent.CompletableFuture
+
+/**
+ * MCP 工具层对调试引擎的全部要求。
+ *
+ * 由 IDE 调试引擎（`modules/debugger-engine` 的 DebugSessionManager 或其适配层）实现；
+ * MCP 模块只认这个接口，所以能用假实现单测，也不依赖 IntelliJ。
+ *
+ * 约定：
+ * - 所有 id 都是字符串，由引擎生成；`frameId` / `ref` 绑定 pauseId，过期时抛 [LuaDebugBackendException]
+ *   （code = [ErrorCode.STALE_REFERENCE]），MCP 层会附上"先调 wait_for_pause / get_stack"的恢复提示。
+ * - 返回 CompletableFuture 的方法可以在引擎线程完成；MCP 在自己的 HTTP 工作线程上带超时等待。
+ * - 不返回 future 的方法要快（只读内存状态），可在任意线程调用。
+ * - Agent 下的断点 origin = AGENT，和 IDE 断点在同一个 BreakpointStore 里（设计文档 3.1）。
+ * - 权限（首次控制确认、任意求值开关、附加确认）由 MCP 层在调用前处理，引擎不用管；
+ *   但 runtime 侧的 allowLuaEval 仍由引擎按 IDE 设置下发（协议 v3 setOptions），作为第二道保险。
+ */
+interface LuaDebugBackend {
+    fun listSessions(): List<SessionInfo>
+
+    /** 可附加的本机进程（只列看起来加载了 Lua 的）和已发现的设备上的可调试应用。 */
+    fun listTargets(kind: TargetKind?): CompletableFuture<List<TargetInfo>>
+
+    /** 启动一个附加会话，完成时返回 sessionId（握手完成后才完成）。 */
+    fun attachProcess(request: AttachProcessRequest): CompletableFuture<String>
+
+    fun attachDevice(request: AttachDeviceRequest): CompletableFuture<String>
+
+    fun stopSession(sessionId: String): CompletableFuture<Unit>
+
+    fun listVms(sessionId: String): List<VmInfo>
+
+    /** 运行时能力位（协议 v3 welcome.caps），例如 "luaEval"、"valuePath"、"logpoint"。 */
+    fun capabilities(sessionId: String): Set<String>
+
+    // ---- 断点 ----
+
+    /** 下断点（origin = AGENT），返回断点；已存在同文件同行的 Agent 断点时更新它。 */
+    fun setBreakpoint(spec: BreakpointSpec): CompletableFuture<BreakpointInfo>
+
+    /**
+     * 返回实际删掉的个数。按 id 指定时 IDE 断点也能删（Agent 明确点名）；
+     * 按 all 批量删时只删 origin = AGENT 的，除非 includeIde = true。
+     */
+    fun removeBreakpoints(filter: BreakpointFilter): CompletableFuture<Int>
+
+    fun listBreakpoints(origin: BreakpointOrigin?): List<BreakpointInfo>
+
+    /** 启用/禁用匹配的断点，返回改动的个数。 */
+    fun enableBreakpoints(filter: BreakpointFilter, enabled: Boolean): CompletableFuture<Int>
+
+    // ---- 执行控制 ----
+
+    fun resume(sessionId: String, vmId: String?): CompletableFuture<Unit>
+
+    fun pause(sessionId: String, vmId: String?): CompletableFuture<Unit>
+
+    fun step(sessionId: String, vmId: String?, kind: StepKind): CompletableFuture<Unit>
+
+    fun runToLine(sessionId: String, vmId: String?, file: String, line: Int): CompletableFuture<Unit>
+
+    /** 当前处于暂停的 VM（每个暂停一个快照）；没有暂停时为空。 */
+    fun currentPauses(): List<PauseInfo>
+
+    /**
+     * 订阅引擎事件。返回值 close() 取消订阅。监听器在引擎线程调用，必须立即返回。
+     * wait_for_pause 靠它实现；UI 点继续时 Agent 也会收到 Resumed(byUser = true)。
+     */
+    fun addListener(listener: (DebugEvent) -> Unit): AutoCloseable
+
+    // ---- 查看 ----
+
+    fun getStack(sessionId: String, vmId: String?, start: Int, count: Int): CompletableFuture<StackPage>
+
+    fun getVariables(request: VariablesRequest): CompletableFuture<VariablesPage>
+
+    fun evaluate(request: EvaluateRequest): CompletableFuture<VariableInfo>
+
+    /** 调试器日志、print 输出、Lua 错误；seq 单调递增，sessionId 为空表示所有会话。 */
+    fun getOutput(sessionId: String?, sinceSeq: Long, limit: Int): OutputPage
+
+    fun getProbeHits(breakpointId: String?, sinceSeq: Long, limit: Int): ProbeHitPage
+
+    /** 读本地源码片段（[line] 前后 [radius] 行），给栈帧附源码；拿不到返回 null。 */
+    fun sourceSnippet(file: String, line: Int, radius: Int): List<SourceLine>? = null
+}
+
+class LuaDebugBackendException(
+    val code: ErrorCode,
+    message: String,
+) : RuntimeException(message)
+
+enum class ErrorCode {
+    NO_SESSION,
+    NO_VM,
+    NOT_PAUSED,
+    STALE_REFERENCE,
+    NOT_SUPPORTED,
+    EVAL_FORBIDDEN,
+    TIMEOUT,
+    TARGET_NOT_FOUND,
+    ATTACH_FAILED,
+    INVALID_ARGUMENT,
+    INTERNAL,
+}
+
+enum class TargetKind { PROCESS, DEVICE }
+
+enum class SessionKind { ATTACH, DEVICE, ADDRESS }
+
+enum class SessionState { CONNECTING, RUNNING, PAUSED, DISCONNECTED }
+
+data class SessionInfo(
+    val sessionId: String,
+    val kind: SessionKind,
+    /** 一句话描述目标，例如 "UE4Editor.exe (1234)"、"com.foo.game @ emulator-5554"。 */
+    val target: String,
+    val state: SessionState,
+    val vmCount: Int,
+    val pausedVmIds: List<String> = emptyList(),
+    /** 例如 "Lua 5.4"；未知为空。 */
+    val luaVersion: String? = null,
+)
+
+data class TargetInfo(
+    val kind: TargetKind,
+    /** 进程：pid；设备：设备序列号。 */
+    val id: String,
+    val name: String,
+    val detail: String? = null,
+    /** 设备上的包名（kind = DEVICE 时）。 */
+    val packageName: String? = null,
+    val pid: Int? = null,
+)
+
+data class AttachProcessRequest(
+    val pid: Int?,
+    val processName: String?,
+    val captureOutput: Boolean = true,
+)
+
+data class AttachDeviceRequest(
+    val deviceId: String,
+    val packageName: String?,
+    val pid: Int?,
+    val launchAndAttach: Boolean = false,
+)
+
+enum class VmState { RUNNING, PAUSED, CLOSED }
+
+data class VmInfo(
+    val vmId: String,
+    val displayName: String,
+    val state: VmState,
+    val sourceEpoch: Long,
+)
+
+enum class BreakpointOrigin { IDE, AGENT }
+
+data class BreakpointSpec(
+    /** 本地文件路径（绝对或相对项目根），引擎负责映射到 chunkName。 */
+    val file: String,
+    val line: Int,
+    val condition: String? = null,
+    /** 命中次数条件，例如 "5"、">=3"、"%2"。 */
+    val hitCondition: String? = null,
+    /** 日志点：命中时输出这句（支持 {expr}），不暂停。 */
+    val logMessage: String? = null,
+    /** 命中时采集的变量路径（受限求值语法），结果进 Probe 记录。 */
+    val capture: List<String> = emptyList(),
+    /** 命中后自动继续（Probe）。 */
+    val autoContinue: Boolean = false,
+    val vmId: String? = null,
+)
+
+data class BreakpointFilter(
+    val breakpointId: String? = null,
+    val breakpointIds: List<String> = emptyList(),
+    val file: String? = null,
+    val line: Int? = null,
+    /** 匹配所有断点（默认只 Agent 下的，includeIde 时连用户的一起）。 */
+    val all: Boolean = false,
+    /** 也作用于用户在 IDE 里下的断点（对应 clear scope=all）。 */
+    val includeIde: Boolean = false,
+)
+
+data class BreakpointInfo(
+    val breakpointId: String,
+    val origin: BreakpointOrigin,
+    val file: String,
+    val line: Int,
+    /** runtime 已确认（chunk 已加载且行有效）。 */
+    val verified: Boolean,
+    val condition: String? = null,
+    val hitCondition: String? = null,
+    val logMessage: String? = null,
+    val capture: List<String> = emptyList(),
+    val autoContinue: Boolean = false,
+    val enabled: Boolean = true,
+    /** 没验证的原因，例如"chunk 未加载"、"行上没有代码"。 */
+    val message: String? = null,
+)
+
+enum class StepKind { OVER, INTO, OUT }
+
+enum class PauseReason { BREAKPOINT, STEP, PAUSE, ERROR, ENTRY, RUN_TO_LINE, OTHER }
+
+data class PauseInfo(
+    val sessionId: String,
+    val vmId: String,
+    val vmName: String,
+    val pauseId: String,
+    val reason: PauseReason,
+    val breakpointId: String? = null,
+    /** reason = ERROR 时的错误消息。 */
+    val errorMessage: String? = null,
+    /** 顶层帧（paused 事件自带，不用再拉栈）。 */
+    val topFrame: FrameInfo? = null,
+)
+
+data class FrameInfo(
+    val frameId: String,
+    val index: Int,
+    val function: String,
+    /** 映射到的本地文件；没映射时为空。 */
+    val file: String?,
+    val line: Int,
+    val chunkName: String? = null,
+)
+
+data class StackPage(
+    val pauseId: String,
+    val frames: List<FrameInfo>,
+    val total: Int?,
+)
+
+enum class VariableScope { LOCALS, UPVALUES, GLOBALS }
+
+data class VariablesRequest(
+    val frameId: String?,
+    val scope: VariableScope?,
+    /** 继续展开某个变量时传它的 ref（和 frameId/scope 二选一）。 */
+    val ref: String?,
+    /** 从作用域开始按路径取，例如 "self.items[3].id"。 */
+    val path: String?,
+    val depth: Int,
+    val limit: Int,
+)
+
+data class VariableInfo(
+    val name: String,
+    val type: String,
+    /** 显示值（table 是摘要，例如 "{id=1003, count=2, …}"）。 */
+    val value: String,
+    /** 可展开时有 ref。 */
+    val ref: String? = null,
+    /** table 的元素总数；未知为空。 */
+    val childCount: Int? = null,
+    /** depth > 1 时已经展开的子项。 */
+    val children: List<VariableInfo>? = null,
+)
+
+data class VariablesPage(
+    val variables: List<VariableInfo>,
+    val total: Int?,
+)
+
+enum class EvalMode { VALUE_PATH, LUA }
+
+data class EvaluateRequest(
+    val frameId: String,
+    val expression: String,
+    val mode: EvalMode,
+)
+
+enum class OutputCategory { STDOUT, STDERR, ERROR, DEBUGGER }
+
+data class OutputEntry(
+    val seq: Long,
+    val timestampMillis: Long,
+    val sessionId: String,
+    val category: OutputCategory,
+    val text: String,
+    val vmId: String? = null,
+)
+
+data class OutputPage(val entries: List<OutputEntry>, val nextSeq: Long)
+
+data class ProbeHit(
+    val seq: Long,
+    val timestampMillis: Long,
+    val sessionId: String,
+    val breakpointId: String,
+    val vmId: String,
+    val file: String?,
+    val line: Int,
+    /** 采集路径 → 显示值；取不到的值是错误文本。 */
+    val values: Map<String, String>,
+)
+
+data class ProbeHitPage(val hits: List<ProbeHit>, val nextSeq: Long)
+
+data class SourceLine(val line: Int, val text: String)
+
+/** 引擎事件：MCP 只关心这几种。 */
+sealed class DebugEvent {
+    abstract val sessionId: String
+
+    data class Paused(val pause: PauseInfo) : DebugEvent() {
+        override val sessionId: String get() = pause.sessionId
+    }
+
+    data class Resumed(
+        override val sessionId: String,
+        val vmId: String?,
+        /** 用户在 IDE 里点了继续/单步（不是 Agent 发起的）。 */
+        val byUser: Boolean,
+    ) : DebugEvent()
+
+    data class ProbeHitEvent(val hit: ProbeHit) : DebugEvent() {
+        override val sessionId: String get() = hit.sessionId
+    }
+
+    data class SessionStarted(override val sessionId: String) : DebugEvent()
+
+    data class SessionEnded(override val sessionId: String, val reason: String?) : DebugEvent()
+
+    data class BreakpointsChanged(override val sessionId: String) : DebugEvent()
+}

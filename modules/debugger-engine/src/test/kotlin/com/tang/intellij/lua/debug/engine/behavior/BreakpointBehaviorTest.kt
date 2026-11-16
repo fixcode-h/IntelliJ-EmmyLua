@@ -39,6 +39,18 @@ class BreakpointBehaviorTest : BehaviorTestBase() {
     }
 
     @Test
+    fun `手动指定映射后 断点带着新的 chunkName 重新下发`() {
+        connect()
+        val id = session.addBreakpoint(BreakpointRequest("/project/Content/Script/ui/main.lua", 5)).await()
+        session.syncBreakpoints().await()
+        assertEquals(null, runtime.breakpointTable()[id]!!.source.chunkName)
+
+        session.overrideMapping("@scripts/ui/main.lua", "/project/Content/Script/ui/main.lua").await()
+        session.syncBreakpoints().await()
+        assertEquals("@scripts/ui/main.lua", runtime.breakpointTable()[id]!!.source.chunkName)
+    }
+
+    @Test
     fun `IDE 断点和 Agent 断点在同一张表 清除 Agent 断点不影响 IDE 断点`() {
         connect()
         val ide = session.addBreakpoint(BreakpointRequest("scripts/a.lua", 1)).await()

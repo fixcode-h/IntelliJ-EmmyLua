@@ -104,6 +104,7 @@ project(":") {
         implementation(project(":modules:debugger-emmy-protocol"))
         implementation(project(":modules:debugger-cli-protocol"))
         implementation(project(":modules:debugger-luapanda-protocol"))
+        implementation(project(":modules:debugger-mcp"))
         // 新调试链路（P8 前不注册到 plugin.xml）
         implementation(project(":modules:debugger-protocol"))
         implementation(project(":modules:debugger-engine"))

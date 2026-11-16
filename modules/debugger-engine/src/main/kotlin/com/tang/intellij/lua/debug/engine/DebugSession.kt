@@ -697,6 +697,15 @@ class DebugSession(
         if (shaCache.remove(SourcePaths.normalize(path)) != null) scheduleFlush()
     }
 
+    /**
+     * 用户在「映射」页给 chunk 指定本地文件。断点的 chunkName 是下发时按映射算的，
+     * 改完映射重新算一遍差异，受影响的断点自然会带着新的 chunkName 重发。
+     */
+    fun overrideMapping(chunkName: String, localPath: String): CompletableFuture<Unit> = call {
+        sourceMapper.override(chunkName, localPath)
+        scheduleFlush()
+    }
+
     /** 等当前所有断点改动都被 runtime 确认。 */
     fun syncBreakpoints(): CompletableFuture<Unit> = callAsync { flushBreakpoints() }
 
