@@ -107,6 +107,15 @@ IDE 常常只打开 UE 项目里的 `Content/Script`。UnLua 编辑器里「Gene
 
 IntelliSense 目录重新生成时，emmylua_ls 的文件监听会增量更新索引，不用重启。
 
+### 3.1 UELink 后台增量生成（2026-11-16）
+
+UnLua 的 Generate IntelliSense 要手动点、整遍生成。UEKit 的 UELink 2.5 起可以在 UE 编辑器后台生成同格式的声明（**默认关闭**，协议见 UEKit 的 `docs/protocol.md`「Lua 声明」）：
+
+- 输出 `<UE项目>/Intermediate/UELink/LuaDecl/`（`Native/`、`Blueprint/`、`UE.lua`、拷来的 `UnLua/` 静态声明），清单 `.uelink-luadecl.json` 记每个文件的内容哈希；蓝图编译、资源保存 / 改名 / 删除、Live Coding 后只写内容变了的文件。
+- `UnrealIntelliSenseRoots.find`：这个目录有清单时**只用它**，不再加 UnLua 生成的目录（同名类型重复定义会让跳转出现两个目标）；没有时照旧。
+- 文件增删改由 emmylua_ls 自己监听库目录（库目录在工作区外时它用 notify 监听），不用重启；只有库目录本身变了（第一次生成完、删掉目录退回 UnLua）才要重启，`UnrealDeclWatcher` 每 15 秒看一眼几个路径，变了就重启。
+- 开关在 UE 那边（存 UE 的本机个人配置）。设置页的「让 UE 编辑器后台生成 / 关闭」按名片 `Saved/UELink/instances/*.json` 找开着的编辑器，调 `/rpc` 的 `luadecl.enable`（`UELinkClient`）。
+
 ## 4. 调试链路
 
 新调试链路（附加、Android 真机、MCP）本来就不靠类型推断，只有四处碰了旧 PSI，改法：

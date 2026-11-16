@@ -30,6 +30,8 @@
 
         <applicationService serviceImplementation="com.fixcode.intellij.lua.project.LuaSettings"/>
         <projectService serviceImplementation="com.fixcode.intellij.lua.project.LuaProjectSettings"/>
+        <!-- UE 声明目录（UELink 后台生成 / UnLua）出现或换了时重启 emmylua_ls -->
+        <postStartupActivity implementation="com.fixcode.intellij.lua.project.UnrealDeclWatcherActivity"/>
         <projectConfigurable groupId="language" id="preferences.Lua" displayName="EmmyLua"
                              instance="com.fixcode.intellij.lua.project.LuaSettingsConfigurable"/>
 
