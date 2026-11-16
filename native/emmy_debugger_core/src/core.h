@@ -40,7 +40,8 @@ struct Options {
 	std::atomic<bool> viewHideStdGlobals{true};
 	std::atomic<bool> viewShowTemporaries{false};
 	std::atomic<int> viewMaxSortKeys{10000};
-	std::atomic<int> viewToString{0}; // 0 tables / 1 all / 2 never（__tostring 还没接，先记下）
+	std::atomic<int> viewToString{0};
+	std::atomic<int> exceptions{0}; // 0 none / 1 uncaught / 2 all // 0 tables / 1 all / 2 never（__tostring 还没接，先记下）
 
 	bool CaseSensitive() const;
 	void Reset();

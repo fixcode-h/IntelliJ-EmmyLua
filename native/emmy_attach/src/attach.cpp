@@ -35,6 +35,8 @@ struct CoreApi {
 	decltype(&Emmy_ListenTcp) listenTcp = nullptr;
 	decltype(&Emmy_RegisterLuaVm) registerLuaVm = nullptr;
 	decltype(&Emmy_UnregisterLuaVm) unregisterLuaVm = nullptr;
+	decltype(&Emmy_PrepareHostPcall) prepareHostPcall = nullptr;
+	decltype(&Emmy_FinishHostPcall) finishHostPcall = nullptr;
 };
 
 SRWLOCK g_initLock = SRWLOCK_INIT;
@@ -140,6 +142,8 @@ bool LoadCore(const char* version) {
 	EMMY_LOAD(listenTcp, Emmy_ListenTcp)
 	EMMY_LOAD(registerLuaVm, Emmy_RegisterLuaVm)
 	EMMY_LOAD(unregisterLuaVm, Emmy_UnregisterLuaVm)
+	EMMY_LOAD(prepareHostPcall, Emmy_PrepareHostPcall)
+	EMMY_LOAD(finishHostPcall, Emmy_FinishHostPcall)
 #undef EMMY_LOAD
 	return true;
 }
@@ -184,15 +188,25 @@ Fn Original() {
 	return reinterpret_cast<Fn>(p);
 }
 
+// 出错即停：宿主自己的 lua_pcall 没给错误处理函数时，插一个会通知核心的（核心判断要不要插，Lua 自己的 pcall 不插）
 int PcallHook(lua_State* L, int a, int r, int e) {
 	auto orig = Original<PcallFn>();
 	OnLuaEntry(L);
-	return orig(L, a, r, e);
+	const int h = g_core.prepareHostPcall(L, a, e);
+	if (!h) return orig(L, a, r, e);
+	const int rc = orig(L, a, r, h);
+	g_core.finishHostPcall(L, h);
+	return rc;
 }
 int PcallkHook(lua_State* L, int a, int r, int e, intptr_t ctx, void* k) {
 	auto orig = Original<PcallkFn>();
 	OnLuaEntry(L);
-	return orig(L, a, r, e, ctx, k);
+	// 带续延的调用可能 yield 出去，返回时栈布局不由我们控制，不插
+	const int h = k ? 0 : g_core.prepareHostPcall(L, a, e);
+	if (!h) return orig(L, a, r, e, ctx, k);
+	const int rc = orig(L, a, r, h, ctx, k);
+	g_core.finishHostPcall(L, h);
+	return rc;
 }
 int Resume54Hook(lua_State* L, lua_State* from, int n, int* nres) {
 	auto orig = Original<Resume54Fn>();

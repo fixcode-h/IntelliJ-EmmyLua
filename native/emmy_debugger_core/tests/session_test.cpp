@@ -30,9 +30,15 @@ function M.tick(i)
   local r = M.add(i, 1)
   counter = counter + r
   print("tick", i)
+  if FAIL then FAIL = nil; local x = nil; return x.y end; if FAIL2 then FAIL2 = nil; pcall(function() error("caught boom") end) end
   return r
 end
 function M.counter() return counter end
+CO = coroutine.create(function(a)
+  local inner = a * 2
+  coroutine.yield(inner)
+end)
+coroutine.resume(CO, 21)
 return M
 )";
 
@@ -43,6 +49,7 @@ struct Game {
 	std::atomic<int64_t> ticks{0};
 	std::atomic<bool> hookCleared{false};
 	std::atomic<bool> ready{false};
+	bool lastErrorExpected = false;
 	std::thread thread;
 
 	void Start() {
@@ -63,9 +70,14 @@ struct Game {
 		while (!stop) {
 			lua_getfield(L, mod, "tick");
 			lua_pushinteger(L, static_cast<lua_Integer>(++i));
-			if (lua_pcall(L, 1, 1, 0) != LUA_OK) {
+			// 像注入方式一样：宿主的 lua_pcall 没有错误处理函数时由核心插一个（出错即停）
+			const int h = Emmy_PrepareHostPcall(L, 1, 0);
+			const int rc = lua_pcall(L, 1, 1, h);
+			Emmy_FinishHostPcall(L, h);
+			if (rc != LUA_OK && !lastErrorExpected) {
 				std::printf("lua error: %s\n", lua_tostring(L, -1));
 			}
+			lastErrorExpected = false;
 			lua_pop(L, 1);
 			ticks = i;
 			hookCleared = lua_gethook(L) == nullptr;
@@ -651,6 +663,163 @@ end)())L";
 
 	CHECK(Ok(SetBps(c, json::array())));
 	CHECK(Ok(Continue(c, pz)));
+	c.Request("disconnect");
+}
+
+TEST_CASE("session.expand_tostring_coroutine") {
+	TestClient c;
+	CHECK(c.Connect("127.0.0.1", g_port));
+	CHECK(Ok(Hello(c, json::array({"valuePath", "luaEval", "richVariables"}))));
+	g_rev = 0;
+	CHECK(Ok(SetBps(c, json::array({Bp("ex", 9)}))));
+	CHECK(Ok(c.Request("configurationDone")));
+	json pz = c.WaitEvent("paused");
+	CHECK(pz.is_object());
+	if (!pz.is_object()) return;
+	json stack = c.Request("stackTrace", {{"vmId", pz["body"]["vmId"]}, {"pauseId", pz["body"]["pauseId"]}});
+	uint64_t frameId = stack["body"]["frames"][0]["frameId"];
+	json scopes = c.Request("scopes", {{"frameId", frameId}});
+	uint64_t localsRef = 0, globalsRef = 0;
+	for (auto& s : scopes["body"]["scopes"]) {
+		if (s["name"] == "locals") localsRef = s["ref"];
+		if (s["name"] == "globals") globalsRef = s["ref"];
+	}
+	// expand：一次往返把 t 和 t.list 的首页都带回来
+	json lv = c.Request("variables", {{"ref", localsRef}, {"expand", json::array({json::array({"t"}), json::array({"t", "list"})})}});
+	CHECK(Ok(lv));
+	bool expanded = false;
+	for (auto& v : lv["body"]["variables"]) {
+		if (v["name"] != "t") continue;
+		CHECK(v.contains("children"));
+		if (!v.contains("children")) break;
+		for (auto& cv : v["children"]["variables"]) {
+			if (cv["name"] != "list") continue;
+			CHECK(cv.contains("children"));
+			if (cv.contains("children")) {
+				CHECK_EQ(cv["children"]["total"].get<int>(), 3);
+				CHECK_EQ(cv["children"]["variables"][2]["value"].get<std::string>(), std::string("3"));
+				expanded = true;
+			}
+		}
+	}
+	CHECK(expanded);
+
+	// __tostring：table 默认调用；出错的标 helperError；死循环被预算打断
+	json ts = c.Request("evaluate", {{"frameId", frameId}, {"mode", "lua"},
+		{"expression", "setmetatable({a = 1}, {__tostring = function(t) return 'Pretty#' .. t.a end})"}});
+	CHECK_EQ(ts["body"]["value"].get<std::string>(), std::string("Pretty#1"));
+	json bad = c.Request("evaluate", {{"frameId", frameId}, {"mode", "lua"},
+		{"expression", "setmetatable({}, {__tostring = function() error('nope') end})"}});
+	CHECK_EQ(bad["body"]["attrs"][0].get<std::string>(), std::string("helperError"));
+	json loop = c.Request("evaluate", {{"frameId", frameId}, {"mode", "lua"},
+		{"expression", "setmetatable({}, {__tostring = function() while true do end end})"}});
+	CHECK(Ok(loop));
+	CHECK(loop["body"].value("hint", "").find("__tostring") != std::string::npos);
+	CHECK(Ok(c.Request("setOptions", {{"variableView", {{"toString", "never"}}}})));
+	json never = c.Request("evaluate", {{"frameId", frameId}, {"mode", "lua"},
+		{"expression", "setmetatable({a = 1}, {__tostring = function(t) return 'Pretty' end})"}});
+	CHECK(never["body"]["value"].get<std::string>() != "Pretty");
+	CHECK(Ok(c.Request("setOptions", {{"variableView", {{"toString", "tables"}}}})));
+
+	// 挂起的协程：展开得到 status 和「调用栈」分组，帧里能看到局部变量
+	json gv = c.Request("variables", {{"ref", globalsRef}, {"count", 1000}});
+	uint64_t coRef = 0;
+	for (auto& v : gv["body"]["variables"]) {
+		if (v["name"] != "CO") continue;
+		CHECK_EQ(v["kind"].get<std::string>(), std::string("coroutine"));
+		CHECK(v["value"].get<std::string>().rfind("suspended", 0) == 0);
+		coRef = v["ref"];
+	}
+	CHECK(coRef != 0);
+	json cov = c.Request("variables", {{"ref", coRef}});
+	CHECK_EQ(cov["body"]["variables"][0]["value"].get<std::string>(), std::string("\"suspended\""));
+	uint64_t stackRef = 0;
+	for (auto& g : cov["body"]["groups"]) if (g["name"] == "调用栈") stackRef = g["ref"];
+	CHECK(stackRef != 0);
+	json frames = c.Request("variables", {{"ref", stackRef}});
+	uint64_t frameLocals = 0;
+	for (auto& f : frames["body"]["variables"]) {
+		CHECK_EQ(f["kind"].get<std::string>(), std::string("frame"));
+		if (!frameLocals && f["ref"].get<uint64_t>()) frameLocals = f["ref"];
+	}
+	CHECK(frameLocals != 0);
+	json fl = c.Request("variables", {{"ref", frameLocals}});
+	bool hasInner = false;
+	for (auto& v : fl["body"]["variables"]) {
+		if (v["name"] == "inner") {
+			hasInner = true;
+			CHECK_EQ(v["value"].get<std::string>(), std::string("42"));
+			CHECK(!v.contains("evaluateName"));
+		}
+	}
+	CHECK(hasInner);
+	// threads + stackTrace{threadId}：直接取挂起协程的栈
+	json th = c.Request("threads", {{"vmId", pz["body"]["vmId"]}});
+	std::string coId;
+	for (auto& t : th["body"]["threads"]) if (t["status"] == "suspended") coId = t["threadId"];
+	CHECK(!coId.empty());
+	json cst = c.Request("stackTrace", {{"vmId", pz["body"]["vmId"]}, {"pauseId", pz["body"]["pauseId"]}, {"threadId", coId}});
+	CHECK(Ok(cst));
+	bool yieldLine = false;
+	for (auto& f : cst["body"]["frames"]) if (f["line"] == 18) yieldLine = true; // coroutine.yield 那一行
+	CHECK(yieldLine);
+	CHECK_EQ(c.Request("stackTrace", {{"vmId", pz["body"]["vmId"]}, {"threadId", "t1234"}})["error"]["code"].get<std::string>(), std::string("INVALID_ARGS"));
+
+	CHECK(Ok(SetBps(c, json::array())));
+	CHECK(Ok(Continue(c, pz)));
+	c.Request("disconnect");
+}
+
+TEST_CASE("session.exceptions") {
+	TestClient c;
+	CHECK(c.Connect("127.0.0.1", g_port));
+	json hello = Hello(c, json::array({"valuePath", "luaEval", "exceptions"}));
+	bool cap = false;
+	for (auto& x : hello["body"]["caps"]) if (x == "exceptions") cap = true;
+	CHECK(cap);
+	g_rev = 0;
+	CHECK_EQ(c.Request("setOptions", {{"exceptions", "bogus"}})["error"]["code"].get<std::string>(), std::string("INVALID_ARGS"));
+	CHECK(Ok(c.Request("setOptions", {{"exceptions", "uncaught"}})));
+	CHECK(Ok(SetBps(c, json::array({Bp("arm", 9)}))));
+	CHECK(Ok(c.Request("configurationDone")));
+	json pz = c.WaitEvent("paused");
+	CHECK(pz.is_object());
+	if (!pz.is_object()) return;
+	json stack = c.Request("stackTrace", {{"vmId", pz["body"]["vmId"]}, {"pauseId", pz["body"]["pauseId"]}});
+	uint64_t frameId = stack["body"]["frames"][0]["frameId"];
+	// 被 pcall 接住的错误在 uncaught 模式下不停；没接住的停在出错那一行
+	CHECK(Ok(c.Request("evaluate", {{"frameId", frameId}, {"mode", "lua"}, {"expression", "rawset(_G, 'FAIL2', true)"}})));
+	CHECK(Ok(c.Request("evaluate", {{"frameId", frameId}, {"mode", "lua"}, {"expression", "rawset(_G, 'FAIL', true)"}})));
+	CHECK(Ok(SetBps(c, json::array())));
+	g_game->lastErrorExpected = true;
+	CHECK(Ok(Continue(c, pz)));
+	json ex = c.WaitEvent("paused");
+	CHECK(ex.is_object());
+	if (!ex.is_object()) return;
+	CHECK_EQ(ex["body"]["reason"].get<std::string>(), std::string("exception"));
+	CHECK_EQ(ex["body"]["top"]["line"].get<int>(), 12);
+	CHECK(ex["body"]["exception"]["uncaught"].get<bool>());
+	CHECK(ex["body"]["exception"]["message"].get<std::string>().find("index") != std::string::npos);
+	CHECK(ex["body"]["exception"]["traceback"].get<std::string>().find("main.lua:12") != std::string::npos);
+	// 栈顶是出错的 Lua 函数，错误处理函数不显示；局部变量还在
+	json st2 = c.Request("stackTrace", {{"vmId", ex["body"]["vmId"]}, {"pauseId", ex["body"]["pauseId"]}});
+	CHECK_EQ(st2["body"]["frames"][0]["line"].get<int>(), 12);
+	json e = c.Request("evaluate", {{"frameId", st2["body"]["frames"][0]["frameId"]}, {"expression", "r"}});
+	CHECK(Ok(e));
+
+	// all：pcall 接住的也停
+	CHECK(Ok(c.Request("setOptions", {{"exceptions", "all"}})));
+	CHECK(Ok(c.Request("evaluate", {{"frameId", st2["body"]["frames"][0]["frameId"]}, {"mode", "lua"}, {"expression", "rawset(_G, 'FAIL2', true)"}})));
+	CHECK(Ok(Continue(c, ex)));
+	json caught = c.WaitEvent("paused");
+	CHECK(caught.is_object());
+	if (!caught.is_object()) return;
+	CHECK_EQ(caught["body"]["reason"].get<std::string>(), std::string("exception"));
+	CHECK(!caught["body"]["exception"]["uncaught"].get<bool>());
+	CHECK(caught["body"]["exception"]["message"].get<std::string>().find("caught boom") != std::string::npos);
+	CHECK_EQ(caught["body"]["top"]["line"].get<int>(), 12);
+	CHECK(Ok(c.Request("setOptions", {{"exceptions", "none"}})));
+	CHECK(Ok(Continue(c, caught)));
 	c.Request("disconnect");
 }
 

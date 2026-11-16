@@ -176,7 +176,7 @@ public class LuaLookupElement extends LookupElement implements Comparable<Lookup
         return getItemText().hashCode();
     }
 
-    //bug fix: https://github.com/EmmyLua/IntelliJ-EmmyLua/issues/373
+    //bug fix: 原 EmmyLua 插件的问题 #373
     @Override
     public boolean isValid() {
         return true;

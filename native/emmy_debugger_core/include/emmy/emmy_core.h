@@ -75,6 +75,20 @@ EMMY_API void Emmy_ResetVmContext(lua_State* L, const char* reason);
 EMMY_API void Emmy_RegisterLuaSource(lua_State* L, const char* chunkName, const char* sha256);
 /* 在 Lua 代码里调用等同于 emmy.breakHere()：已连接时立即暂停（reason = hostBreak）。 */
 EMMY_API void Emmy_BreakHere(lua_State* L);
+/* ---------- 出错即停（能力 exceptions） ----------
+ * IDE 设了 setOptions.exceptions = uncaught / all 时，错误在还没展开栈的时候暂停（reason = exception）。
+ * 「没被接住」只有宿主知道，所以要宿主在自己的错误处理函数（lua_pcall 的 msgh）里通知核心：
+ *  - 没有自己的 msgh：直接把 Emmy_LuaErrorHandler 当 msgh 用（lua_pushcfunction 后传给 lua_pcall），它原样返回错误对象；
+ *  - 已有 msgh（例如 UnLua 的报错函数）：在里面先调 Emmy_NotifyLuaError(L, 错误对象的位置)；
+ *  - 挂 lua_pcall 的注入方式（Windows 附加、Android agent）：调用原函数前 Emmy_PrepareHostPcall，返回非 0 时把它当 errfunc
+ *    传给原函数，返回后 Emmy_FinishHostPcall 把插进去的处理函数移走。带续延（k）的 lua_pcallk 不要用，Lua 自己的
+ *    pcall 也不要（核心会认出来并返回 0）。
+ * exceptions = all 时核心另外把全局 pcall / xpcall 换成会通知的版本，被接住的错误也会停。 */
+EMMY_API int Emmy_LuaErrorHandler(lua_State* L);
+EMMY_API void Emmy_NotifyLuaError(lua_State* L, int msgIdx);
+/* nargs、errfunc 同 lua_pcall 的参数。返回插入的处理函数的绝对位置；不需要插时返回 0（原样调用即可）。 */
+EMMY_API int Emmy_PrepareHostPcall(lua_State* L, int nargs, int errfunc);
+EMMY_API void Emmy_FinishHostPcall(lua_State* L, int handlerIdx);
 /* 宿主日志转发到 IDE（output.category = host）。level: 0 debug 1 info 2 warn 3 error。 */
 EMMY_API void Emmy_Log(int level, const char* text);
 

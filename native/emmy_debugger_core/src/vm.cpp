@@ -48,6 +48,7 @@ void Vm::Install() {
 
 void Vm::Uninstall() {
 	if (outputCaptured_) InstallOutputCapture(mainL_, false);
+	if (errorsWrapped_) InstallErrorWrappers(mainL_, false);
 	inspector_.ResetConditionCache(mainL_);
 	ClearStep(mainL_);
 	mux_.Uninstall();
@@ -462,6 +463,8 @@ void Vm::ProcessPending(lua_State* L) {
 		RefreshIndex();
 		bool wantCapture = active_.load() && core.options().captureOutput.load();
 		if (wantCapture != outputCaptured_) InstallOutputCapture(L, wantCapture);
+		bool wantWrap = active_.load() && core.options().exceptions.load() == 2;
+		if (wantWrap != errorsWrapped_) InstallErrorWrappers(L, wantWrap);
 	}
 	if (!active_.load()) {
 		// 没连接：丢弃命令（会话已经没了），清掉暂停请求
@@ -534,7 +537,8 @@ void Vm::Resume(ResumeKind kind, std::function<void()> afterResumed) {
 	if (afterResumed) afterResumed_.push_back(std::move(afterResumed));
 }
 
-void Vm::EnterPause(lua_State* L, const char* reason, std::vector<std::string> bpIds, const char* description) {
+void Vm::EnterPause(lua_State* L, const char* reason, std::vector<std::string> bpIds, const char* description,
+	json exception, int skipLevels) {
 	Core& core = Core::Get();
 	if (inPauseLoop_ || !core.connected()) return;
 	inPauseLoop_ = true;
@@ -545,7 +549,7 @@ void Vm::EnterPause(lua_State* L, const char* reason, std::vector<std::string> b
 	ClearStep(L);
 	uint64_t pauseId = ++pauseCounter_;
 	currentPauseId_.store(pauseId, std::memory_order_release);
-	inspector_.BeginPause(L);
+	inspector_.BeginPause(L, skipLevels);
 
 	json body = {{"vmId", id_}, {"pauseId", pauseId}, {"threadId", ThreadIdOf(L)}, {"reason", reason}, {"top", inspector_.TopFrame()}};
 	if (!bpIds.empty()) {
@@ -554,6 +558,7 @@ void Vm::EnterPause(lua_State* L, const char* reason, std::vector<std::string> b
 	} else if (description) {
 		body["description"] = description;
 	}
+	if (!exception.is_null()) body["exception"] = std::move(exception);
 	core.Emit("paused", std::move(body));
 
 	resumeKind_ = ResumeKind::None;
@@ -610,6 +615,170 @@ void Vm::BreakHere(lua_State* L) {
 	if (pending_.load() != 0) ProcessPending(L);
 	if (!active_.load()) return;
 	EnterPause(L, "hostBreak", {}, "宿主调用了 breakHere");
+}
+
+// ---------------------------------------------------------------- 出错即停（exceptions）
+
+namespace {
+
+// 包装后的 pcall / xpcall 用的错误处理函数：错误被接住，所以 uncaught = false
+int CaughtErrorNotify(lua_State* L) {
+	auto vm = Core::Get().FindVmByState(L);
+	if (vm) vm->OnLuaError(L, 1, false);
+	lua_settop(L, 1);
+	return 1;
+}
+
+// 包装用 xpcall 写，保留 5.2+ 的 yield 能力；处理函数先通知（栈还在），再交给用户自己的处理函数
+#if EMMY_LUA_VERSION_NUM >= 502
+const char kWrapChunk[] = R"(local xpcall, notify = ...
+local function pcall2(f, ...) return xpcall(f, notify, ...) end
+local function xpcall2(f, h, ...)
+  return xpcall(f, function(e) notify(e) return h(e) end, ...)
+end
+return pcall2, xpcall2
+)";
+#else
+const char kWrapChunk[] = R"(local xpcall, notify = ...
+local select, unpack = select, unpack
+local function pcall2(f, ...)
+  local n, a = select('#', ...), {...}
+  return xpcall(function() return f(unpack(a, 1, n)) end, notify)
+end
+local function xpcall2(f, h)
+  return xpcall(f, function(e) notify(e) return h(e) end)
+end
+return pcall2, xpcall2
+)";
+#endif
+
+const char kWrapChunkName[] = "=(emmy)";
+
+} // namespace
+
+void Vm::InstallErrorWrappers(lua_State* L, bool enable) {
+	const int top = lua_gettop(L);
+	lua::PushGlobalTable(L);
+	const int g = lua_gettop(L);
+	lua_getfield(L, LUA_REGISTRYINDEX, "emmy.pcall.original");
+	const bool wrapped = lua_type(L, -1) == LUA_TFUNCTION;
+	lua_pop(L, 1);
+	if (enable && !wrapped) {
+		lua_getfield(L, g, "pcall");
+		lua_getfield(L, g, "xpcall");
+		if (lua_type(L, -1) != LUA_TFUNCTION || lua_type(L, -2) != LUA_TFUNCTION) {
+			lua_settop(L, top);
+			return;
+		}
+		if (lua::LoadBuffer(L, kWrapChunk, sizeof(kWrapChunk) - 1, kWrapChunkName) != LUA_OK) {
+			lua_settop(L, top);
+			return;
+		}
+		lua_pushvalue(L, -2); // 原 xpcall
+		lua_pushcfunction(L, &CaughtErrorNotify);
+		if (lua_pcall(L, 2, 2, 0) != LUA_OK) {
+			lua_settop(L, top);
+			return;
+		}
+		// 栈：g, pcall, xpcall, pcall2, xpcall2
+		lua_setfield(L, g, "xpcall");
+		lua_setfield(L, g, "pcall");
+		lua_setfield(L, LUA_REGISTRYINDEX, "emmy.xpcall.original");
+		lua_setfield(L, LUA_REGISTRYINDEX, "emmy.pcall.original");
+	} else if (!enable && wrapped) {
+		lua_getfield(L, LUA_REGISTRYINDEX, "emmy.pcall.original");
+		lua_setfield(L, g, "pcall");
+		lua_getfield(L, LUA_REGISTRYINDEX, "emmy.xpcall.original");
+		lua_setfield(L, g, "xpcall");
+		lua_pushnil(L);
+		lua_setfield(L, LUA_REGISTRYINDEX, "emmy.pcall.original");
+		lua_pushnil(L);
+		lua_setfield(L, LUA_REGISTRYINDEX, "emmy.xpcall.original");
+	}
+	lua_settop(L, top);
+	errorsWrapped_ = enable;
+}
+
+void Vm::SyncErrorWrappers(lua_State* L) {
+	const bool want = active_.load() && Core::Get().options().exceptions.load() == 2;
+	if (want != errorsWrapped_) InstallErrorWrappers(L, want);
+}
+
+bool Vm::IsInsideLuaPcall(lua_State* L) {
+	lua_Debug ar;
+	if (!lua_getstack(L, 0, &ar)) return false;
+	lua_getinfo(L, "f", &ar);
+	bool inside = false;
+	for (const char* key : {"emmy.pcall.original", "emmy.xpcall.original"}) {
+		lua_getfield(L, LUA_REGISTRYINDEX, key);
+		if (lua_type(L, -1) != LUA_TFUNCTION) {
+			lua_pop(L, 1);
+			continue;
+		}
+		inside = inside || lua_rawequal(L, -1, -2);
+		lua_pop(L, 1);
+	}
+	if (!inside) {
+		// 没包装时比较全局的 pcall / xpcall
+		lua::PushGlobalTable(L);
+		for (const char* name : {"pcall", "xpcall"}) {
+			lua_getfield(L, -1, name);
+			inside = inside || lua_rawequal(L, -1, -3);
+			lua_pop(L, 1);
+		}
+		lua_pop(L, 1);
+	}
+	lua_pop(L, 1);
+	return inside;
+}
+
+void Vm::OnLuaError(lua_State* L, int msgIdx, bool uncaught) {
+	Core& core = Core::Get();
+	const int mode = core.options().exceptions.load();
+	if (mode == 0 || (mode == 1 && !uncaught)) return;
+	if (pending_.load() != 0) ProcessPending(L);
+	if (!active_.load() || inPauseLoop_ || inspector_.evaluating()) return;
+	msgIdx = lua::AbsIndex(L, msgIdx);
+	std::string message;
+	const int mt = lua_type(L, msgIdx);
+	if (mt == LUA_TSTRING || mt == LUA_TNUMBER) {
+		lua_pushvalue(L, msgIdx);
+		size_t len;
+		const char* s = lua_tolstring(L, -1, &len);
+		message.assign(s, std::min<size_t>(len, 4096));
+		lua_pop(L, 1);
+	} else {
+		message = "(错误对象) " + inspector_.Summarize(L, msgIdx, 256);
+	}
+	// 栈顶的 C 函数（错误处理函数、error、assert）和调试器自己的包装不显示，从第一个 Lua 帧开始
+	int skip = 0;
+	lua_Debug ar;
+	for (int level = 0; lua_getstack(L, level, &ar); ++level) {
+		lua_getinfo(L, "S", &ar);
+		const bool own = ar.source && std::strcmp(ar.source, kWrapChunkName) == 0;
+		const bool c = ar.what && std::strcmp(ar.what, "C") == 0;
+		if (!own && !c) {
+			skip = level;
+			break;
+		}
+	}
+	std::string traceback;
+	int lines = 0;
+	for (int level = skip; lua_getstack(L, level, &ar) && lines < 32; ++level, ++lines) {
+		lua_getinfo(L, "nSl", &ar);
+		if (ar.source && std::strcmp(ar.source, kWrapChunkName) == 0) continue;
+		traceback += "\t";
+		traceback += ar.short_src;
+		if (ar.currentline > 0) traceback += ":" + std::to_string(ar.currentline);
+		traceback += ": in ";
+		if (ar.name) traceback += std::string("function '") + ar.name + "'";
+		else if (ar.what && std::strcmp(ar.what, "main") == 0) traceback += "main chunk";
+		else traceback += "?";
+		traceback += "\n";
+	}
+	json exc = {{"message", message}, {"traceback", traceback}, {"uncaught", uncaught}};
+	const std::string desc = (uncaught ? "未处理的错误：" : "出错（已被 pcall 接住）：") + message.substr(0, 200);
+	EnterPause(L, "exception", {}, desc.c_str(), std::move(exc), skip);
 }
 
 // ---------------------------------------------------------------- 输出捕获
