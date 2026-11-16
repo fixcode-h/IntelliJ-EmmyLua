@@ -153,7 +153,12 @@ int main(int argc, char** argv) {
 		});
 	}
 	go.store(true, std::memory_order_release);
-	std::this_thread::sleep_for(std::chrono::milliseconds(50));
+	// 等服务端真正收到消息再关客户端；固定 sleep 在慢的 Windows Debug 机器上会偶发收不到。
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+	while (server.received.load() == 0 && std::chrono::steady_clock::now() < deadline) {
+		std::this_thread::sleep_for(std::chrono::milliseconds(10));
+	}
+	std::this_thread::sleep_for(std::chrono::milliseconds(20));
 	Require(client.Stop() == 0, "client stop succeeds during concurrent sends");
 	stopSenders.store(true, std::memory_order_release);
 	for (std::thread& sender : senders) sender.join();
