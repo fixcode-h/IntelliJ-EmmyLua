@@ -46,7 +46,7 @@ class EmmyNativeAttachIntegrationTest : LuaTestBase() {
         assertTrue("fixture must ship beside the shared Lua DLL",
             File(fixtureFile.parentFile, "lua54.dll").isFile)
 
-        val template = File("EmmyLuaDebugger/tests/fixtures/attach_runtime.lua").absoluteFile
+        val template = File("native/tests/fixtures/attach_runtime.lua").absoluteFile
         assertTrue("fixture source missing: $template", template.isFile)
         val source = File(project.basePath!!, "emmy_attach_runtime.lua")
         Files.createDirectories(source.parentFile.toPath())
@@ -330,7 +330,7 @@ class EmmyNativeAttachIntegrationTest : LuaTestBase() {
         assertTrue("attach fixture missing: $fixtureFile", fixtureFile.isFile)
         assertTrue("fixture must ship beside the shared Lua DLL",
             File(fixtureFile.parentFile, "lua54.dll").isFile)
-        val template = File("EmmyLuaDebugger/tests/fixtures/attach_runtime.lua").absoluteFile
+        val template = File("native/tests/fixtures/attach_runtime.lua").absoluteFile
         assertTrue("fixture source missing: $template", template.isFile)
         val source = File(project.basePath!!, "emmy_attach_runtime.lua")
         Files.createDirectories(source.parentFile.toPath())

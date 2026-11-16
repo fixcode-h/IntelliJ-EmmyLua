@@ -2,7 +2,7 @@ name: Verify Plugin
 
 on:
   push:
-    branches: [dev, master]
+    branches: [dev, main]
   pull_request:
 
 concurrency:
@@ -14,8 +14,6 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -26,7 +24,7 @@ jobs:
           arch: x64
       - name: Build real Lua fixture
         run: |
-          cmake -S EmmyLuaDebugger -B build/native-ide -G Ninja -DCMAKE_BUILD_TYPE=Debug -DEMMY_USE_LUA_SOURCE=ON -DEMMY_VM_REGISTRY_TEST=ON -DEMMY_LUA_VERSION=54
+          cmake -S native -B build/native-ide -G Ninja -DCMAKE_BUILD_TYPE=Debug -DEMMY_USE_LUA_SOURCE=ON -DLUA_BUILD_AS_DLL=ON -DEMMY_VM_REGISTRY_TEST=ON -DEMMY_LUA_VERSION=54
           cmake --build build/native-ide --target emmy_native_ide_fixture emmy_attach_lua_fixture --parallel 4
       - name: Verify Native to IDEA to CLI
         shell: pwsh
@@ -51,8 +49,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -71,8 +67,6 @@ jobs:
             modules/*/build/test-results/test/*.xml
             tools/emmy-debug/build/test-results/test/*.xml
             build/reports/pluginVerifier/**
-      - name: Verify clean checkout and submodules
+      - name: Verify clean checkout
         shell: bash
-        run: |
-          git diff --exit-code --submodule=diff
-          git submodule foreach --recursive 'git diff --exit-code'
+        run: git diff --exit-code

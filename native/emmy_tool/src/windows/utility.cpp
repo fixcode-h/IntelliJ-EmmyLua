@@ -1,0 +1,440 @@
+﻿#include "utility.h"
+#include <ImageHlp.h>
+#include <TlHelp32.h>
+#include <Psapi.h>
+#include <ShlObj.h>
+#include <string>
+#include <vector>
+#include <thread>
+
+bool GetExeInfo(LPCSTR fileName, ExeInfo& info) {
+	LOADED_IMAGE loadedImage;
+	if (!MapAndLoad(const_cast<PSTR>(fileName), nullptr, &loadedImage, FALSE, TRUE)) {
+		return false;
+	}
+
+	info.managed = false;
+	if (loadedImage.FileHeader->Signature == IMAGE_NT_SIGNATURE) {
+		const DWORD netHeaderAddress =
+			loadedImage.FileHeader->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR].VirtualAddress;
+
+		if (netHeaderAddress) {
+			info.managed = true;
+		}
+	}
+
+	info.entryPoint = loadedImage.FileHeader->OptionalHeader.AddressOfEntryPoint;
+	info.i386 = loadedImage.FileHeader->FileHeader.Machine == IMAGE_FILE_MACHINE_I386;
+
+	UnMapAndLoad(&loadedImage);
+
+	return true;
+}
+
+int GetProcessByName(const char* name) {
+	DWORD pid = 0;
+	HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+	PROCESSENTRY32 process;
+	ZeroMemory(&process, sizeof(process));
+	process.dwSize = sizeof(process);
+	if (Process32First(snapshot, &process)) {
+		do {
+			if (strcmp(process.szExeFile, name) == 0) {
+				pid = process.th32ProcessID;
+				break;
+			}
+		}
+		while (Process32Next(snapshot, &process));
+	}
+	CloseHandle(snapshot);
+	return pid;
+}
+
+
+HWND GetProcessWindow(DWORD processId) {
+	HWND hWnd = FindWindowEx(nullptr, nullptr, nullptr, nullptr);
+
+	while (hWnd != nullptr) {
+		if (GetParent(hWnd) == nullptr && GetWindowTextLength(hWnd) > 0 && IsWindowVisible(hWnd)) {
+			DWORD windowProcessId;
+			GetWindowThreadProcessId(hWnd, &windowProcessId);
+
+			if (windowProcessId == processId) {
+				// Found a match.
+				break;
+			}
+		}
+		hWnd = GetWindow(hWnd, GW_HWNDNEXT);
+	}
+	return hWnd;
+}
+
+void GetProcesses(std::vector<Process>& processes) {
+	static char fileName[_MAX_PATH];
+	// Get the id of this process so that we can filter it out of the list.
+	DWORD currentProcessId = GetCurrentProcessId();
+
+	HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+
+	if (snapshot != INVALID_HANDLE_VALUE) {
+
+		PROCESSENTRY32 processEntry = {0};
+		processEntry.dwSize = sizeof(processEntry);
+
+		if (Process32First(snapshot, &processEntry)) {
+			do {
+				if (processEntry.th32ProcessID != currentProcessId && processEntry.th32ProcessID != 0) {
+
+					Process process;
+
+					process.id = processEntry.th32ProcessID;
+					process.name = processEntry.szExeFile;
+
+					HANDLE m_process = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, processEntry.th32ProcessID);
+					if (m_process) {
+						int err = GetModuleFileNameEx(m_process, nullptr, fileName, _MAX_PATH);
+						if (err == 0) // ERROR_ACCESS_DENIED = 5
+							process.path = "error";
+						else process.path = fileName;
+
+						if (!process.path.empty()) {
+							char windowsPath[MAX_PATH];
+							if (SHGetFolderPath(nullptr, CSIDL_WINDOWS, nullptr, SHGFP_TYPE_CURRENT, windowsPath) == 0) {
+								if (process.path.find(windowsPath) == std::string::npos) {
+
+									HWND hWnd = GetProcessWindow(processEntry.th32ProcessID);
+
+									if (hWnd != nullptr) {
+										char buffer[1024];
+										GetWindowText(hWnd, buffer, 1024);
+										process.title = buffer;
+									}
+									processes.push_back(process);
+								}
+							}
+						}
+					}
+				}
+			}
+			while (Process32Next(snapshot, &processEntry));
+		}
+		CloseHandle(snapshot);
+	}
+}
+
+
+void SetBreakpoint(HANDLE hProcess, LPVOID entryPoint, bool set, BYTE *data) {
+	DWORD protection;
+
+	// Give ourself write access to the region.
+	if (VirtualProtectEx(hProcess, entryPoint, 1, PAGE_EXECUTE_READWRITE, &protection)) {
+		BYTE buffer[1];
+
+		if (set) {
+			SIZE_T numBytesRead;
+			ReadProcessMemory(hProcess, entryPoint, data, 1, &numBytesRead);
+
+			// Write the int 3 instruction.
+			buffer[0] = 0xCC;
+		} else {
+			// Restore the original byte.
+			buffer[0] = data[0];
+		}
+
+		SIZE_T numBytesWritten;
+		WriteProcessMemory(hProcess, entryPoint, buffer, 1, &numBytesWritten);
+
+		// Restore the original protections.
+		VirtualProtectEx(hProcess, entryPoint, 1, protection, &protection);
+
+		// Flush the cache so we know that our new code gets executed.
+		FlushInstructionCache(hProcess, entryPoint, 1);
+	}
+}
+
+enum MessageType {
+	MessageType_Info = 0,
+	MessageType_Warning = 1,
+	MessageType_Error = 2
+};
+
+void MessageEvent(const std::string &message, MessageType type = MessageType_Info) {
+	if (type == MessageType_Error) {
+		std::cerr << "[F]" << message << std::endl;
+	} else {
+		std::cerr << "[F]" << message << std::endl;
+	}
+}
+
+void *RemoteDup(HANDLE process, const void *source, size_t length) {
+	void *remote = VirtualAllocEx(process, nullptr, length, MEM_COMMIT, PAGE_READWRITE);
+	SIZE_T numBytesWritten;
+	WriteProcessMemory(process, remote, source, length, &numBytesWritten);
+	return remote;
+}
+
+
+
+void OutputError(DWORD error) {
+	char buffer[1024];
+	if (FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM, nullptr, error, 0, buffer, 1024, nullptr)) {
+		std::string message = "Error: ";
+		message += buffer;
+		MessageEvent(message, MessageType_Error);
+	}
+}
+
+bool GetStartupDirectory(char *path, int maxPathLength) {
+	if (!GetModuleFileName(nullptr, path, maxPathLength)) {
+		return false;
+	}
+
+	char *lastSlash = strrchr(path, '\\');
+
+	if (lastSlash == nullptr) {
+		return false;
+	}
+
+	// Terminate the path after the last slash.
+
+	lastSlash[1] = 0;
+	return true;
+}
+
+static const DWORD kRemoteThreadTimeoutMs = 30000;
+
+bool ExecuteRemoteKernelFuntion(HANDLE process, const char *functionName, LPVOID param, DWORD &exitCode,
+	bool* timedOut = nullptr) {
+	if (timedOut != nullptr) *timedOut = false;
+	HMODULE kernelModule = GetModuleHandle("Kernel32");
+	FARPROC function = GetProcAddress(kernelModule, functionName);
+
+	if (function == nullptr) {
+		return false;
+	}
+
+	DWORD threadId;
+	HANDLE thread = CreateRemoteThread(process,
+	                                   nullptr,
+	                                   0,
+	                                   (LPTHREAD_START_ROUTINE) function,
+	                                   param,
+	                                   0,
+	                                   &threadId);
+
+	if (thread != nullptr) {
+		const DWORD waitResult = WaitForSingleObject(thread, kRemoteThreadTimeoutMs);
+		if (waitResult != WAIT_OBJECT_0) {
+			if (timedOut != nullptr) *timedOut = true;
+			CloseHandle(thread);
+			return false;
+		}
+		if (!GetExitCodeThread(thread, &exitCode)) {
+			CloseHandle(thread);
+			return false;
+		}
+
+		CloseHandle(thread);
+		return true;
+	}
+	return false;
+}
+
+bool IsBeingInjected(DWORD processId, LPCSTR moduleFileName) {
+	HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, processId);
+	if (snapshot == INVALID_HANDLE_VALUE) return false;
+	MODULEENTRY32 entry = {};
+	entry.dwSize = sizeof(entry);
+	bool result = false;
+	if (Module32First(snapshot, &entry)) {
+		do {
+			if (_stricmp(entry.szModule, moduleFileName) == 0 || _stricmp(entry.szExePath, moduleFileName) == 0) {
+				result = true;
+				break;
+			}
+		} while (Module32Next(snapshot, &entry));
+	}
+	CloseHandle(snapshot);
+	return result;
+}
+
+bool InjectDll(DWORD processId, const char *dllDir, const char *dllFileName, bool capture,
+	const std::string& authToken, bool* alreadyAttached) {
+	const bool wasAttached = IsBeingInjected(processId, dllFileName);
+	if (alreadyAttached != nullptr) *alreadyAttached = wasAttached;
+	if (authToken.size() >= sizeof(RemoteThreadParam().authToken)) {
+		MessageEvent("Authentication token is too long", MessageType_Error);
+		return false;
+	}
+
+	MessageEvent(wasAttached ? "Reconfigure existing Emmy Agent ..." : "Start inject dll ...");
+	bool success = true;
+
+	const HANDLE process = OpenProcess(PROCESS_ALL_ACCESS, FALSE, processId);
+
+	if (process == nullptr) {
+		MessageEvent("Failed to open process", MessageType_Error);
+		OutputError(GetLastError());
+		return false;
+	}
+	DWORD exitCode = 0;
+
+	if (!wasAttached) {
+		// Set dll directory
+		void *dllDirRemote = RemoteDup(process, dllDir, strlen(dllDir) + 1);
+		bool dllDirTimedOut = false;
+		if (dllDirRemote == nullptr ||
+			!ExecuteRemoteKernelFuntion(process, "SetDllDirectoryA", dllDirRemote, exitCode, &dllDirTimedOut) || exitCode == 0) {
+			success = false;
+		}
+		if (dllDirRemote != nullptr && !dllDirTimedOut) VirtualFreeEx(process, dllDirRemote, 0, MEM_RELEASE);
+		if (!success) {
+			CloseHandle(process);
+			return false;
+		}
+
+		// Load the DLL.
+		void *remoteFileName = RemoteDup(process, dllFileName, strlen(dllFileName) + 1);
+		bool loadTimedOut = false;
+		if (remoteFileName == nullptr ||
+			!ExecuteRemoteKernelFuntion(process, "LoadLibraryA", remoteFileName, exitCode, &loadTimedOut)) {
+			success = false;
+		}
+		if (remoteFileName != nullptr && !loadTimedOut) VirtualFreeEx(process, remoteFileName, 0, MEM_RELEASE);
+		if (!success || !IsBeingInjected(processId, dllFileName)) {
+			MessageEvent("Failed to load library", MessageType_Error);
+			CloseHandle(process);
+			return false;
+		}
+	}
+
+
+	void *lpParam = nullptr;
+	if (capture || !authToken.empty()) {
+		lpParam = (void *) VirtualAllocEx(process, 0, sizeof(RemoteThreadParam), MEM_COMMIT,
+		                                  PAGE_READWRITE);
+		if (lpParam == nullptr) {
+			CloseHandle(process);
+			return false;
+		}
+		RemoteThreadParam param{};
+		param.bRedirect = capture ? TRUE : FALSE;
+		if (!authToken.empty()) {
+			const size_t copyLength = authToken.size() < sizeof(param.authToken) - 1
+				? authToken.size() : sizeof(param.authToken) - 1;
+			memcpy(param.authToken, authToken.data(), copyLength);
+			param.authToken[copyLength] = '\0';
+		}
+
+		if (!::WriteProcessMemory(process, lpParam, &param, sizeof(RemoteThreadParam), NULL)) {
+			VirtualFreeEx(process, lpParam, 0, MEM_RELEASE);
+			CloseHandle(process);
+			return false;
+		}
+	}
+
+	// Read shared data & call 'StartupHookMode()'
+	TSharedData data;
+	bool startupTimedOut = false;
+	if (success && ReadSharedData(processId, data)) {
+		DWORD threadId;
+		HANDLE thread = CreateRemoteThread(process,
+		                                   nullptr,
+		                                   0,
+									   reinterpret_cast<LPTHREAD_START_ROUTINE>(data.lpInit),
+		                                   (void *) lpParam,
+		                                   0,
+		                                   &threadId);
+
+		if (thread != nullptr) {
+			const DWORD waitResult = WaitForSingleObject(thread, kRemoteThreadTimeoutMs);
+			if (waitResult != WAIT_OBJECT_0) {
+				startupTimedOut = true;
+				CloseHandle(thread);
+				success = false;
+			} else {
+				const bool gotExitCode = GetExitCodeThread(thread, &exitCode) != FALSE;
+				CloseHandle(thread);
+				success = gotExitCode && exitCode == 0;
+			}
+			if (lpParam != nullptr && !startupTimedOut) {
+				VirtualFreeEx(process, lpParam, 0, MEM_RELEASE);
+				lpParam = nullptr;
+			}
+		} else {
+			success = false;
+		}
+	} else {
+		success = false;
+	}
+	if (lpParam != nullptr && !startupTimedOut) {
+		VirtualFreeEx(process, lpParam, 0, MEM_RELEASE);
+	}
+
+	if (!wasAttached) {
+		// Reset dll directory
+		ExecuteRemoteKernelFuntion(process, "SetDllDirectoryA", nullptr, exitCode);
+	}
+
+	if (process != nullptr) {
+		CloseHandle(process);
+	}
+
+	if (success) {
+		MessageEvent("Successfully inject dll!");
+	}
+	return success;
+}
+
+// 和InjectDll 实现不同的是，不会closeHandle
+bool InjectDllForProcess(HANDLE hProcess, const char *dllDir, const char *dllFileName) {
+	// Reuse the bounded injection path, retaining the caller's process handle.
+	const DWORD processId = GetProcessId(hProcess);
+	return processId != 0 && InjectDll(processId, dllDir, dllFileName, false, std::string(), nullptr);
+}
+
+
+void ReceiveLog(DWORD processId) {
+	int debugPort = processId;
+	// 1024 - 65535
+	while (debugPort > 0xffff) debugPort -= 0xffff;
+	while (debugPort < 0x400) debugPort += 0x400;
+	debugPort++;
+
+	// 开始连接 debug session
+	// 开一个网络连接
+	WORD version MAKEWORD(2, 2);
+	WSADATA data;
+	WSAStartup(version, &data);
+
+	sockaddr_in serverAddress;
+	SOCKET hSocket = NULL;
+
+	hSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	if (hSocket == INVALID_SOCKET) {
+		return;
+	}
+
+	memset(&serverAddress, 0, sizeof(serverAddress));
+	serverAddress.sin_family = AF_INET;
+	serverAddress.sin_addr.s_addr = inet_addr("127.0.0.1");
+	serverAddress.sin_port = htons((short) debugPort);
+
+	if (SOCKET_ERROR == connect(hSocket, (sockaddr *) &serverAddress, sizeof(serverAddress))) {
+		closesocket(hSocket);
+		DWORD error = WSAGetLastError();
+		printf("tcp connect error, err code=%d", error);
+		return;
+	}
+
+	char receiveBuf[10240] = {0};
+
+	while (true) {
+		int receiveSize = ::recv(hSocket, receiveBuf, sizeof(receiveBuf), 0);
+		if (receiveSize <= 0) {
+			break;
+		}
+
+		fwrite(receiveBuf, sizeof(char), receiveSize, stdout);
+	}
+}
