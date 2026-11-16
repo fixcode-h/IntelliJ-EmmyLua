@@ -12,7 +12,7 @@
     - MCP：debug.mcpService 以及 MCP 自己的服务
     - UI：其余
 -->
-<idea-plugin>
+<idea-plugin xmlns:xi="http://www.w3.org/2001/XInclude">
     <extensionPoints>
         <extensionPoint qualifiedName="com.tang.intellij.lua.debug.processFactory"
                         interface="com.tang.intellij.lua.debug.api.LuaDebugProcessFactory" dynamic="true"/>
@@ -32,9 +32,8 @@
     <extensions defaultExtensionNs="com.tang.intellij.lua">
     </extensions>
 
-    <!-- ===== MCP ===== -->
-    <extensions defaultExtensionNs="com.tang.intellij.lua">
-    </extensions>
+    <!-- ===== MCP =====（注册放在 MCP 线程自己的文件里，互不冲突） -->
+    <xi:include href="emmylua-debug-mcp.xml" xpointer="xpointer(/idea-plugin/*)"/>
 
     <!-- ===== UI ===== -->
     <extensions defaultExtensionNs="com.tang.intellij.lua">
