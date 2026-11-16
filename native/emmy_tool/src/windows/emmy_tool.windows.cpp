@@ -48,6 +48,13 @@ int EmmyTool::AttachV3() {
 	bool alreadyAttached = false;
 	DWORD initCode = 0xffffffff;
 	const bool ok = InjectDll(pid, dir.c_str(), "emmy_attach.dll", false, authToken, &alreadyAttached, &initCode);
+	if (!ok && initCode == emmy_attach::kWaitingForLua) {
+		// 还没有 Lua：emmy_attach 已经在后台等，Lua 加载后才开始监听 port，IDE 在这之前连不上是正常的
+		printf("\n{\"ok\":true,\"protocol\":3,\"host\":\"127.0.0.1\",\"port\":%d,\"pid\":%d,\"reinjected\":%s,\"waiting\":true,\"message\":%s}\n",
+			emmy_attach::PortForPid(pid), pid, alreadyAttached ? "true" : "false",
+			JsonString(emmy_attach::ResultMessage(initCode)).c_str());
+		return 0;
+	}
 	if (!ok) {
 		if (initCode != 0xffffffff && initCode != emmy_attach::kOk) return fail(emmy_attach::ResultMessage(initCode));
 		return fail(alreadyAttached ? "重新配置已注入的调试器失败" : "注入 emmy_attach.dll 失败（权限不足、目标进程位数不符或被安全软件拦截）");
