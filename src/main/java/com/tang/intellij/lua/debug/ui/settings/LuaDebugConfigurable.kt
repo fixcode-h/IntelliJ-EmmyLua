@@ -96,6 +96,52 @@ class LuaDebugConfigurable : BoundConfigurable(LuaDebugBundle.message("settings.
                     .comment(LuaDebugBundle.message("settings.device.symbols.comment"))
             }
         }
+        group(LuaDebugBundle.message("settings.view")) {
+            // 编辑期间改的是这份副本，apply 时整体写回，避免每个控件各自改 state。
+            var view = settings.variableView
+            // reset 回调按注册顺序执行，必须先于控件读取 view，所以放在最前面。
+            onReset { view = settings.variableView }
+            row(LuaDebugBundle.message("settings.view.sort")) {
+                comboBox(EnumComboBoxModel(LuaVariableSort::class.java),
+                    SimpleListCellRenderer.create("") { LuaDebugBundle.message("settings.view.sort.${it.name.lowercase()}") })
+                    .bindItem({ view.sort }, { v -> view = view.copy(sort = v ?: LuaVariableSort.SMART) })
+            }
+            row {
+                checkBox(LuaDebugBundle.message("settings.view.groupMethods"))
+                    .bindSelected({ view.groupMethods }, { v -> view = view.copy(groupMethods = v) })
+                checkBox(LuaDebugBundle.message("settings.view.showInherited"))
+                    .bindSelected({ view.showInherited }, { v -> view = view.copy(showInherited = v) })
+                checkBox(LuaDebugBundle.message("settings.view.showMetatable"))
+                    .bindSelected({ view.showMetatable }, { v -> view = view.copy(showMetatable = v) })
+            }
+            row {
+                checkBox(LuaDebugBundle.message("settings.view.hideStdGlobals"))
+                    .bindSelected({ view.hideStdGlobals }, { v -> view = view.copy(hideStdGlobals = v) })
+                checkBox(LuaDebugBundle.message("settings.view.showTemporaries"))
+                    .bindSelected({ view.showTemporaries }, { v -> view = view.copy(showTemporaries = v) })
+                checkBox(LuaDebugBundle.message("settings.view.hexIntegers"))
+                    .bindSelected({ view.hexIntegers }, { v -> view = view.copy(hexIntegers = v) })
+            }
+            row(LuaDebugBundle.message("settings.view.toString")) {
+                comboBox(EnumComboBoxModel(LuaToStringPolicy::class.java),
+                    SimpleListCellRenderer.create("") { LuaDebugBundle.message("settings.view.toString.${it.name.lowercase()}") })
+                    .bindItem({ view.toString }, { v -> view = view.copy(toString = v ?: LuaToStringPolicy.TABLES) })
+                    .comment(LuaDebugBundle.message("settings.view.toString.comment"))
+            }
+            row(LuaDebugBundle.message("settings.view.pageSize")) {
+                intTextField(VariableViewSettings.PAGE_SIZE_RANGE).columns(5)
+                    .bindIntText({ view.pageSize }, { v -> view = view.copy(pageSize = v) })
+                label(LuaDebugBundle.message("settings.view.maxValueLength"))
+                intTextField(VariableViewSettings.MAX_VALUE_LENGTH_RANGE).columns(5)
+                    .bindIntText({ view.maxValueLength }, { v -> view = view.copy(maxValueLength = v) })
+            }
+            row(LuaDebugBundle.message("settings.view.rulesFile")) {
+                textField().align(AlignX.FILL)
+                    .bindText({ view.rulesFile }, { v -> view = view.copy(rulesFile = v) })
+                    .comment(LuaDebugBundle.message("settings.view.rulesFile.comment"))
+            }
+            onApply { settings.variableView = view }
+        }
         group(LuaDebugBundle.message("settings.log")) {
             row(LuaDebugBundle.message("settings.log.level")) {
                 comboBox(EnumComboBoxModel(LuaDebugLogLevel::class.java),

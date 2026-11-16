@@ -101,6 +101,7 @@ project(":") {
         implementation("org.eclipse.mylyn.github:org.eclipse.egit.github.core:2.1.5")
         implementation(project(":modules:debugger-core"))
         implementation(project(":modules:debugger-transport"))
+        implementation(project(":modules:debugger-android"))
         implementation(project(":modules:debugger-emmy-protocol"))
         implementation(project(":modules:debugger-cli-protocol"))
         implementation(project(":modules:debugger-luapanda-protocol"))
