@@ -81,12 +81,12 @@ class LuaMcpServiceImpl : LuaMcpService {
         val roots = LinkedHashSet<Path>()
         if (base != null) {
             // 包含项目目录的根优先（项目在仓库子目录里时，配置要写到仓库根，Agent 一般在那里启动）
-            vcsRoots.filter { base.startsWith(it) }.sortedBy { it.nameCount }.forEach { roots += it }
-            roots += VcsRoot.installRoot(base) { p4ClientRoot(base) }
+            vcsRoots.filter { base.startsWith(it) }.sortedBy { it.nameCount }.forEach { roots.add(it) }
+            roots.add(VcsRoot.installRoot(base) { p4ClientRoot(base) })
         }
         // 项目里面的其他 VCS 根（多仓库项目）
-        vcsRoots.filter { base == null || !base.startsWith(it) }.forEach { roots += it }
-        if (roots.isEmpty() && base != null) roots += base
+        vcsRoots.filter { base == null || !base.startsWith(it) }.forEach { roots.add(it) }
+        if (roots.isEmpty() && base != null) roots.add(base)
         return roots.toList()
     }
 
