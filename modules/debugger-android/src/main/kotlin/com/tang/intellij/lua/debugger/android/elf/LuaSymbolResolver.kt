@@ -15,23 +15,24 @@ object LuaApiSymbols {
         "lua_gettop", "lua_settop", "lua_type", "lua_tolstring",
     )
 
-    /** native/emmy_debugger_core/src/lua_dyn.c 的 kRequired 里属于 Lua 5.4 API 的部分（其余在 5.4 是宏）。 */
+    /** native/emmy_debugger_core/src/lua_dyn.cpp 的 kRequired 里属于 Lua 5.4 API 的部分（其余在 5.4 是宏）。缺一个核心就无法工作。 */
     val required54 = listOf(
-        "lua_newstate", "lua_close", "lua_newthread", "lua_status", "lua_resume", "lua_xmove",
-        "lua_absindex", "lua_gettop", "lua_settop", "lua_pushvalue", "lua_rotate",
-        "lua_checkstack", "lua_type", "lua_typename", "lua_toboolean", "lua_tolstring",
-        "lua_tonumberx", "lua_tointegerx", "lua_isinteger", "lua_topointer",
-        "lua_tothread", "lua_touserdata", "lua_rawlen", "lua_rawequal",
-        "lua_pushnil", "lua_pushnumber", "lua_pushinteger", "lua_pushlstring", "lua_pushstring",
-        "lua_pushvfstring", "lua_pushfstring", "lua_pushcclosure", "lua_pushboolean", "lua_pushthread",
-        "lua_pushlightuserdata", "lua_concat",
+        "lua_newstate", "lua_close", "lua_atpanic", "lua_newthread", "lua_status", "lua_resume", "lua_xmove",
+        "lua_absindex", "lua_gettop", "lua_settop", "lua_pushvalue", "lua_rotate", "lua_checkstack",
+        "lua_type", "lua_typename", "lua_toboolean", "lua_tolstring", "lua_tonumberx", "lua_tointegerx",
+        "lua_touserdata", "lua_tothread", "lua_rawlen", "lua_pushnil", "lua_pushnumber", "lua_pushinteger",
+        "lua_pushlstring", "lua_pushstring", "lua_pushcclosure", "lua_pushboolean", "lua_pushthread",
         "lua_getfield", "lua_getglobal", "lua_gettable", "lua_rawget", "lua_rawgeti", "lua_createtable",
         "lua_getmetatable", "lua_setfield", "lua_rawset", "lua_rawseti", "lua_setmetatable", "lua_next",
-        "lua_settable", "lua_setglobal",
-        "lua_callk", "lua_pcallk", "lua_load", "lua_error",
-        "lua_getstack", "lua_getinfo", "lua_getlocal", "lua_setlocal", "lua_getupvalue", "lua_setupvalue",
-        "lua_sethook", "lua_gethook", "lua_gethookmask", "lua_gethookcount",
-        "lua_newuserdatauv",
+        "lua_settable", "lua_setglobal", "lua_callk", "lua_pcallk", "lua_load", "lua_error", "lua_getstack",
+        "lua_getinfo", "lua_getlocal", "lua_getupvalue", "lua_setupvalue", "lua_sethook",
+    )
+
+    /** lua_dyn.cpp 的 kOptional：缺了核心换成替代实现，只降级对应功能（如 lua_setlocal 缺了就不能改局部变量）。 */
+    val optional54 = listOf(
+        "lua_setlocal", "lua_concat", "lua_pushvfstring", "lua_pushfstring", "lua_topointer",
+        "lua_pushlightuserdata", "lua_rawequal", "lua_gethook", "lua_gethookmask", "lua_gethookcount",
+        "lua_isinteger", "lua_setwarnf",
     )
 
     /** agent 的调试核心目前一份 so 只对应一个 Lua 大版本，Android 构建用 5.4（UnLua 用的就是 5.4）。 */
@@ -40,6 +41,11 @@ object LuaApiSymbols {
     fun requiredFor(version: DetectedLuaVersion): List<String> = when (version) {
         DetectedLuaVersion.LUA_54 -> required54
         else -> critical
+    }
+
+    fun optionalFor(version: DetectedLuaVersion): List<String> = when (version) {
+        DetectedLuaVersion.LUA_54 -> optional54
+        else -> emptyList()
     }
 
     /** agent 用来抓 lua_State 和跟踪 VM 生命周期的 hook 点。 */
@@ -102,6 +108,8 @@ data class LuaSymbolTable(
     val versionSupported: Boolean get() = luaVersion in LuaApiSymbols.supportedVersions
     val usable: Boolean get() = missingCritical.isEmpty() && missingRequired.isEmpty() && conflicts.isEmpty() &&
         hasCaptureHook && versionSupported
+    /** 被裁掉的可选函数：不影响附加，对应功能降级。 */
+    val missingOptional: List<String> get() = LuaApiSymbols.optionalFor(luaVersion).filter { it !in functions }
     val hasCaptureHook: Boolean get() = functions.containsKey("lua_pcallk") || functions.containsKey("lua_pcall") ||
         functions.containsKey("lua_resume")
 
@@ -114,6 +122,7 @@ data class LuaSymbolTable(
         else if (missingCritical.isNotEmpty()) append("；缺少调试必需的函数：${missingCritical.joinToString()}")
         else if (!hasCaptureHook) append("；找不到 lua_pcall / lua_pcallk / lua_resume，无法抓到 lua_State")
         else if (missingRequired.isNotEmpty()) append("；以下函数被链接器裁掉，调试核心无法工作：${missingRequired.joinToString()}")
+        else if (missingOptional.isNotEmpty()) append("；以下函数被链接器裁掉，对应功能降级：${missingOptional.joinToString()}")
     }
 }
 

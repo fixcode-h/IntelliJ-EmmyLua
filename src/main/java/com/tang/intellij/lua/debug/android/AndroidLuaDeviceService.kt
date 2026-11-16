@@ -91,7 +91,7 @@ class AndroidLuaDeviceService : LuaDeviceService {
             val warnings = ArrayList<String>()
             if (table.conflicts.isNotEmpty()) warnings += "同名函数有多份实现：${table.conflicts.keys.joinToString()}，so 里可能静态链接了两份 Lua"
             if (!table.hasCaptureHook) warnings += "找不到 lua_pcall / lua_pcallk / lua_resume，无法抓到 lua_State"
-            if (table.missingRequired.isNotEmpty()) warnings += "以下函数被链接器裁掉，相关功能不可用：${table.missingRequired.joinToString()}"
+            if (table.missingOptional.isNotEmpty()) warnings += "以下函数被链接器裁掉，相关功能降级：${table.missingOptional.joinToString()}"
             LuaSymbolReport(
                 symbolFile = file.absolutePath,
                 buildId = table.buildId,

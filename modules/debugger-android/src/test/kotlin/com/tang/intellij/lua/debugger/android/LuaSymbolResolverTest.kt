@@ -32,9 +32,9 @@ class LuaSymbolResolverTest {
     @Test
     fun readsArm64BuildIdAndOffsets() {
         val table = LuaSymbolResolver(null).resolve(fixture("fake_lua54_arm64.so"))
-        assertEquals("80f8b0d491d008719b432c77aa605ae035341cd5", table.buildId)
+        assertEquals("67dce0dff707ac8d48d3ca83d8a7e5ed2ec1a2e1", table.buildId)
         assertEquals("arm64-v8a", table.abi)
-        assertEquals(0x2dfcL, table.functions["lua_sethook"])
+        assertEquals(0x2ed4L, table.functions["lua_sethook"])
         assertEquals(DetectedLuaVersion.LUA_54, table.luaVersion)
         assertTrue(table.describe(), table.usable)
         assertTrue(table.missingRequired.isEmpty())
@@ -48,10 +48,10 @@ class LuaSymbolResolverTest {
     fun keepsThumbBitOnArmv7() {
         val table = LuaSymbolResolver(null).resolve(fixture("fake_lua54_armv7.so"))
         assertEquals("armeabi-v7a", table.abi)
-        assertEquals("bdd6778fb4b3e6108663e2fc525997d7525aca04", table.buildId)
+        assertEquals("0c44cd5b77f5dcd4e373041479526526317204e0", table.buildId)
         // 同一个函数同时出现在 .dynsym 和 .symtab，不能算成冲突
         assertTrue(table.conflicts.isEmpty())
-        assertEquals(0x21f1L, table.functions["lua_sethook"])
+        assertEquals(0x226dL, table.functions["lua_sethook"])
     }
 
     @Test
@@ -63,7 +63,7 @@ class LuaSymbolResolverTest {
             assertFalse("夹具用 -fvisibility=hidden 编译，lua_sethook 不该导出", inDynsym)
         }
         val table = LuaSymbolResolver(null).resolve(f)
-        assertEquals(0x14e9L, table.functions["lua_sethook"])
+        assertEquals(0x1513L, table.functions["lua_sethook"])
         // 不在 lua.h 里的 lua_* 也会带上：核心按名字只取自己要的，多给无害
         assertTrue(table.functions.containsKey("lua_gettop_wrapper"))
     }
@@ -71,7 +71,7 @@ class LuaSymbolResolverTest {
     @Test
     fun demanglesCppBuild() {
         val table = LuaSymbolResolver(null).resolve(fixture("fake_lua54_cpp_x64.so"))
-        assertEquals(0x14e9L, table.functions["lua_sethook"])
+        assertEquals(0x1513L, table.functions["lua_sethook"])
         assertTrue(table.usable)
         assertEquals(DetectedLuaVersion.LUA_54, table.luaVersion)
     }
@@ -132,15 +132,15 @@ class LuaSymbolResolverTest {
         val resolver = LuaSymbolResolver(null)
         val all = resolver.findCandidates(listOf(root))
         assertEquals(1, all.size) // 裁剪过的不算候选
-        assertEquals(1, resolver.findCandidates(listOf(root), expectedBuildId = "80f8b0d491d008719b432c77aa605ae035341cd5").size)
+        assertEquals(1, resolver.findCandidates(listOf(root), expectedBuildId = "67dce0dff707ac8d48d3ca83d8a7e5ed2ec1a2e1").size)
         assertEquals(0, resolver.findCandidates(listOf(root), expectedBuildId = "deadbeef").size)
     }
 
-    /** Kotlin 侧必需清单必须和调试核心 lua_dyn.c 的 kRequired（5.4 部分）一致，否则附加到一半才发现缺函数。 */
+    /** Kotlin 侧必需清单必须和调试核心 lua_dyn.cpp 的 kRequired（5.4 部分）、kOptional 一致，否则附加到一半才发现缺函数。 */
     @Test
     fun requiredListMatchesCore() {
         val root = System.getProperty("emmylua.repoRoot")?.let(::File) ?: File("../..").canonicalFile
-        val dyn = File(root, "native/emmy_debugger_core/src/lua_dyn.c")
+        val dyn = File(root, "native/emmy_debugger_core/src/lua_dyn.cpp")
         val luaH = File(root, "native/third-party/lua-5.4.6/src/lua.h")
         assumeTrue("找不到 $dyn，跳过", dyn.isFile && luaH.isFile)
         val api = Regex("LUA_API[^;]*\\((lua_[A-Za-z0-9_]+)\\)\\s*\\(").findAll(luaH.readText()).map { it.groupValues[1] }.toSet()
@@ -148,6 +148,9 @@ class LuaSymbolResolverTest {
         val block = text.substring(text.indexOf("kRequired[] = {"), text.indexOf("};", text.indexOf("kRequired[] = {")))
         val required = Regex("\"(lua_\\w+)\"").findAll(block).map { it.groupValues[1] }.filter { it in api }.toSet()
         assertEquals(required, LuaApiSymbols.required54.toSet())
+        val optBlock = text.substring(text.indexOf("kOptional[] = {"), text.indexOf("};", text.indexOf("kOptional[] = {")))
+        val optional = Regex("EMMY_OPT\\((lua_\\w+)").findAll(optBlock).map { it.groupValues[1] }.toSet()
+        assertEquals(optional, LuaApiSymbols.optional54.toSet())
         assertTrue(LuaApiSymbols.critical.all { it in api })
     }
 
@@ -157,8 +160,19 @@ class LuaSymbolResolverTest {
         val jit = base.copy(luaVersion = DetectedLuaVersion.LUAJIT)
         assertFalse(jit.usable)
         assertTrue(jit.describe().contains("5.4"))
-        val trimmed = base.copy(missingRequired = listOf("lua_setlocal"))
+        val trimmed = base.copy(missingRequired = listOf("lua_getlocal"))
         assertFalse(trimmed.usable)
-        assertTrue(trimmed.describe().contains("lua_setlocal"))
+        assertTrue(trimmed.describe().contains("lua_getlocal"))
+    }
+
+    /** 可选函数被裁掉不影响附加，只在说明里提示降级（核心会换成替代实现）。 */
+    @Test
+    fun missingOptionalFunctionsOnlyDegrade() {
+        val base = LuaSymbolResolver(null).resolve(fixture("fake_lua54_arm64.so"))
+        assertTrue(base.missingOptional.isEmpty())
+        val trimmed = base.copy(functions = base.functions - "lua_setlocal" - "lua_concat")
+        assertTrue(trimmed.usable)
+        assertEquals(listOf("lua_setlocal", "lua_concat"), trimmed.missingOptional)
+        assertTrue(trimmed.describe().contains("降级"))
     }
 }
