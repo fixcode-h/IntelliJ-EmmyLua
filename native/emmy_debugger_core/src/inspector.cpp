@@ -48,12 +48,14 @@ Inspector::Inspector(Vm& vm) : vm_(vm) {}
 
 // ---------------------------------------------------------------- 暂停生命周期
 
-void Inspector::BeginPause(lua_State* L) {
+void Inspector::BeginPause(lua_State* L, int skipLevels) {
 	pausedL_ = L;
+	skip_ = skipLevels;
 	usedProviders_.clear();
 	classNames_.clear();
 	loadedNames_.clear();
 	loadedBuilt_ = false;
+	toStringFails_.clear();
 	pauseIdForHost_ = vm_.currentPauseId();
 	lua_newtable(L);
 	anchorRef_ = luaL_ref(L, LUA_REGISTRYINDEX);
@@ -81,6 +83,7 @@ void Inspector::EndPause(lua_State* L) {
 	classNames_.clear();
 	loadedNames_.clear();
 	loadedBuilt_ = false;
+	toStringFails_.clear();
 	pausedL_ = nullptr;
 }
 
@@ -140,11 +143,28 @@ bool Inspector::GetFrame(uint64_t frameId, FrameRef& out, lua_Debug& ar, Protoco
 
 // ---------------------------------------------------------------- 栈
 
-bool Inspector::StackTrace(int start, int count, json& body, ProtocolError& err) {
+bool Inspector::StackTrace(int start, int count, json& body, ProtocolError& err, const std::string& threadId) {
 	lua_State* L = pausedL_;
 	if (!L) {
 		err = {"NOT_PAUSED", "Lua VM 正在运行，先暂停或等断点命中。"};
 		return false;
+	}
+	int skip = skip_;
+	if (!threadId.empty() && threadId != "t" + PtrString(L).substr(2)) {
+		lua_State* found = nullptr;
+		lua_State* mainL = vm_.mainState();
+		if (threadId == "t" + PtrString(mainL).substr(2)) found = mainL;
+		else {
+			lua::ForEachCoroutine(L, [&](lua_State* co) {
+				if (!found && threadId == "t" + PtrString(co).substr(2)) found = co;
+			});
+		}
+		if (!found) {
+			err = {"INVALID_ARGS", "找不到协程 " + threadId + "（可能已经结束），请重新取 threads。"};
+			return false;
+		}
+		L = found;
+		skip = 0;
 	}
 	if (start < 0) start = 0;
 	if (count <= 0) count = 20;
@@ -152,12 +172,13 @@ bool Inspector::StackTrace(int start, int count, json& body, ProtocolError& err)
 	json frames = json::array();
 	int total = 0;
 	lua_Debug ar;
-	for (int level = 0; lua_getstack(L, level, &ar); ++level) {
+	for (int real = skip; lua_getstack(L, real, &ar); ++real) {
+		const int level = real - skip;
 		++total;
 		if (level < start || level >= start + count) continue;
 		lua_getinfo(L, "nSl", &ar);
 		json f;
-		f["frameId"] = NewFrameId(L, level);
+		f["frameId"] = NewFrameId(L, real);
 		f["level"] = level;
 		f["threadId"] = "t" + PtrString(L).substr(2);
 		std::string name = ar.name ? ar.name : "";
@@ -180,10 +201,10 @@ bool Inspector::StackTrace(int start, int count, json& body, ProtocolError& err)
 json Inspector::TopFrame() {
 	lua_State* L = pausedL_;
 	lua_Debug ar;
-	if (!L || !lua_getstack(L, 0, &ar)) return nullptr;
+	if (!L || !lua_getstack(L, skip_, &ar)) return nullptr;
 	lua_getinfo(L, "nSl", &ar);
 	json f;
-	f["frameId"] = NewFrameId(L, 0);
+	f["frameId"] = NewFrameId(L, skip_);
 	f["name"] = ar.name ? ar.name : "?";
 	f["chunkName"] = ar.source ? ar.source : "=?";
 	f["line"] = ar.currentline;
@@ -703,7 +724,17 @@ int64_t Inspector::HostChildren(lua_State* L, int idx, const RefEntry& entry, in
 	return start + static_cast<int64_t>(children.size());
 }
 
-bool Inspector::Variables(uint64_t ref, int start, int count, const std::string& filter, json& body, ProtocolError& err) {
+bool Inspector::Variables(uint64_t ref, int start, int count, const std::string& filter, json& body, ProtocolError& err,
+	const json& expand) {
+	if (!PageRef(ref, start, count, filter, body, err)) return false;
+	if (view_.rich && expand.is_array() && !expand.empty()) {
+		size_t budget = 256 * 1024;
+		ExpandInline(body, expand, 0, budget);
+	}
+	return true;
+}
+
+bool Inspector::PageRef(uint64_t ref, int start, int count, const std::string& filter, json& body, ProtocolError& err) {
 	auto it = refs_.find(ref);
 	if (it == refs_.end()) {
 		err = {"STALE_REFERENCE", "这个变量引用已失效（游戏已继续运行），请重新获取调用栈和变量。"};

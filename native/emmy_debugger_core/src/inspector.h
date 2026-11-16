@@ -32,6 +32,8 @@ struct ViewOptions {
 	bool showTemporaries = false;
 	int maxSortKeys = 10000;
 	size_t maxValueLength = 256;
+	int toString = 0; // 0 只对 table / 1 全部 / 2 从不（第 12 节）
+	int toStringBudgetMs = 5;
 };
 
 struct EvalOptions {
@@ -70,7 +72,8 @@ public:
 	explicit Inspector(Vm& vm);
 
 	// ---- 暂停生命周期 ----
-	void BeginPause(lua_State* L);
+	// skipLevels：栈顶这几层不显示（出错即停时的错误处理函数、error 本身）
+	void BeginPause(lua_State* L, int skipLevels = 0);
 	void EndPause(lua_State* L);
 	bool active() const { return pausedL_ != nullptr; }
 
@@ -79,10 +82,13 @@ public:
 	const ViewOptions& view() const { return view_; }
 
 	// ---- 协议命令（暂停中） ----
-	bool StackTrace(int start, int count, json& body, ProtocolError& err);
+	// threadId 为空：暂停的那个线程；否则是 threads 返回的 id（别的协程的栈）
+	bool StackTrace(int start, int count, json& body, ProtocolError& err, const std::string& threadId = "");
 	json TopFrame();
 	bool Scopes(uint64_t frameId, json& body, ProtocolError& err);
-	bool Variables(uint64_t ref, int start, int count, const std::string& filter, json& body, ProtocolError& err);
+	// expand（variable-view 10.4）：相对 ref 的名字路径，命中的节点把首页子项内联到 children
+	bool Variables(uint64_t ref, int start, int count, const std::string& filter, json& body, ProtocolError& err,
+		const json& expand = json());
 	bool Evaluate(uint64_t frameId, const std::string& expr, const std::string& mode, const EvalOptions& opt, json& body, ProtocolError& err);
 	bool SetVariable(uint64_t ref, const std::string& name, const std::string& value, const std::string& mode, const EvalOptions& opt, json& body, ProtocolError& err);
 	bool Threads(json& body, ProtocolError& err);
@@ -142,6 +148,7 @@ private:
 		std::vector<VariableItem> richChildren;
 		std::vector<VariableItem> groups;
 		std::string owner; // 子项函数名的前缀（类名）
+		bool noEvalNames = false; // 别的协程的帧：valuePath 只对当前帧有效，不给 evaluateName
 	};
 
 	uint64_t NewFrameId(lua_State* thread, int level);
@@ -163,6 +170,9 @@ private:
 	std::string FormatNumber(lua_State* L, int idx);
 	// ---- richVariables（rich_view.cpp） ----
 	static void RichEvalFields(const VariableItem& item, json& body);
+	bool SafeToString(lua_State* L, int idx, std::string& out, std::string& err);
+	void ExpandInline(json& body, const json& paths, int depth, size_t& budget);
+	bool PageRef(uint64_t ref, int start, int count, const std::string& filter, json& body, ProtocolError& err);
 	bool RichVariables(RefEntry& entry, int start, int count, const std::string& filter, json& body);
 	void MakeItemRich(lua_State* L, int idx, VariableItem& item, const std::string& evaluateName,
 		const std::string& field, const std::string& owner);
@@ -193,10 +203,12 @@ private:
 	std::vector<uint64_t> usedProviders_; // 本次暂停里调用过的宿主值提供者，暂停结束时通知释放
 	uint64_t pauseIdForHost_ = 0;
 	ViewOptions view_;
+	int skip_ = 0;
 	// 本次暂停内的缓存（variable-view 14.4）
 	std::unordered_map<const void*, std::string> classNames_;
 	std::unordered_map<const void*, std::string> loadedNames_;
 	bool loadedBuilt_ = false;
+	std::unordered_map<const void*, int> toStringFails_; // 按元表计连续出错次数，3 次后本次暂停不再调
 };
 
 } // namespace emmy

@@ -29,7 +29,7 @@ namespace {
 
 const char* const kRuntimeCaps[] = {
 	"cbor", "valuePath", "luaEval", "setVariable", "condition", "hitCondition", "logpoint", "capture",
-	"runToLine", "coroutines", "output", "helpers", "sourceHash", "hookMux", "richVariables",
+	"runToLine", "coroutines", "output", "helpers", "sourceHash", "hookMux", "richVariables", "exceptions",
 };
 
 const char* PlatformName() {
@@ -444,8 +444,18 @@ void Session::CmdSetOptions(uint64_t id, const json& args) {
 			o.viewMaxSortKeys = std::max(0, std::min(1000000, v["maxSortKeys"].get<int>()));
 		}
 	}
-	if (args.contains("exceptions") && args["exceptions"].is_string() && args["exceptions"].get<std::string>() != "none") {
-		return Fail(id, "UNSUPPORTED", "这个 runtime 还不支持出错即停（缺少能力 exceptions）。");
+	if (args.contains("exceptions") && args["exceptions"].is_string()) {
+		const std::string m = args["exceptions"].get<std::string>();
+		if (m == "none") o.exceptions = 0;
+		else if (m == "uncaught") o.exceptions = 1;
+		else if (m == "all") o.exceptions = 2;
+		else return Fail(id, "INVALID_ARGS", "exceptions 只能是 none / uncaught / all。");
+	}
+	if (args.contains("exceptions")) {
+		for (auto& vm : core.Vms()) {
+			auto v = vm;
+			v->Post([v](lua_State* L) { v->SyncErrorWrappers(L); });
+		}
 	}
 	if (o.CaseSensitive() != oldCase) core.RebuildIndex();
 	core.NotifyVms(kFlagRefresh);
@@ -619,6 +629,7 @@ void Session::CmdPaused(uint64_t id, const std::string& command, const json& arg
 	vo.hideStdGlobals = o.viewHideStdGlobals.load();
 	vo.showTemporaries = o.viewShowTemporaries.load();
 	vo.maxSortKeys = o.viewMaxSortKeys.load();
+	vo.toString = o.viewToString.load();
 	vo.maxValueLength = static_cast<size_t>(std::max(16, std::min(1024, GetInt(args, "maxValueLength", 256))));
 	std::weak_ptr<Session> weak = shared_from_this();
 	vm->Post([vm, weak, id, command, args, objId, eo, vo](lua_State*) {
@@ -631,11 +642,12 @@ void Session::CmdPaused(uint64_t id, const std::string& command, const json& arg
 		ProtocolError err;
 		bool ok = false;
 		if (command == "stackTrace") {
-			ok = ins.StackTrace(GetInt(args, "start", 0), GetInt(args, "count", 20), body, err);
+			ok = ins.StackTrace(GetInt(args, "start", 0), GetInt(args, "count", 20), body, err, GetStr(args, "threadId"));
 		} else if (command == "scopes") {
 			ok = ins.Scopes(objId, body, err);
 		} else if (command == "variables") {
-			ok = ins.Variables(objId, GetInt(args, "start", 0), GetInt(args, "count", 100), GetStr(args, "filter"), body, err);
+			ok = ins.Variables(objId, GetInt(args, "start", 0), GetInt(args, "count", 100), GetStr(args, "filter"), body, err,
+				args.contains("expand") ? args["expand"] : json());
 		} else if (command == "evaluate") {
 			ok = ins.Evaluate(objId, GetStr(args, "expression"), GetStr(args, "mode", "valuePath"), eo, body, err);
 		} else if (command == "setVariable") {
