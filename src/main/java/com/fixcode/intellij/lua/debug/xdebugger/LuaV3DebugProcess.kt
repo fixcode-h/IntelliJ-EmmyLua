@@ -273,7 +273,11 @@ class LuaV3DebugProcess(
     private fun printOutput(event: DebugEvent.Output) {
         val type = when (event.output.category) {
             OutputCategories.STDERR -> ConsoleViewContentType.ERROR_OUTPUT
-            OutputCategories.RUNTIME -> if (event.output.level == "error") ConsoleViewContentType.ERROR_OUTPUT else ConsoleViewContentType.LOG_INFO_OUTPUT
+            OutputCategories.RUNTIME -> when (event.output.level) {
+                "error" -> ConsoleViewContentType.ERROR_OUTPUT
+                "warn", "warning" -> ConsoleViewContentType.LOG_WARNING_OUTPUT
+                else -> ConsoleViewContentType.LOG_INFO_OUTPUT
+            }
             OutputCategories.LOGPOINT -> ConsoleViewContentType.LOG_DEBUG_OUTPUT
             else -> ConsoleViewContentType.NORMAL_OUTPUT
         }
