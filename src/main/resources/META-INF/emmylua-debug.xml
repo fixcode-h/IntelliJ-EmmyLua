@@ -28,6 +28,7 @@
     <extensions defaultExtensionNs="com.tang.intellij.lua">
         <debug.processFactory implementation="com.tang.intellij.lua.debug.xdebugger.LuaV3DebugProcessFactory"/>
         <debug.processFactory implementation="com.tang.intellij.lua.debug.xdebugger.AndroidDebugProcessFactory"/>
+        <debug.mcpBackend implementation="com.tang.intellij.lua.debug.xdebugger.LuaEngineMcpBackendProvider"/>
     </extensions>
 
     <!-- ===== Android 真机 ===== -->
