@@ -1,4 +1,4 @@
-﻿#include <cstdio>
+#include <cstdio>
 #include <string>
 #include "emmy_tool.h"
 #include "command_line.h"
@@ -10,8 +10,6 @@ int main(int argc, char **argv) {
 	commandLine.AddTarget("list_processes");
 	commandLine.AddTarget("arch_file", false);
 	commandLine.AddTarget("arch_pid", false);
-	commandLine.AddTarget("launch");
-	commandLine.AddTarget("receive_log");
 	commandLine.AddTarget("capabilities");
 
 	// pid
@@ -44,7 +42,7 @@ int main(int argc, char **argv) {
 	EmmyTool tool(commandLine);
 	const std::string target = commandLine.GetTarget();
 	if (target == "attach") {
-		//emmy_tool.exe attach -p 100 -dir c:/xx -dll emmy_hook.dll
+		//emmy_tool.exe attach -p 100 -dir c:/xx -auth-token xxx（注入 emmy_attach.dll，协议 v3）
 		return tool.Attach();
 	}
 	if (target == "list_processes") {
@@ -58,13 +56,6 @@ int main(int argc, char **argv) {
 	if (target == "arch_pid") {
 		//emmy_tool.exe arch_pid PROCESS_ID
 		return tool.ArchPid();
-	}
-	if (target == "launch") {
-		//emmy_tool.exe run_and_attach -dir c:/xx -dll emmy_hook.dll -work d:fff/ -exe c:/lua/lua.exe -args test.lua
-		return tool.Launch();
-	}
-	if (target == "receive_log") {
-		return tool.ReceiveLog();
 	}
 	if (target == "capabilities") {
 		return tool.Capabilities();

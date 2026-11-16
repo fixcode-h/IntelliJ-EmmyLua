@@ -24,11 +24,11 @@ jobs:
           - { arch: x86, platform: Win32 }
     steps:
       - uses: actions/checkout@v4
-      - name: Build emmy_tool / emmy_hook / emmy_core / emmy_attach
+      - name: Build emmy_tool / emmy_attach
         run: |
           cmake -S native -B build/native-${{ matrix.arch }} -A ${{ matrix.platform }}
           if ($LASTEXITCODE -ne 0) { exit 1 }
-          cmake --build build/native-${{ matrix.arch }} --config Release --target emmy_tool emmy_hook emmy_core emmy_attach --parallel 4
+          cmake --build build/native-${{ matrix.arch }} --config Release --target emmy_tool emmy_attach --parallel 4
           if ($LASTEXITCODE -ne 0) { exit 1 }
       - name: Build cores (dynamic, one per Lua version)
         run: |
@@ -44,7 +44,7 @@ jobs:
         run: |
           $out = "out/${{ matrix.arch }}"
           New-Item -ItemType Directory -Force $out | Out-Null
-          foreach ($name in "emmy_tool.exe", "emmy_hook.dll", "emmy_core.dll", "emmy_attach.dll", "EasyHook.dll") {
+          foreach ($name in "emmy_tool.exe", "emmy_attach.dll", "EasyHook.dll") {
             $file = Get-ChildItem build/native-${{ matrix.arch }} -Recurse -Filter $name | Where-Object { $_.FullName -match "Release" } | Select-Object -First 1
             if (-not $file) { Write-Error "缺少 $name"; exit 1 }
             Copy-Item $file.FullName -Destination $out

@@ -1,12 +1,10 @@
-﻿#pragma once
+#pragma once
 
 #include "command_line.h"
 
 class EmmyTool {
 public:
 	explicit EmmyTool(CommandLine &cmd);
-
-	int Launch();
 
 	int Attach();
 	int AttachV3();
@@ -16,8 +14,6 @@ public:
 	int ArchFile();
 
 	int ArchPid();
-
-	int ReceiveLog();
 
 	int Capabilities();
 
