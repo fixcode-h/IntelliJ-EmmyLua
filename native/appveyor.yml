@@ -1,0 +1,27 @@
+version: 1.2.0.{build}
+image: Visual Studio 2017
+build_script:
+- cmd: >-
+    mkdir x86
+
+    cd x86
+
+    cmake ../
+
+    cmake --build . --config RelWithDebInfo --target install
+
+    cd ../
+
+    mkdir x64
+
+    cd x64
+
+    cmake ../ -G "Visual Studio 15 2017 Win64"
+
+    cmake --build . --config RelWithDebInfo --target install
+
+artifacts:
+- path: x64/install/bin
+  name: emmy_core@x64
+- path: x86/install/bin
+  name: emmy_core@x86
