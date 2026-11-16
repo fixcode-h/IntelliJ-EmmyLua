@@ -304,7 +304,10 @@ std::string Inspector::FormatNumber(lua_State* L, int idx) {
 		lua_Number n = lua_tonumber(L, idx);
 		std::snprintf(buf, sizeof(buf), "%.14g", static_cast<double>(n));
 		// 5.3+ 的浮点数在 Lua 里打印带 .0，保持一致，便于区分整数
-		if (EMMY_LUA_VERSION_NUM >= 503 && std::strpbrk(buf, ".eEn") == nullptr) std::strcat(buf, ".0");
+		if (EMMY_LUA_VERSION_NUM >= 503 && std::strpbrk(buf, ".eEn") == nullptr) {
+			size_t len = std::strlen(buf);
+			if (len + 2 < sizeof(buf)) std::memcpy(buf + len, ".0", 3);
+		}
 	}
 	return buf;
 }

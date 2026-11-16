@@ -594,28 +594,53 @@ emmy.registerFormatter {
 | `maxSortKeys` | `10000` | 10.2 |
 | `helperBudgetMs` | `20` | 11.2 |
 
-### 13.6 宿主值提供者 C ABI 增量
+### 13.6 宿主值提供者 C ABI v2
 
-在 `EmmyHostValueProvider` 后追加（用 `structSize` 判断宿主是否提供，老宿主不受影响）：
+v1（`Emmy_RegisterHostValueProvider`，一次 `describeUserdata`）只能给一行摘要，列不了子项，也拿不到 Lua 值对应的引擎对象。v2 是新的注册入口，和 v1 并存；runtime 优先用 v2。UEKit 的 UELink 已按这一版实现（`plugins/UELink/Source/UELinkCore/Private/UELinkEmmyHostValueAbi.h` 是副本，两边同步改）。
 
 ```c
-typedef struct EmmyHostChildrenRequest {
+#define EMMY_HOST_VALUE_ABI_VERSION 2u
+
+typedef void (EMMY_HOST_API_CALL *EmmyHostWriteFn)(void* sink, const char* utf8, size_t length);
+
+typedef struct EmmyHostValueQuery {
+    uint32_t size, version;
     uint64_t vmId;
-    const char* valueRef;      /* runtime 生成的不透明句柄，对应一个 userdata 或宿主子对象 */
-    uint32_t start, count;
+    uint64_t pauseId;          /* 同一暂停内宿主发出的 childRef 有效 */
+    struct lua_State* L;       /* 暂停所在的 lua_State，只在本次调用内有效；hostRef 非空时可为 NULL */
+    int32_t index;             /* 被查询的 userdata / table 在 L 栈上的绝对索引 */
+    const char* hostRef;       /* 宿主之前给出的 childRef；NULL 表示查询栈上的值 */
+    uint32_t start, count;     /* listChildren 分页 */
     uint32_t maxValueLength;
     uint64_t deadlineUnixMillis;
-} EmmyHostChildrenRequest;
+    void* sink; EmmyHostWriteFn write;   /* 宿主把 UTF-8 JSON 结果写进来，可分多次 */
+} EmmyHostValueQuery;
 
-/* resultJson 写入：{ "total": n, "valid": true, "typeName": "...", "summary": "...",
- *   "children": [ { "name", "value", "typeName", "kind", "group", "expandable", "childRef" } ] }
- * group 是声明类名（8.1 的分组依据）；childRef 是宿主自己的不透明句柄，runtime 映射成协议 ref。 */
-typedef int (EMMY_HOST_API_CALL *EmmyListHostChildrenFn)(
-    void* userData, const EmmyHostChildrenRequest* request, EmmyHostValueResult* result);
+/* 返回 EmmyHostValueStatus：OK 认领；UNAVAILABLE 不认领（runtime 交给 helper / 默认显示）；
+ * OBJECT_INVALID 认领但对象已失效（结果 valid=false）；NEEDS_GAME_THREAD 不在能读引擎对象的线程上 */
+typedef int  (EMMY_HOST_API_CALL *EmmyHostQueryFn)(void* userData, const EmmyHostValueQuery* query);
+typedef void (EMMY_HOST_API_CALL *EmmyHostReleaseFn)(void* userData, uint64_t vmId, uint64_t pauseId);
+
+typedef struct EmmyHostValueProviderV2 {
+    uint32_t size, version;
+    void* userData;
+    const char* name;
+    EmmyHostQueryFn describe;       /* 写 {valid, typeName, summary, hint?, kind, expandable} */
+    EmmyHostQueryFn listChildren;   /* 写 {valid, total, children:[{name, type, value, typeName?, kind?, attrs?, hint?, length?, expandable?, childRef?}]} */
+    EmmyHostReleaseFn releasePause; /* 暂停结束时调用，宿主释放这次暂停发出的句柄 */
+} EmmyHostValueProviderV2;
+
+EMMY_HOST_API_EXPORT uint64_t EMMY_HOST_API_CALL Emmy_RegisterHostValueProviderV2(const EmmyHostValueProviderV2* provider);
+EMMY_HOST_API_EXPORT int      EMMY_HOST_API_CALL Emmy_UnregisterHostValueProviderV2(uint64_t providerId);
 ```
 
-- 宿主负责有效性检查（失效对象返回 `valid: false`，runtime 显示 `<已失效>`）和线程调度（沿用 `dispatchToGameThread`）。
-- 句柄只在本次暂停内有效，暂停结束时 runtime 调一次 `releaseRefs`（同样追加的可选回调）让宿主释放。
+runtime 侧约定：
+
+- 生成 userdata 或 table 的 `Variable` 时先调 `describe`（L + index）。认领了就用它的 `typeName` / `summary` / `hint` / `kind`；`valid = false` 时摘要是 `<已失效>`、带 `attrs: ["invalid"]`、没有子项，**之后不再对这个值调用 helper 或 `__tostring`**。
+- userdata 被认领时，它的子项全部来自 `listChildren`（L + index）；table 被认领时（UnLua 实例表），自己的 Lua 字段照常列出，再加一个分组「UE 对象 名字」，分组的子项来自 `listChildren`（第 6.4 节）。
+- 子项里 `expandable` 为真的，runtime 分配协议 `ref` 并记住 `childRef`；展开时用 `hostRef = childRef` 再调 `listChildren`。`kind = "group"` 的子项当分组节点显示。
+- 回调只在暂停循环里、VM 所在线程上调用；调用期间屏蔽断点和单步（第 12 节）。暂停结束时调 `releasePause`。
+- 宿主的写入可能分多次，runtime 拼接后解析；解析失败当作未认领，并输出一条 `runtime` 警告。
 
 ### 13.7 MCP
 
@@ -784,7 +809,7 @@ val groups: List<VariableDto>?, val sorted: Boolean?, val truncated: Boolean?
 | V1 | runtime：`richVariables` 全部（键快照、智能排序、分组、继承、摘要、`expand`、`objectId`、函数 / 协程显示、作用域规则、安全调用）；fixture + golden + `bench_variables` | 原生核心线程（本线程可承担 fixture 和 golden） |
 | V2 | IDE：`VariableDto` 可选字段、XDebugger 渲染（区间、分页、分组、图标、循环引用、完整值、跳转）和右键动作（挂在 `com.tang.intellij.lua.debug.xdebugger` 的 XValue 上）、MCP 文本渲染 | IDE 引擎线程；「变量视图」设置页（15.3）由本线程在 UI 线程的设置类上补 |
 | V3 | `viewRules`：显示规则文件、`setViewRules`、固定 / 隐藏动作；helper v2 `registerFormatter`，`emmyHelper_ue.lua` 改写（结构体、容器分页、有效性） | 本线程 |
-| V4 | UE 来源 A：宿主提供者 `listChildren`；UEKit UELink 动态注册提供者 | 原生核心线程（C ABI）+ UEKit 单独提交 |
+| V4 | UE 来源 A：runtime 实现 13.6 的 v2 注册入口和调用；UEKit UELink 侧已完成（UELink 2.4.0-beta.4） | 原生核心线程 |
 | V5（可选） | 变化高亮、Mark Object、复制为 JSON、Android 来源 C（原生反射） | 视 V1–V4 结果再排 |
 
 V1、V2 可以并行：IDE 先对着假 runtime 和 golden JSON 开发。

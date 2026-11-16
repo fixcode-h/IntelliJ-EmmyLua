@@ -106,6 +106,8 @@ json Continue(TestClient& c, const json& paused) {
 	return c.Request("continue", {{"vmId", paused["body"]["vmId"]}, {"pauseId", paused["body"]["pauseId"]}});
 }
 
+Game* g_game = nullptr;
+
 } // namespace
 
 TEST_CASE("session.handshake_and_errors") {
@@ -311,7 +313,6 @@ TEST_CASE("session.condition_hit_logpoint_probe") {
 }
 
 TEST_CASE("session.pause_runToLine_output_disconnect") {
-	extern Game* g_game;
 	TestClient c;
 	CHECK(c.Connect("127.0.0.1", g_port));
 	CHECK(Ok(Hello(c)));
@@ -357,7 +358,6 @@ TEST_CASE("session.pause_runToLine_output_disconnect") {
 	c2.Request("disconnect");
 }
 
-Game* g_game = nullptr;
 
 int main() {
 	g_port = 39000 + static_cast<int>(std::chrono::steady_clock::now().time_since_epoch().count() % 2000);
