@@ -509,6 +509,16 @@ data class StackFrameDto(
     }
 }
 
+// ---------- 协程（6.4 threads） ----------
+
+data class ThreadsArgs(val vmId: Long, val pauseId: Long? = null) : JsonDto {
+    override fun toJson() = jsonObject { put("vmId", vmId); put("pauseId", pauseId) }
+
+    companion object {
+        fun fromJson(json: JsonObject) = ThreadsArgs(json.optLong("vmId") ?: 0, json.optLong("pauseId"))
+    }
+}
+
 data class StackTraceResult(val frames: List<StackFrameDto>, val total: Int) : JsonDto {
     override fun toJson() = jsonObject { putObjects("frames", frames); put("total", total) }
 

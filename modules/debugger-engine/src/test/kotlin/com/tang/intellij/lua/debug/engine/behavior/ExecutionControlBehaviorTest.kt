@@ -125,6 +125,25 @@ class ExecutionControlBehaviorTest : BehaviorTestBase() {
     }
 
     @Test
+    fun `runtime 没有 exceptions 能力时不发出错即停选项 其他选项照常生效`() {
+        connect(
+            caps = FakeRuntime.ALL_CAPS - com.tang.intellij.lua.debug.protocol.Capabilities.EXCEPTIONS,
+            config = testConfig().copy(options = SetOptionsArgs(captureOutput = true, exceptions = ExceptionModes.ALL))
+        )
+        assertNull(runtime.options().exceptions)
+        assertEquals(true, runtime.options().captureOutput)
+    }
+
+    @Test
+    fun `运行中打开出错即停`() {
+        connect()
+        session.updateOptions(SetOptionsArgs(exceptions = ExceptionModes.ALL)).await()
+        assertEquals(ExceptionModes.ALL, runtime.options().exceptions)
+        assertEquals(FakeRuntime.HitResult.PAUSED, runtime.error(vm1, "@scripts/bag.lua", 3, "boom"))
+        assertEquals(PauseReasons.EXCEPTION, events.await<DebugEvent.Paused>().pause.reason)
+    }
+
+    @Test
     fun `Agent 发起的继续在事件里标明来源`() {
         pausedOnBreakpoint()
         session.resume(initiator = Initiator.AGENT).await()
