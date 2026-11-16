@@ -1,0 +1,159 @@
+package com.fixcode.intellij.lua.debugger.mcp
+
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicInteger
+
+/** 内存里的假引擎：单测 MCP 工具层用，不需要原生 runtime。 */
+class FakeBackend : LuaDebugBackend {
+    val sessions = CopyOnWriteArrayList<SessionInfo>()
+    val pauses = CopyOnWriteArrayList<PauseInfo>()
+    val breakpoints = CopyOnWriteArrayList<BreakpointInfo>()
+    val commands = CopyOnWriteArrayList<String>()
+    private val listeners = CopyOnWriteArrayList<(DebugEvent) -> Unit>()
+    private val bpIds = AtomicInteger()
+    private val pauseIds = AtomicInteger()
+
+    /** step/pause/runToLine 后自动产生的下一次暂停的行号；null = 不停。 */
+    @Volatile
+    var nextPauseLine: Int? = 11
+
+    var stalePauseId: String? = null
+
+    fun addSession(id: String = "s1", target: String = "game.exe (100)"): SessionInfo {
+        val s = SessionInfo(id, SessionKind.ATTACH, target, SessionState.RUNNING, vmCount = 1)
+        sessions += s
+        return s
+    }
+
+    fun firePause(sessionId: String = "s1", line: Int = 10, reason: PauseReason = PauseReason.BREAKPOINT): PauseInfo {
+        val id = "p" + pauseIds.incrementAndGet()
+        val p = PauseInfo(
+            sessionId, "vm-1", "GameLua", id, reason, breakpointId = "1",
+            topFrame = FrameInfo("$id:0", 0, "Bag:OnClick", "/proj/Bag.lua", line, "Bag"),
+        )
+        pauses.removeIf { it.sessionId == sessionId }
+        pauses += p
+        listeners.forEach { it(DebugEvent.Paused(p)) }
+        return p
+    }
+
+    fun fire(event: DebugEvent) = listeners.forEach { it(event) }
+
+    override fun listSessions(): List<SessionInfo> = sessions.map { s ->
+        s.copy(pausedVmIds = pauses.filter { it.sessionId == s.sessionId }.map { it.vmId })
+    }
+
+    override fun listTargets(kind: TargetKind?) =
+        CompletableFuture.completedFuture(listOf(TargetInfo(TargetKind.PROCESS, "100", "game.exe", "Lua 5.4")))
+
+    override fun attachProcess(request: AttachProcessRequest): CompletableFuture<String> {
+        commands += "attach ${request.pid}"
+        addSession("s-new", "game.exe (${request.pid})")
+        return CompletableFuture.completedFuture("s-new")
+    }
+
+    override fun attachDevice(request: AttachDeviceRequest): CompletableFuture<String> =
+        CompletableFuture.failedFuture(LuaDebugBackendException(ErrorCode.ATTACH_FAILED, "设备未连接"))
+
+    override fun stopSession(sessionId: String): CompletableFuture<Unit> {
+        sessions.removeIf { it.sessionId == sessionId }
+        return CompletableFuture.completedFuture(Unit)
+    }
+
+    override fun listVms(sessionId: String) = listOf(VmInfo("vm-1", "GameLua", VmState.RUNNING, 1))
+
+    override fun capabilities(sessionId: String) = setOf("valuePath", "luaEval")
+
+    override fun setBreakpoint(spec: BreakpointSpec): CompletableFuture<BreakpointInfo> {
+        val bp = BreakpointInfo(
+            (bpIds.incrementAndGet()).toString(), BreakpointOrigin.AGENT, spec.file, spec.line, verified = sessions.isNotEmpty(),
+            condition = spec.condition, capture = spec.capture, autoContinue = spec.autoContinue,
+        )
+        breakpoints += bp
+        return CompletableFuture.completedFuture(bp)
+    }
+
+    override fun removeBreakpoints(filter: BreakpointFilter): CompletableFuture<Int> {
+        val before = breakpoints.size
+        breakpoints.removeIf { b ->
+            (filter.all && (filter.includeIde || b.origin == BreakpointOrigin.AGENT)) ||
+                b.breakpointId == filter.breakpointId || b.breakpointId in filter.breakpointIds ||
+                (filter.file == b.file && (filter.line == null || filter.line == b.line))
+        }
+        return CompletableFuture.completedFuture(before - breakpoints.size)
+    }
+
+    override fun enableBreakpoints(filter: BreakpointFilter, enabled: Boolean): CompletableFuture<Int> {
+        var n = 0
+        breakpoints.replaceAll { b ->
+            if (b.breakpointId == filter.breakpointId || b.breakpointId in filter.breakpointIds) { n++; b.copy(enabled = enabled) } else b
+        }
+        return CompletableFuture.completedFuture(n)
+    }
+
+    override fun listBreakpoints(origin: BreakpointOrigin?) = breakpoints.filter { origin == null || it.origin == origin }
+
+    override fun resume(sessionId: String, vmId: String?): CompletableFuture<Unit> {
+        commands += "resume"
+        pauses.removeIf { it.sessionId == sessionId }
+        return CompletableFuture.completedFuture(Unit)
+    }
+
+    override fun pause(sessionId: String, vmId: String?) = control("pause", sessionId)
+
+    override fun step(sessionId: String, vmId: String?, kind: StepKind) = control("step ${kind.name.lowercase()}", sessionId)
+
+    override fun runToLine(sessionId: String, vmId: String?, file: String, line: Int) = control("runToLine $file:$line", sessionId)
+
+    private fun control(cmd: String, sessionId: String): CompletableFuture<Unit> {
+        commands += cmd
+        pauses.removeIf { it.sessionId == sessionId }
+        val line = nextPauseLine
+        if (line != null) {
+            // 模拟 runtime 异步回 paused 事件
+            Thread { Thread.sleep(30); firePause(sessionId, line, PauseReason.STEP) }.start()
+        }
+        return CompletableFuture.completedFuture(Unit)
+    }
+
+    override fun currentPauses(): List<PauseInfo> = pauses.toList()
+
+    override fun addListener(listener: (DebugEvent) -> Unit): AutoCloseable {
+        listeners += listener
+        return AutoCloseable { listeners.remove(listener) }
+    }
+
+    override fun getStack(sessionId: String, vmId: String?, start: Int, count: Int): CompletableFuture<StackPage> {
+        val p = pauses.firstOrNull { it.sessionId == sessionId }
+            ?: return CompletableFuture.failedFuture(LuaDebugBackendException(ErrorCode.NOT_PAUSED, "VM 没有暂停。"))
+        val top = p.topFrame?.line ?: 10
+        val frames = (0 until 3).map { FrameInfo("${p.pauseId}:$it", it, "f$it", "/proj/Bag.lua", top + it * 10) }
+        return CompletableFuture.completedFuture(StackPage(p.pauseId, frames.drop(start).take(count), 3))
+    }
+
+    override fun getVariables(request: VariablesRequest): CompletableFuture<VariablesPage> {
+        val pauseId = request.frameId?.substringBefore(':')
+        if (pauseId != null && (pauseId == stalePauseId || pauses.none { it.pauseId == pauseId })) {
+            return CompletableFuture.failedFuture(LuaDebugBackendException(ErrorCode.STALE_REFERENCE, "这个栈帧已失效。"))
+        }
+        return CompletableFuture.completedFuture(VariablesPage(listOf(
+            VariableInfo("index", "number", "7"),
+            VariableInfo("item", "table", "{id=1003, count=2}", ref = "r1", childCount = 2),
+        ), 2))
+    }
+
+    override fun evaluate(request: EvaluateRequest): CompletableFuture<VariableInfo> {
+        commands += "eval ${request.mode} ${request.expression}"
+        return CompletableFuture.completedFuture(VariableInfo(request.expression, "number", "42"))
+    }
+
+    override fun getOutput(sessionId: String?, sinceSeq: Long, limit: Int) = OutputPage(
+        listOf(OutputEntry(1, 0, "s1", OutputCategory.STDOUT, "hello")).filter { it.seq > sinceSeq }, 1,
+    )
+
+    override fun getProbeHits(breakpointId: String?, sinceSeq: Long, limit: Int) = ProbeHitPage(emptyList(), sinceSeq)
+
+    override fun sourceSnippet(file: String, line: Int, radius: Int) =
+        (line - radius..line + radius).map { SourceLine(it, "line $it") }
+}

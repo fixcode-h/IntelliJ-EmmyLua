@@ -14,77 +14,77 @@
 -->
 <idea-plugin xmlns:xi="http://www.w3.org/2001/XInclude">
     <extensionPoints>
-        <extensionPoint qualifiedName="com.tang.intellij.lua.debug.processFactory"
-                        interface="com.tang.intellij.lua.debug.api.LuaDebugProcessFactory" dynamic="true"/>
-        <extensionPoint qualifiedName="com.tang.intellij.lua.debug.deviceService"
-                        interface="com.tang.intellij.lua.debug.api.LuaDeviceService" dynamic="true"/>
-        <extensionPoint qualifiedName="com.tang.intellij.lua.debug.mcpService"
-                        interface="com.tang.intellij.lua.debug.api.LuaMcpService" dynamic="true"/>
-        <extensionPoint qualifiedName="com.tang.intellij.lua.debug.processTagProvider"
-                        interface="com.tang.intellij.lua.debug.api.LuaProcessTagProvider" dynamic="true"/>
+        <extensionPoint qualifiedName="com.fixcode.intellij.lua.debug.processFactory"
+                        interface="com.fixcode.intellij.lua.debug.api.LuaDebugProcessFactory" dynamic="true"/>
+        <extensionPoint qualifiedName="com.fixcode.intellij.lua.debug.deviceService"
+                        interface="com.fixcode.intellij.lua.debug.api.LuaDeviceService" dynamic="true"/>
+        <extensionPoint qualifiedName="com.fixcode.intellij.lua.debug.mcpService"
+                        interface="com.fixcode.intellij.lua.debug.api.LuaMcpService" dynamic="true"/>
+        <extensionPoint qualifiedName="com.fixcode.intellij.lua.debug.processTagProvider"
+                        interface="com.fixcode.intellij.lua.debug.api.LuaProcessTagProvider" dynamic="true"/>
     </extensionPoints>
 
     <!-- ===== 引擎 ===== -->
-    <extensions defaultExtensionNs="com.tang.intellij.lua">
-        <debug.processFactory implementation="com.tang.intellij.lua.debug.xdebugger.LuaV3DebugProcessFactory"/>
-        <debug.processFactory implementation="com.tang.intellij.lua.debug.xdebugger.AndroidDebugProcessFactory"/>
-        <debug.processFactory implementation="com.tang.intellij.lua.debug.xdebugger.LocalProcessDebugProcessFactory"/>
-        <debug.mcpBackend implementation="com.tang.intellij.lua.debug.xdebugger.LuaEngineMcpBackendProvider"/>
+    <extensions defaultExtensionNs="com.fixcode.intellij.lua">
+        <debug.processFactory implementation="com.fixcode.intellij.lua.debug.xdebugger.LuaV3DebugProcessFactory"/>
+        <debug.processFactory implementation="com.fixcode.intellij.lua.debug.xdebugger.AndroidDebugProcessFactory"/>
+        <debug.processFactory implementation="com.fixcode.intellij.lua.debug.xdebugger.LocalProcessDebugProcessFactory"/>
+        <debug.mcpBackend implementation="com.fixcode.intellij.lua.debug.xdebugger.LuaEngineMcpBackendProvider"/>
     </extensions>
     <extensions defaultExtensionNs="com.intellij">
-        <xdebugger.breakpointType implementation="com.tang.intellij.lua.debug.xdebugger.LuaExceptionBreakpointType"/>
+        <xdebugger.breakpointType implementation="com.fixcode.intellij.lua.debug.xdebugger.LuaExceptionBreakpointType"/>
         <!-- 暂停时在编辑器行尾显示变量值 -->
-        <editor.linePainter implementation="com.tang.intellij.lua.debug.xdebugger.LuaInlineValuePainter"/>
+        <editor.linePainter implementation="com.fixcode.intellij.lua.debug.xdebugger.LuaInlineValuePainter"/>
     </extensions>
 
     <!-- ===== Android 真机 ===== -->
-    <extensions defaultExtensionNs="com.tang.intellij.lua">
-        <debug.deviceService implementation="com.tang.intellij.lua.debug.android.AndroidLuaDeviceService"/>
+    <extensions defaultExtensionNs="com.fixcode.intellij.lua">
+        <debug.deviceService implementation="com.fixcode.intellij.lua.debug.android.AndroidLuaDeviceService"/>
     </extensions>
 
     <!-- ===== MCP =====（注册放在 MCP 线程自己的文件里，互不冲突） -->
     <xi:include href="emmylua-debug-mcp.xml" xpointer="xpointer(/idea-plugin/*)"/>
 
     <!-- ===== UI ===== -->
-    <extensions defaultExtensionNs="com.tang.intellij.lua">
-        <debug.processTagProvider implementation="com.tang.intellij.lua.debug.ui.process.UnrealProcessTagProvider"/>
+    <extensions defaultExtensionNs="com.fixcode.intellij.lua">
+        <debug.processTagProvider implementation="com.fixcode.intellij.lua.debug.ui.process.UnrealProcessTagProvider"/>
     </extensions>
     <extensions defaultExtensionNs="com.intellij">
-        <configurationType implementation="com.tang.intellij.lua.debug.ui.attach.LuaAttachConfigurationType"/>
-        <configurationType implementation="com.tang.intellij.lua.debug.ui.device.LuaDeviceConfigurationType"/>
-        <programRunner implementation="com.tang.intellij.lua.debug.ui.session.LuaDebugRunner"/>
-        <xdebugger.attachDebuggerProvider implementation="com.tang.intellij.lua.debug.ui.attach.LuaAttachDebuggerProvider"/>
-        <xdebugger.attachDebuggerProvider implementation="com.tang.intellij.lua.debug.ui.device.LuaDeviceAttachDebuggerProvider"/>
-        <xdebugger.attachHostProvider implementation="com.tang.intellij.lua.debug.ui.device.LuaDeviceAttachHostProvider"/>
+        <configurationType implementation="com.fixcode.intellij.lua.debug.ui.attach.LuaAttachConfigurationType"/>
+        <configurationType implementation="com.fixcode.intellij.lua.debug.ui.device.LuaDeviceConfigurationType"/>
+        <programRunner implementation="com.fixcode.intellij.lua.debug.ui.session.LuaDebugRunner"/>
+        <xdebugger.attachDebuggerProvider implementation="com.fixcode.intellij.lua.debug.ui.attach.LuaAttachDebuggerProvider"/>
+        <xdebugger.attachDebuggerProvider implementation="com.fixcode.intellij.lua.debug.ui.device.LuaDeviceAttachDebuggerProvider"/>
+        <xdebugger.attachHostProvider implementation="com.fixcode.intellij.lua.debug.ui.device.LuaDeviceAttachHostProvider"/>
 
         <applicationConfigurable parentId="tools"
                                  id="emmylua.debug"
                                  bundle="messages.LuaDebugBundle"
                                  key="settings.title"
-                                 instance="com.tang.intellij.lua.debug.ui.settings.LuaDebugConfigurable"/>
+                                 instance="com.fixcode.intellij.lua.debug.ui.settings.LuaDebugConfigurable"/>
 
         <statusBarWidgetFactory id="EmmyLuaDebugMcp"
-                                implementation="com.tang.intellij.lua.debug.ui.mcp.LuaMcpStatusBarWidgetFactory"
+                                implementation="com.fixcode.intellij.lua.debug.ui.mcp.LuaMcpStatusBarWidgetFactory"
                                 order="after positionWidget"/>
-        <postStartupActivity implementation="com.tang.intellij.lua.debug.ui.mcp.LuaMcpInstallPromptActivity"/>
+        <postStartupActivity implementation="com.fixcode.intellij.lua.debug.ui.mcp.LuaMcpInstallPromptActivity"/>
         <notificationGroup id="EmmyLua Debug" displayType="BALLOON" bundle="messages.LuaDebugBundle" key="notification.group"/>
     </extensions>
 
     <actions>
         <group id="EmmyLua.Debug.Tools" popup="true" text="EmmyLua 调试">
             <action id="EmmyLua.Debug.InstallMcp"
-                    class="com.tang.intellij.lua.debug.ui.mcp.InstallMcpAction"/>
+                    class="com.fixcode.intellij.lua.debug.ui.mcp.InstallMcpAction"/>
             <action id="EmmyLua.Debug.McpStatus"
-                    class="com.tang.intellij.lua.debug.ui.mcp.ShowMcpStatusAction"/>
+                    class="com.fixcode.intellij.lua.debug.ui.mcp.ShowMcpStatusAction"/>
             <action id="EmmyLua.Debug.OpenSettings"
-                    class="com.tang.intellij.lua.debug.ui.settings.OpenLuaDebugSettingsAction"/>
+                    class="com.fixcode.intellij.lua.debug.ui.settings.OpenLuaDebugSettingsAction"/>
             <add-to-group group-id="ToolsMenu" anchor="last"/>
         </group>
         <!-- 变量树右键：按类型固定 / 隐藏字段，写进显示规则文件（variable-view.md 11.1、16） -->
         <group id="EmmyLua.Debug.ViewRules">
             <separator/>
-            <action id="EmmyLua.Debug.PinField" class="com.tang.intellij.lua.debug.xdebugger.LuaPinFieldAction" text="固定到顶部"/>
-            <action id="EmmyLua.Debug.HideField" class="com.tang.intellij.lua.debug.xdebugger.LuaHideFieldAction" text="隐藏此字段"/>
+            <action id="EmmyLua.Debug.PinField" class="com.fixcode.intellij.lua.debug.xdebugger.LuaPinFieldAction" text="固定到顶部"/>
+            <action id="EmmyLua.Debug.HideField" class="com.fixcode.intellij.lua.debug.xdebugger.LuaHideFieldAction" text="隐藏此字段"/>
             <add-to-group group-id="XDebugger.ValueGroup" anchor="last"/>
         </group>
     </actions>

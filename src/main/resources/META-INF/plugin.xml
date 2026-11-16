@@ -1,31 +1,17 @@
-<!--
-  ~ Copyright (c) 2017. tangzx(love.tangzx@qq.com)
-  ~
-  ~ Licensed under the Apache License, Version 2.0 (the "License");
-  ~ you may not use this file except in compliance with the License.
-  ~ You may obtain a copy of the License at
-  ~
-  ~ http://www.apache.org/licenses/LICENSE-2.0
-  ~
-  ~ Unless required by applicable law or agreed to in writing, software
-  ~ distributed under the License is distributed on an "AS IS" BASIS,
-  ~ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-  ~ See the License for the specific language governing permissions and
-  ~ limitations under the License.
-  -->
-
 <idea-plugin xmlns:xi="http://www.w3.org/2001/XInclude">
     <id>com.fixcode.emmylua.enhanced</id>
     <name>EmmyLua Enhanced</name>
     <version>1.0.0</version>
     <vendor email="fixcode@example.com">FixCode</vendor>
     <category>Custom Languages</category>
-    <resource-bundle>LuaBundle</resource-bundle>
+    <resource-bundle>messages.LuaBundle</resource-bundle>
     <description><![CDATA[
     Enhanced version of EmmyLua with custom modifications for Lua programming language support.<br>
     <p>This is a customized version of EmmyLua with additional features and improvements.</p>
     Features:
     <ul>
+        <li>Lua 语言支持基于 EmmyLua 官方语言服务器 emmylua_ls（经 LSP4IJ）：跳转、补全、查找引用、重命名、诊断、格式化、语义高亮</li>
+        <li>UE / UnLua：只打开 Content/Script 时自动加入 UnLua 生成的 IntelliSense 声明</li>
         <li>Lua 调试：附加本机进程（Windows）、Android 真机附加、给 AI Agent 用的 MCP 调试工具</li>
         <li>Support for IntelliJ IDEA 2025.2 (252.*)</li>
     </ul>
@@ -41,5 +27,4 @@
     <xi:include href="emmylua-core.xml" xpointer="xpointer(/idea-plugin/*)"/>
     <!-- 调试链路（附加 / Android 真机 / MCP / 变量视图） -->
     <xi:include href="emmylua-debug.xml" xpointer="xpointer(/idea-plugin/*)"/>
-    <depends optional="true" config-file="emmylua-project.xml">com.intellij.java</depends>
 </idea-plugin>

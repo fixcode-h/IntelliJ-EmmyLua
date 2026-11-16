@@ -9,15 +9,15 @@
 <idea-plugin>
     <extensionPoints>
         <!-- 引擎适配层把项目的调试引擎交给 MCP（LuaDebugSessionManager → LuaDebugBackend） -->
-        <extensionPoint qualifiedName="com.tang.intellij.lua.debug.mcpBackend"
-                        interface="com.tang.intellij.lua.debug.mcp.LuaMcpBackendProvider" dynamic="true"/>
+        <extensionPoint qualifiedName="com.fixcode.intellij.lua.debug.mcpBackend"
+                        interface="com.fixcode.intellij.lua.debug.mcp.LuaMcpBackendProvider" dynamic="true"/>
     </extensionPoints>
 
-    <extensions defaultExtensionNs="com.tang.intellij.lua">
-        <debug.mcpService implementation="com.tang.intellij.lua.debug.mcp.LuaMcpServiceImpl"/>
+    <extensions defaultExtensionNs="com.fixcode.intellij.lua">
+        <debug.mcpService implementation="com.fixcode.intellij.lua.debug.mcp.LuaMcpServiceImpl"/>
     </extensions>
 
     <extensions defaultExtensionNs="com.intellij">
-        <postStartupActivity implementation="com.tang.intellij.lua.debug.mcp.LuaMcpStartupActivity"/>
+        <postStartupActivity implementation="com.fixcode.intellij.lua.debug.mcp.LuaMcpStartupActivity"/>
     </extensions>
 </idea-plugin>
