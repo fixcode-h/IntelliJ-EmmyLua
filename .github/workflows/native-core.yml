@@ -1,0 +1,78 @@
+name: Native Core
+
+# 新原生调试核心 native/emmy_debugger_core：各 Lua 版本的单元 / 端到端测试、动态 API 模式、性能基准。
+on:
+  push:
+    branches: [dev, main]
+    paths:
+      - "native/emmy_debugger_core/**"
+      - "native/third-party/**"
+      - ".github/workflows/native-core.yml"
+  pull_request:
+    paths:
+      - "native/emmy_debugger_core/**"
+      - "native/third-party/**"
+      - ".github/workflows/native-core.yml"
+
+concurrency:
+  group: native-core-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.os }}, Lua ${{ matrix.lua }}, ${{ matrix.mode }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        lua: ["51", "52", "53", "54"]
+        mode: [source]
+        include:
+          - { os: ubuntu-latest, lua: "54", mode: dynamic }
+          - { os: ubuntu-latest, lua: "51", mode: dynamic }
+          - { os: windows-latest, lua: "54", mode: source }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S native/emmy_debugger_core -B build/core -DCMAKE_BUILD_TYPE=Release -DEMMY_CORE_LUA_VERSION=${{ matrix.lua }} -DEMMY_CORE_LUA_MODE=${{ matrix.mode }}
+      - name: Build
+        run: cmake --build build/core --config Release --parallel 4
+      - name: Test
+        run: ctest --test-dir build/core -C Release --output-on-failure --timeout 300
+
+  android:
+    name: android (${{ matrix.abi }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: [arm64-v8a, armeabi-v7a]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build (dynamic Lua API, c++_static)
+        run: |
+          cmake -S native/emmy_debugger_core -B build/core-android \
+            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=${{ matrix.abi }} -DANDROID_PLATFORM=android-21 -DANDROID_STL=c++_static \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/core-android --parallel 4
+
+  bench:
+    # 共享 CI 机器抖动大，只出报告不卡门槛；本地用 bench_hook --check 对照目标
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          cmake -S native/emmy_debugger_core -B build/bench -DCMAKE_BUILD_TYPE=Release -DEMMY_CORE_BUILD_TESTS=OFF
+          cmake --build build/bench --target bench_hook --parallel 4
+      - name: Run
+        run: |
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          ./build/bench/bench_hook --repeat 7 --json bench_hook.json | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench_hook
+          path: bench_hook.json
