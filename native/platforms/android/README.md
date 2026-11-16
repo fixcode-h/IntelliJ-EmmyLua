@@ -7,7 +7,7 @@
 | 部分 | 位置 | 作用 |
 | --- | --- | --- |
 | IDE 侧 | `modules/debugger-android` | 读本地未裁剪 so 的 Lua 函数偏移和 Build ID；adb 设备/进程；部署和注入 agent；建转发；环境检查 |
-| agent | `native/platforms/android/agent` | `libemmylua_agent.so`：在游戏进程里按偏移算出 `lua_*` 地址、校验 Build ID、临时 intercept `lua_pcallk` 抓 `lua_State`、交给调试核心、监听抽象 socket |
+| agent | `native/platforms/android/agent` | `libemmylua_agent.so`：在游戏进程里按偏移算出 `lua_*` 地址、校验 Build ID、替换 `lua_pcallk` 抓 `lua_State` 并支持出错即停、交给调试核心、监听抽象 socket |
 | 调试核心 | `native/emmy_debugger_core`（另一个线程在做） | 协议 v3、钩子、断点；agent 通过 `emmy_core_abi.h` 里的 C ABI 调它 |
 
 ## 流程
@@ -18,7 +18,7 @@
 4. 注入：
    - Android 9+：`cmd activity attach-agent <pid> <so>=<cfg>`；启动并附加用 `am start -n <activity> --attach-agent <so>=<cfg>`。
    - Android 8 及以下：`adb forward tcp:0 jdwp:<pid>`，用 JDWP 在 `Handler.dispatchMessage` 下一次性断点，在主线程上调 `System.load(<so>)`。
-5. agent 后台线程：等 `libUnreal.so` 加载 → 用 `dl_iterate_phdr` 取基址和内存里的 Build ID 校验 → 地址 = 基址 + 偏移 → `Emmy_SetLuaApiResolver` → `Emmy_ListenAbstract("emmylua-<pid>")` → ShadowHook intercept `lua_pcallk` / `lua_pcall` / `lua_resume`，第一次调用时在 Lua 线程上 `Emmy_RegisterLuaVm(L)`，3 秒后撤掉；`lua_newstate` / `luaL_newstate` / `lua_close` 常驻跟踪 VM 生命周期。
+5. agent 后台线程：等 `libUnreal.so` 加载 → 用 `dl_iterate_phdr` 取基址和内存里的 Build ID 校验 → 地址 = 基址 + 偏移 → `Emmy_ListenAbstract("emmylua-<pid>")` → ShadowHook 常驻替换 `lua_pcallk` / `lua_pcall`（替身里调 `Emmy_PrepareHostPcall` / `Emmy_FinishHostPcall`，宿主自己没给 errfunc 的错误「没被接住」，出错即停能停在出错行；带续延的 `lua_pcallk` 不插；替换失败时退回临时 intercept，只是没有出错即停），临时 intercept `lua_resume`；第一次调用时在 Lua 线程上 `Emmy_RegisterLuaVm(L)`，发现第一个 VM 3 秒后停止抓取并撤掉临时 intercept；`lua_newstate` / `luaL_newstate` / `lua_close` 常驻跟踪 VM 生命周期。hook 都装好后才 `Emmy_SetLuaApiResolver`，被替换的函数交给核心的是 trampoline（核心自己的 pcall、临时 state 不经过替身）。状态文件的 `errorStop=1` 表示出错即停可用。
 6. agent 把结果写进 `code_cache/emmylua/agent.status`，IDE 轮询拿到 `listening` 后 `adb forward tcp:0 localabstract:emmylua-<pid>`，走普通 TCP + 协议 v3。
 7. 断开只撤转发；agent 留在进程里（JVMTI agent 不能卸载），下次附加发现 maps 里已有 agent 就复用。
 
@@ -55,7 +55,7 @@ cmake --build build/agent-host && ctest --test-dir build/agent-host --output-on-
 
 1. 装一个 UE Development 包（UnLua），进入有 Lua 逻辑的界面。
 2. IDE 里「检查环境」全部通过：adb、设备授权、系统版本、符号、ABI、可调试、Build ID。
-3. 附加后 `adb logcat -s EmmyLuaAgent` 能看到"监听 localabstract:emmylua-<pid>"和"登记 VM"，3 秒后"已撤掉临时 intercept"。
+3. 附加后 `adb logcat -s EmmyLuaAgent` 能看到"监听 localabstract:emmylua-<pid>"和"登记 VM"，3 秒后"抓取窗口结束"。
 4. 下断点能停、单步、看变量；断开后游戏继续正常运行；再次附加走复用路径。
 5. 换一个不匹配的 so：附加前就报"不是同一次构建"。
 6. Android 8.x 设备：走 JDWP 路径，需要游戏在前台。

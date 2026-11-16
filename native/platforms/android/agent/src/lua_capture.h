@@ -1,5 +1,7 @@
-// 抓 lua_State：临时 intercept lua_pcallk / lua_pcall / lua_resume，在 Lua 所属线程上拿到 L 交给核心挂钩子，
-// 抓到后过一个短窗口（让同时存在的其他 VM 也被看到）就撤掉，热路径恢复原样。
+// 抓 lua_State：在 lua_pcallk / lua_pcall / lua_resume 入口拿到 L（Lua 所属线程上）交给核心挂钩子，
+// 抓到后过一个短窗口（让同时存在的其他 VM 也被看到）就停止抓取。
+// lua_pcallk / lua_pcall 优先常驻 Replace：出错即停要在宿主的 pcall 里插错误处理函数（核心「没被接住的错误」才能停）；
+// Replace 失败时退回临时 intercept（不支持出错即停），lua_resume 始终是临时 intercept，窗口结束后撤掉。
 // lua_newstate / luaL_newstate / lua_close 常驻 hook，跟踪之后新建和关闭的 VM（UE 切图、PIE 重启会重建 VM）。
 #pragma once
 
@@ -24,6 +26,9 @@ struct CoreApi {
     void (*unregisterVm)(lua_State* L);
     int (*waitForClient)(int timeoutMs); // 可为空
     const char* (*lastError)();         // 可为空
+    // 出错即停：宿主 pcall 前插错误处理函数 / 返回后移走。可为空（老核心），为空时不插。
+    int (*prepareHostPcall)(lua_State* L, int nargs, int errfunc);
+    void (*finishHostPcall)(lua_State* L, int handlerIdx);
 };
 
 CoreApi DefaultCoreApi();
@@ -51,7 +56,12 @@ public:
     void OnCaptureEntry(lua_State* L, const char* via);
     void OnNewState(lua_State* L, const char* via);
     void OnClose(lua_State* L);
+    // 宿主 pcall 的替身调用：Arm 之前、核心没提供接口时返回 0（原样调用）。
+    int PrepareHostPcall(lua_State* L, int nargs, int errfunc);
+    void FinishHostPcall(lua_State* L, int handlerIdx);
 
+    // lua_pcallk / lua_pcall 是常驻替身（出错即停的「没被接住的错误」可用）
+    bool HostPcallHooked() const { return pcallReplaced_; }
     bool CaptureActive() const { return captureActive_.load(); }
     size_t KnownVmCount();
     std::string Describe();
@@ -75,6 +85,7 @@ private:
     std::vector<std::string> hookedNames_;
     std::atomic<bool> captureActive_{false};
     std::atomic<bool> armed_{false};
+    bool pcallReplaced_ = false;
     bool firstCaptured_ = false;
     bool waitedForIde_ = false;
     Clock::time_point firstCaptureAt_;
