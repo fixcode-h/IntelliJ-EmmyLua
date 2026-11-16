@@ -49,7 +49,7 @@ class AndroidDebugProcessFactory : LuaDebugProcessFactory {
                 }
             }
             val attached = try {
-                AndroidAttachLauncher.attach(session.project, target, log)
+                AndroidAttachLauncher.attach(session.project, target, log) { session.isStopped }
             } catch (e: IOException) {
                 throw e
             } catch (e: Exception) {

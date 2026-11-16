@@ -1,0 +1,6 @@
+<!-- 装了 JSON 插件时才加载：给 .emmyrc.json / .luarc.json 挂 emmylua_ls 的 JSON Schema -->
+<idea-plugin>
+    <extensions defaultExtensionNs="JavaScript">
+        <JsonSchema.ProviderFactory implementation="com.fixcode.intellij.lua.json.EmmyrcSchemaProviderFactory"/>
+    </extensions>
+</idea-plugin>

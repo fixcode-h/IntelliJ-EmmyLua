@@ -16,6 +16,18 @@
         <lang.braceMatcher language="Lua" implementationClass="com.fixcode.intellij.lua.editor.LuaBraceMatcher"/>
         <lang.quoteHandler language="Lua" implementationClass="com.fixcode.intellij.lua.editor.LuaQuoteHandler"/>
 
+        <!-- 编辑小功能：都只靠词法器（editor/LuaBlocks），不建语法树 -->
+        <lineIndentProvider implementation="com.fixcode.intellij.lua.editor.LuaLineIndentProvider"/>
+        <enterHandlerDelegate implementation="com.fixcode.intellij.lua.editor.LuaEnterHandler"/>
+        <typedHandler implementation="com.fixcode.intellij.lua.editor.LuaTypedHandler"/>
+        <codeInsight.template.postfixTemplateProvider language="Lua" implementationClass="com.fixcode.intellij.lua.editor.LuaPostfixTemplateProvider"/>
+        <intentionAction>
+            <language>Lua</language>
+            <className>com.fixcode.intellij.lua.editor.LuaGenerateFunctionDocIntention</className>
+            <category>Lua</category>
+        </intentionAction>
+        <lang.surroundDescriptor language="Lua" implementationClass="com.fixcode.intellij.lua.editor.LuaSurroundDescriptor"/>
+
         <!-- LSP4IJ 对自定义语言要显式绑定的几项（其余功能对任意语言自动生效） -->
         <lang.foldingBuilder language="Lua" order="first"
                              implementationClass="com.redhat.devtools.lsp4ij.features.foldingRange.LSPFoldingRangeBuilder"/>
@@ -30,6 +42,11 @@
 
         <applicationService serviceImplementation="com.fixcode.intellij.lua.project.LuaSettings"/>
         <projectService serviceImplementation="com.fixcode.intellij.lua.project.LuaProjectSettings"/>
+        <!-- UE 声明目录（UELink 后台生成 / UnLua）出现或换了时重启 emmylua_ls -->
+        <postStartupActivity implementation="com.fixcode.intellij.lua.project.UnrealDeclWatcherActivity"/>
+        <!-- 项目树「外部库」里显示 UE 声明和额外库目录（只为浏览，语义仍由 emmylua_ls 做） -->
+        <additionalLibraryRootsProvider implementation="com.fixcode.intellij.lua.project.LuaLibraryRootsProvider"/>
+        <notificationGroup id="EmmyLua UE Declarations" displayType="BALLOON"/>
         <projectConfigurable groupId="language" id="preferences.Lua" displayName="EmmyLua"
                              instance="com.fixcode.intellij.lua.project.LuaSettingsConfigurable"/>
 
@@ -64,5 +81,14 @@
                 text="Copy Lua Require Path" id="lua.copyReference.copyRequirePath">
             <add-to-group group-id="CopyReferencePopupGroup"/>
         </action>
+        <group id="lua.unrealDecl" text="UE 反射声明（EmmyLua）" popup="true">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+            <action class="com.fixcode.intellij.lua.actions.RefreshUnrealDeclAction" id="lua.unrealDecl.refresh"
+                    text="刷新 UE 反射声明" description="让 UE 编辑器马上比对一遍，只写变了的声明文件"/>
+            <action class="com.fixcode.intellij.lua.actions.LoadBlueprintsUnrealDeclAction" id="lua.unrealDecl.loadBlueprints"
+                    text="补全全部蓝图声明" description="让 UE 编辑器在后台逐个加载没打开过的蓝图，补全成员"/>
+            <action class="com.fixcode.intellij.lua.actions.RebuildUnrealDeclAction" id="lua.unrealDecl.rebuild"
+                    text="全部重写 UE 反射声明" description="不看清单，重写全部声明文件"/>
+        </group>
     </actions>
 </idea-plugin>

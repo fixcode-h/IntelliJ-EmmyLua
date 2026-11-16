@@ -7,12 +7,13 @@ import com.intellij.xdebugger.XDebugSession
 import com.intellij.xdebugger.XDebugSessionListener
 import com.fixcode.intellij.lua.debug.api.LuaDebugSessionModel
 import com.fixcode.intellij.lua.debug.api.LuaMcpService
+import com.fixcode.intellij.lua.debug.api.LuaProfilerModel
 import com.fixcode.intellij.lua.debug.ui.LuaDebugBundle
 import com.fixcode.intellij.lua.debug.ui.LuaDebugIcons
 import javax.swing.JComponent
 
 /**
- * 在标准 Debug 工具窗口里加「VM」「Agent」「映射」三个页签（设计文档 10.4）。
+ * 在标准 Debug 工具窗口里加「VM」「映射」「Lua 采样」「Agent」页签（设计文档 10.4）。
  *
  * 页签由 UI 画，数据来自引擎 XDebugProcess 实现的 [LuaDebugSessionModel] 和 MCP 服务；
  * 引擎没实现这个接口时只加 Agent 页，MCP 没装时不加 Agent 页。
@@ -33,6 +34,11 @@ object LuaDebugSessionTabs {
                 LuaVmPanel(model, disposable).component)
             add(ui, "EmmyLua.Mapping", LuaDebugBundle.message("tab.mapping"), AllIcons.Nodes.Folder,
                 LuaMappingPanel(project, model, disposable).component)
+        }
+        val profiler = session.debugProcess as? LuaProfilerModel
+        if (profiler != null) {
+            add(ui, "EmmyLua.Profiler", LuaDebugBundle.message("tab.profiler"), AllIcons.Actions.Profile,
+                LuaProfilerPanel(project, profiler, disposable).component)
         }
         val mcp = LuaMcpService.getInstance()
         if (mcp != null) {

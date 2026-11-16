@@ -3,6 +3,8 @@ package com.fixcode.intellij.lua.project
 import com.fixcode.intellij.lua.lsp.EmmyLuaServer
 import com.fixcode.intellij.lua.lsp.EmmyLuaServerLocator
 import com.fixcode.intellij.lua.lsp.EmmyLuaWorkspaceConfig
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.options.BoundSearchableConfigurable
@@ -15,7 +17,10 @@ import com.intellij.ui.dsl.builder.bindSelected
 import com.intellij.ui.dsl.builder.bindText
 import com.intellij.ui.dsl.builder.panel
 import com.intellij.ui.dsl.builder.rows
+import java.io.IOException
 import java.nio.file.Files
+import javax.swing.JCheckBox
+import javax.swing.JLabel
 
 /** 设置 → 语言和框架 → EmmyLua。改了会影响 emmylua_ls 的项，应用后重启服务器。 */
 class LuaSettingsConfigurable(private val project: Project) :
@@ -28,6 +33,9 @@ class LuaSettingsConfigurable(private val project: Project) :
     private var level = app.languageLevel
     private var detectUnreal = proj.detectUnrealProject
     private var libraries = proj.additionalSourcesRoot.joinToString("\n")
+    private var declStatus: JLabel? = null
+    private var declCheck: JCheckBox? = null
+    private var unrealLuaDecl = proj.unrealLuaDecl
 
     override fun createPanel(): DialogPanel = panel {
         group("语言服务器（emmylua_ls）") {
@@ -50,10 +58,24 @@ class LuaSettingsConfigurable(private val project: Project) :
         }
         group("库目录") {
             row {
-                checkBox("自动探测 UE 项目，加入 UnLua 生成的 IntelliSense 声明")
+                checkBox("自动探测 UE 项目，加入 UE 反射声明（UELink 生成的或 UnLua 的 IntelliSense）")
                     .bindSelected(::detectUnreal)
                     .comment(describeUnreal())
             }
+            row {
+                declCheck = checkBox("让 UE 编辑器后台生成反射声明（需要 UEKit 的 UELink 2.5+）")
+                    .bindSelected(::unrealLuaDecl)
+                    .comment(
+                        "默认不生成。勾上后 UE 编辑器在后台把 C++ 类和蓝图生成 Lua 声明到 Intermediate/UELink/LuaDecl，" +
+                            "蓝图编译、资源保存、Live Coding 后只更新变了的文件；IDE 有这个目录时优先用它。UE 编辑器后开的也会自动打开"
+                    ).component
+            }
+            row("主动刷新：") {
+                for (mode in UnrealDecl.Refresh.entries) {
+                    button(mode.label) { refreshUnrealDecl(mode) }
+                }
+                declStatus = label("").component
+            }.comment("也在 工具 菜单里。「补全全部蓝图」在 UE 后台逐个加载没打开过的蓝图；「全部重写」不看清单重写所有文件")
             row {
                 label("额外库目录（每行一个，可写相对项目目录的路径）：")
             }
@@ -87,17 +109,32 @@ class LuaSettingsConfigurable(private val project: Project) :
         proj.detectUnrealProject = detectUnreal
         proj.additionalSourcesRoot = newLibraries
         if (changed) EmmyLuaServer.restart(project)
+        if (unrealLuaDecl != proj.unrealLuaDecl) {
+            proj.unrealLuaDecl = unrealLuaDecl
+            val enabled = unrealLuaDecl
+            UnrealDeclWatcher.getInstance(project).resetSync()
+            // UE 编辑器没开时只记下开关，编辑器打开后自动补开
+            UnrealDecl.runInBackground(project) {
+                try {
+                    UnrealDecl.setEnabled(project, enabled)
+                } catch (e: IOException) {
+                    if (enabled) "已记下，UE 编辑器打开后自动开始生成（${e.message}）" else throw e
+                }
+            }
+        }
     }
 
     override fun isModified(): Boolean =
         super.isModified() || serverPath != app.languageServerPath || level != app.languageLevel ||
-            detectUnreal != proj.detectUnrealProject || libraries != proj.additionalSourcesRoot.joinToString("\n")
+            detectUnreal != proj.detectUnrealProject || libraries != proj.additionalSourcesRoot.joinToString("\n") ||
+            unrealLuaDecl != proj.unrealLuaDecl
 
     override fun reset() {
         serverPath = app.languageServerPath
         level = app.languageLevel
         detectUnreal = proj.detectUnrealProject
         libraries = proj.additionalSourcesRoot.joinToString("\n")
+        unrealLuaDecl = proj.unrealLuaDecl
         super.reset()
     }
 
@@ -116,9 +153,22 @@ class LuaSettingsConfigurable(private val project: Project) :
         val ue = UnrealIntelliSenseRoots.findUnrealProjectRoot(root) ?: return "没找到 .uproject"
         val dirs = UnrealIntelliSenseRoots.find(root)
         return if (dirs.isEmpty()) {
-            "UE 项目：$ue；还没有 IntelliSense 目录，在 UE 编辑器里用 UnLua 的 Generate IntelliSense 生成"
+            "UE 项目：$ue；还没有声明目录：勾选下面的「让 UE 编辑器后台生成反射声明」，或在 UE 编辑器里用 UnLua 的 Generate IntelliSense"
         } else {
             "UE 项目：$ue<br>" + dirs.joinToString("<br>")
+        }
+    }
+
+    private fun refreshUnrealDecl(mode: UnrealDecl.Refresh) {
+        val checked = declCheck?.isSelected
+        declStatus?.text = "正在连 UE 编辑器…"
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val text = try {
+                UnrealDecl.refresh(project, mode, checked).also { UnrealDecl.watchInBackground(project, it) }
+            } catch (e: IOException) {
+                e.message ?: "失败"
+            }
+            ApplicationManager.getApplication().invokeLater({ declStatus?.text = text }, ModalityState.any())
         }
     }
 

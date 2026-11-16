@@ -1,6 +1,6 @@
 # 语言支持迁移到 LSP
 
-日期：2026-11-16　状态：实施中
+日期：2026-11-16　状态：已实施
 
 ## 1. 为什么换
 
@@ -36,7 +36,7 @@ IDE 进程                                         emmylua_ls 进程（Rust）
 | 服务器日志 / 报文查看（LSP 控制台） | 有 | 无 |
 | 代价 | 用户要多装一个插件（安装本插件时 IDE 会提示一起装） | 无 |
 
-我们同时出 251、252 两个包，都基于 IC 编译，平台 API 用不了；LSP4IJ 功能也更全。等 2025.3 合并版普及后再评估是否换平台 API（接口层收在 `lsp/` 包里，换起来只动这一层）。
+我们基于 IC 2025.2 编译、出一个包（2026-11-16 起去掉了 2025.1，不设上限），平台 API 用不了；LSP4IJ 功能也更全。等 2025.3 合并版普及后再评估是否换平台 API（接口层收在 `lsp/` 包里，换起来只动这一层）。
 
 版本：LSP4IJ 0.21.0（since 242），emmylua_ls 0.25.1。两个版本都写在 `gradle.properties`，升级只改这里。
 
@@ -45,7 +45,7 @@ IDE 进程                                         emmylua_ls 进程（Rust）
 IDE 里只保留不需要语义的东西，全部基于一个**手写的 Kotlin 词法器**（不再用 JFlex 生成代码）：
 
 - 文件类型 `Lua`（`.lua`、`.lua.txt`），语法高亮（关键字、字符串、数字、注释、`---@` 注解标签），配色页。
-- 括号匹配、`--` 注释切换、引号配对、回车缩进。
+- 括号匹配、`--` 注释切换、引号配对、回车缩进和补 `end`、Surround With、后缀模板（都只看 token，见 §2.3）。
 - 扁平 PSI：`ParserDefinition` 只把 token 平铺在文件节点下，不建语法树。平台的注释、括号、代码片段编辑器、断点都靠它工作，开销等于一次词法扫描。
 
 语义上的东西（变量是局部还是全局、类名、函数调用）由 emmylua_ls 的**语义高亮**叠加上色。
@@ -75,7 +75,12 @@ IDE 里只保留不需要语义的东西，全部基于一个**手写的 Kotlin 
 | 库目录、源码根 | Lua SDK、模块类型、Lua 源码根 | `.emmyrc.json` 的 `workspace.library` / `workspaceRoots`，加上插件自动探测（§3） |
 | Lua 版本 | 设置里的语言级别 | `.emmyrc.json` 的 `runtime.version`；插件设置里选的版本作为默认值下发 |
 | 新建 Lua 文件、实时模板 | 有 | 保留（只靠文件类型判断上下文，不用 PSI） |
-| 后缀模板、Surround With、内联变量、移动文件改 require | 有 | **去掉**。LSP 没有对应能力；移动文件时 emmylua_ls 通过 `willRenameFiles` 能改 require 的就会改 |
+| 回车补 `end` / `until` / `}`、块内缩进、打 `end` 回退缩进、`---` 回车续行 | EnterHandler + FormattingModel | **基于词法器提供**（`editor/LuaBlocks`、`LuaEnterHandler`、`LuaLineIndentProvider`、`LuaTypedHandler`）。emmylua_ls 0.25.1 声明了 `onTypeFormatting` 但处理函数返回空，所以缩进在 IDE 侧做 |
+| 后缀模板、Surround With | 有 | **基于词法器提供**：后缀模板只认名字 / 成员链 / 下标 / 调用 / 括号表达式，认不准不提供；Surround 按选中的整行包。emmylua_ls 另有 `@` 触发的后缀补全（`completion.postfix`） |
+| 生成函数注解（`---@param` / `---@return`） | 意图动作 | **基于词法器提供**（意图动作「生成函数注解」）：emmylua_ls 0.25.1 的 `codeAction` 没有这一项 |
+| 「外部库」节点、拼写检查词典 | 库提供者、`lua.dic` | **提供**：`AdditionalLibraryRootsProvider` 只展示 emmylua_ls 用的库目录（UE 声明、额外库）；`lua.dic` 补回 |
+| `.emmyrc.json` 补全和校验 | 无 | JSON Schema（拷自 emmylua-analyzer-rust，版本随 `emmyLuaLsVersion`），JSON 插件为可选依赖 |
+| 内联变量、移动文件改 require | 有 | **去掉**。LSP 没有对应能力；移动文件时 emmylua_ls 通过 `willRenameFiles` 能改 require 的就会改 |
 | Lua SDK、Lua 模块类型、LuaCheck 外部工具 | 有 | **去掉**（诊断由 emmylua_ls 做） |
 
 ### 2.4 配置
@@ -106,6 +111,16 @@ IDE 常常只打开 UE 项目里的 `Content/Script`。UnLua 编辑器里「Gene
 4. 设置里可以关掉自动探测。探测结果在「EmmyLua」设置页上显示，方便确认。
 
 IntelliSense 目录重新生成时，emmylua_ls 的文件监听会增量更新索引，不用重启。
+
+### 3.1 UELink 后台增量生成（2026-11-16）
+
+UnLua 的 Generate IntelliSense 要手动点、整遍生成。UEKit 的 UELink 2.5 起可以在 UE 编辑器后台生成同格式的声明（**默认关闭**，协议见 UEKit 的 `docs/protocol.md`「Lua 声明」）：
+
+- 输出 `<UE项目>/Intermediate/UELink/LuaDecl/`（`Native/`、`Blueprint/`、`UE.lua`、拷来的 `UnLua/` 静态声明），清单 `.uelink-luadecl.json` 记每个文件的内容哈希；蓝图编译、资源保存 / 改名 / 删除、Live Coding 后只写内容变了的文件。
+- `UnrealIntelliSenseRoots.find`：这个目录有清单时**只用它**，不再加 UnLua 生成的目录（同名类型重复定义会让跳转出现两个目标）；没有时照旧。
+- 文件增删改由 emmylua_ls 自己监听库目录（库目录在工作区外时它用 notify 监听），不用重启；只有库目录本身变了（第一次生成完、删掉目录退回 UnLua）才要重启，`UnrealDeclWatcher` 每 15 秒看一眼几个路径，变了就重启。
+- 开关在 IDE 设置里（项目设置 `unrealLuaDecl`，默认关）：勾上 / 取消时按名片 `Saved/UELink/instances/*.json` 找开着的编辑器调 `/rpc` 的 `luadecl.enable`（`UELinkClient`）；UE 那边也记在本机个人配置里。勾着时 `UnrealDeclWatcher` 发现新开的编辑器（PID 变了）还没开就补开；没勾时不动 UE 那边（可能是在 UE 控制台开的）。
+- 主动刷新：工具菜单「UE 反射声明（EmmyLua）」和设置页按钮，`luadecl.run`：刷新（只写变了的）、补全全部蓝图（`loadBlueprints`）、全部重写（`force`）。
 
 ## 4. 调试链路
 

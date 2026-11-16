@@ -28,6 +28,9 @@ interface LuaProcessTagProvider {
     /** 这个进程即使没检测到 Lua 模块也应当归到"Lua"分组（例如 Lua 静态链接进 exe 的 UE 进程）。 */
     fun isLikelyLuaHost(process: LuaLocalProcess): Boolean = false
 
+    /** 列表里的排序优先级，大的排前面（例如带 UELink 名片的 UE 进程）。要快。 */
+    fun priority(process: LuaLocalProcess): Int = 0
+
     companion object {
         val EP: ExtensionPointName<LuaProcessTagProvider> =
             ExtensionPointName.create("com.fixcode.intellij.lua.debug.processTagProvider")

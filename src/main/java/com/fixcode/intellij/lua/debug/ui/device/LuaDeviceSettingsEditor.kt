@@ -72,6 +72,14 @@ class LuaDeviceSettingsEditor(private val project: Project) : SettingsEditor<Lua
         (textField as? JBTextField)?.emptyText?.text = LuaDebugBundle.message("device.symbol.auto")
     }
     private val symbolStatus = JBLabel()
+    private val referenceSo = TextFieldWithBrowseButton().apply {
+        addBrowseFolderListener(
+            project,
+            FileChooserDescriptorFactory.createSingleFileDescriptor("so")
+                .withTitle(LuaDebugBundle.message("device.reference.choose")),
+        )
+        (textField as? JBTextField)?.emptyText?.text = LuaDebugBundle.message("device.reference.auto")
+    }
 
     // 源码映射
     private val mappingTable = SourceMappingTable(project)
@@ -115,6 +123,10 @@ class LuaDeviceSettingsEditor(private val project: Project) : SettingsEditor<Lua
             cell(symbolFile).align(AlignX.FILL).resizableColumn()
         }.enabledIf(useManual.selected.not())
         row("") { cell(symbolStatus) }
+        row(LuaDebugBundle.message("device.reference")) {
+            cell(referenceSo).align(AlignX.FILL).resizableColumn()
+                .comment(LuaDebugBundle.message("device.reference.comment"))
+        }.enabledIf(useManual.selected.not())
 
         collapsibleGroup(LuaDebugBundle.message("device.mapping")) {
             row {
@@ -174,6 +186,7 @@ class LuaDeviceSettingsEditor(private val project: Project) : SettingsEditor<Lua
         processCombo.selectedItem = o.packageName.orEmpty()
         launchAndAttach.isSelected = o.launchAndAttach
         symbolFile.text = o.symbolFile.orEmpty()
+        referenceSo.text = o.referenceSo.orEmpty()
         mappingTable.setRows(o.mappings.map { SourceMappingRow(it.devicePrefix.orEmpty(), it.localDirectory.orEmpty()) })
         autoLearn.isSelected = o.autoLearnMapping
         useManual.isSelected = o.useManualAddress
@@ -190,6 +203,7 @@ class LuaDeviceSettingsEditor(private val project: Project) : SettingsEditor<Lua
         o.packageName = currentPackage()
         o.launchAndAttach = launchAndAttach.isSelected
         o.symbolFile = symbolFile.text.trim()
+        o.referenceSo = referenceSo.text.trim()
         o.mappings = mappingTable.rows()
             .filter { it.devicePrefix.isNotBlank() || it.localDirectory.isNotBlank() }
             .map { row ->
@@ -410,6 +424,8 @@ class LuaDeviceSettingsEditor(private val project: Project) : SettingsEditor<Lua
             packageName = currentPackage(),
             launchAndAttach = launchAndAttach.isSelected,
             symbolFile = symbolFile.text.trim().ifEmpty { null }
+                ?.let { p -> project.basePath?.let { p.replace(LuaDeviceConfiguration.PROJECT_DIR, it) } ?: p },
+            referenceSo = referenceSo.text.trim().ifEmpty { null }
                 ?.let { p -> project.basePath?.let { p.replace(LuaDeviceConfiguration.PROJECT_DIR, it) } ?: p },
         )
         background({ service.checkEnvironment(project, target) }) { result ->

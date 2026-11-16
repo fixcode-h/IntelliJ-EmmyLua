@@ -1,5 +1,6 @@
 package com.fixcode.intellij.lua.debugger.android.adb
 
+import com.fixcode.intellij.lua.debugger.android.elf.ElfFile
 import com.fixcode.intellij.lua.debugger.android.elf.ElfPrefix
 
 data class DeviceInfo(
@@ -125,7 +126,48 @@ class AndroidDevices(private val adb: AdbClient) {
         return ElfPrefix.buildId(bytes)
     }
 
+    /** 按需读取设备上的 so（ELF），给「设备 so 自带的符号」和特征码搜索用。 */
+    fun openRemoteElf(serial: String, packageName: String, lib: MappedLibrary): ElfFile =
+        ElfFile.open(RemoteFileSource(adb, serial, packageName, lib.path, lib.fileOffset), "${lib.path}@0x${java.lang.Long.toHexString(lib.fileOffset)}")
+
+    /**
+     * 应用没在运行时（启动并附加）找已安装的 so：先看安装目录下解压出来的 lib/<abi>/，
+     * 再在 APK（含按 ABI 拆分的 split APK）里找不压缩存放的 lib/<abi>/<so>。找不到返回 null。
+     */
+    fun installedLibrary(serial: String, packageName: String, soName: String, abiList: List<String>): MappedLibrary? {
+        requireValidPackage(packageName)
+        if (!SO_NAME_RE.matches(soName)) return null
+        val apks = adb.shell(serial, "pm path $packageName").stdout.lines()
+            .map { it.trim().removePrefix("package:") }.filter { it.startsWith("/") && it.endsWith(".apk") }
+            .filter { SAFE_PATH_RE.matches(it) && !it.contains("..") }
+        if (apks.isEmpty()) return null
+        val installDir = apks.first().substringBeforeLast('/')
+        val abis = abiList.ifEmpty { listOf("arm64-v8a", "armeabi-v7a") }
+        for (abi in abis) {
+            val dir = LIB_DIR_BY_ABI[abi] ?: continue
+            val path = "$installDir/lib/$dir/$soName"
+            if (!SAFE_PATH_RE.matches(path)) continue
+            val r = adb.shell(serial, "run-as $packageName ls $path")
+            if (r.ok && r.stdout.trim() == path) return MappedLibrary(path, 0)
+        }
+        for (apk in apks) {
+            val size = adb.shell(serial, "run-as $packageName stat -c %s $apk").stdout.trim().toLongOrNull() ?: continue
+            val source = RemoteFileSource(adb, serial, packageName, apk, 0, size)
+            for (abi in abis) {
+                val offset = try {
+                    ApkZip.findStoredEntry(source, size, "lib/$abi/$soName")
+                } catch (_: AdbException) {
+                    null
+                } ?: continue
+                if (offset % RemoteFileSource.PAGE == 0L) return MappedLibrary(apk, offset)
+            }
+        }
+        return null
+    }
+
     companion object {
+        private val SO_NAME_RE = Regex("^[A-Za-z0-9_.+-]+\\.so$")
+        private val LIB_DIR_BY_ABI = mapOf("arm64-v8a" to "arm64", "armeabi-v7a" to "arm", "x86_64" to "x86_64", "x86" to "x86")
         private val PACKAGE_RE = Regex("^[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z0-9_]+)+$")
         private val SAFE_PATH_RE = Regex("^/[A-Za-z0-9_./~=+@-]+$")
 

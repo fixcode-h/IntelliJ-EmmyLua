@@ -28,6 +28,7 @@
 - Agent 只读（看会话、栈、变量、输出）不需要确认。
 - Agent 第一次控制某个调试会话（下断点、继续、单步）时，右下角会弹出确认：「本次会话总是允许 / 允许一次 / 拒绝」，60 秒不处理按拒绝。
 - Agent 每次附加进程都要确认。
+- Agent 热重载 UE 里的 Lua（`reload`）按控制处理：第一次弹确认，「本次会话总是允许」后不再问。
 - 执行任意 Lua 表达式默认关闭，需要在设置里打开「允许 Agent 执行任意 Lua」；默认只能读变量路径（如 `self.items[3].id`）。
 - 调试窗口的「Agent」页能看到 Agent 的每一次调用，可以一键「撤销 Agent 控制」「清除 Agent 断点」。
 
@@ -37,8 +38,12 @@
 
 | 工具 | 动作 |
 | --- | --- |
-| `lua_debug_session` | `status` 会话状态 · `targets` 可附加的进程/设备 · `attach` 附加 · `stop` 结束 · `pause` / `continue` / `step` · `wait` 等下一次暂停 |
+| `lua_debug_session` | `status` 会话状态 · `targets` 可附加的进程/设备 · `attach` 附加 · `stop` 结束 · `pause` / `continue` / `step` · `wait` 等下一次暂停 · `reload` 把改过的 Lua 热重载到开着的 UE 编辑器 / 游戏（`files` / `modules` / `changed=true`，经 UELink，不需要调试会话） |
 | `lua_debug_breakpoints` | `list` · `add`（条件、命中次数、日志点、capture + auto_continue 的 Probe）· `remove` · `enable` · `clear`（默认只删 Agent 下的） |
-| `lua_debug_inspect` | `stack` · `vms` · `locals` · `eval` · `output`（print 和 Lua 错误）· `probes` |
+| `lua_debug_inspect` | `stack` · `vms` · `locals` · `eval` · `output`（print 和 Lua 错误）· `probes` · `profile`（采样 `duration_ms`，默认 3 秒、最多 60 秒，返回最耗时的 Lua 函数，`sort` = self / total，`limit` 默认 30） |
+
+`profile` 不需要确认：采样只观察，不暂停游戏、不改变量；采样期间 Lua 大约慢一倍，结束后恢复。结果按 Lua 指令数统计，花在 C / 引擎接口里的时间不计入。让 Agent 采样时，在这几秒里操作到慢的那个场景。
+
+`reload` 要求 UE 项目里装了 UELink（UEKit，2.4.0 以上）和 UnLua；没开 UE 编辑器或游戏时返回 `target_not_found`，UE 那边没有 `lua.reload` 时返回 `not_supported`。
 
 开发者看规范：仓库根目录 [AGENTS.md](../AGENTS.md)「MCP 工具规范」。

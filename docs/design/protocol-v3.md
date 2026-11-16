@@ -25,6 +25,7 @@
 17. [时序示例](#17-时序示例)
 18. [实现要求](#18-实现要求)
 19. [变更记录](#19-变更记录)
+20. [采样性能分析（profile）](#20-采样性能分析profile)
 
 ---
 
@@ -726,6 +727,7 @@ IDE 收到不认识的错误码按 `INTERNAL` 处理并展示 `message`。
 | `sourceHash` | 宿主登记了源码哈希，`breakpointStatus` 可能给 `mismatch` |
 | `hookMux` | runtime 用 HookMux 与宿主其他钩子共存（诊断信息，IDE 不依赖） |
 | `terminate` | `disconnect { terminate: true }` |
+| `profiler` | `profile`（第 20 节）。没协商到时 IDE 不发 `profile`、不显示采样按钮 |
 
 能力位只增不改义；新功能加新能力位，旧 IDE 看不到就不会用。
 
@@ -821,3 +823,59 @@ IDE                                           runtime
 | --- | --- | --- |
 | v3.0（revision 0） | 2026-11-16 | 首个定稿。采用 IDE 引擎线程提出的消息字段命名（`command`/`args`、`ok`/`body`/`error`、`seq`/`event`/`body`）与命令名 |
 | v3.0（revision 0） | 2026-11-16 | 按 `emmy_debugger_core` 实现补充说明（不改字段语义）：`loadHelpers` 立即返回 `{}`、失败走 `output`；helper 读写宿主 `_G`；父协程帧为可选；`exceptions` 能力未声明时 `setOptions.exceptions` 只接受 `none`。变量视图的字段扩展见 [variable-view.md](variable-view.md)，后续合进第 9 节 |
+| v3.0（revision 0） | 2026-11-16 | 新增能力 `profiler` 和命令 `profile`（第 20 节），向后兼容：老 runtime 不声明这个能力，IDE 就不发 |
+
+---
+
+## 20. 采样性能分析（profile）
+
+能力 `profiler`。runtime 在 VM 线程上按「每 N 条 Lua 指令」采样当前协程的调用栈，聚合成函数表和折叠栈；IDE 和 MCP 用它回答「游戏里哪段 Lua 最耗时」。和 UELink 的 `lua.profile`（按函数累计调用次数和用时）不同，这里是采样，放在调试核心里，Android 真机附加（包里没有 UELink）也能用。
+
+### 20.1 `profile`
+
+```json
+{ "command": "profile", "args": { "action": "start", "vmId": 0, "intervalInstructions": 1000, "durationMs": 3000 } }
+→ { "ok": true, "body": { "vms": [1], "intervalInstructions": 1000, "durationMs": 3000 } }
+
+{ "command": "profile", "args": { "action": "stop", "sort": "self", "limit": 50, "stackLimit": 500 } }
+→ { "ok": true, "body": {
+      "running": false, "vms": [1], "samples": 2950, "durationMs": 3001, "intervalInstructions": 1000, "overheadMs": 1.2,
+      "functions": [ { "fn": "add", "source": "@game/main.lua", "line": 3, "selfSamples": 1800, "totalSamples": 1800,
+                       "selfPercent": 61.02, "totalPercent": 61.02 } ],
+      "totalFunctions": 12,
+      "stacks": [ { "stack": "<匿名> (game/main.lua:7);add (game/main.lua:3)", "samples": 1800 } ],
+      "totalStacks": 37, "stacksTruncated": false } }
+```
+
+| 参数 | 用于 | 说明 |
+| --- | --- | --- |
+| `action` | 全部 | `start`（开始；已经在采样时清空重来）/ `stop`（停止并返回结果，同 `result`）/ `result`（返回当前结果，采样中也能取，不停止） |
+| `vmId` | 全部 | 省略或 0 表示所有 VM：`start` / `stop` 作用于每个 VM，结果按函数和折叠栈合并 |
+| `intervalInstructions` | `start` | 每多少条 VM 指令采一次，100–10000000，默认 1000 |
+| `durationMs` | `start` | 0–3600000，默认 0（直到 `stop`）。到点后 runtime 在下一次采样时自动停止 |
+| `sort` | `stop` / `result` | `self`（默认，按自身样本）/ `total`（按总样本，含调用的函数） |
+| `limit` | `stop` / `result` | 函数表最多返回几行，1–1000，默认 50 |
+| `stackLimit` | `stop` / `result` | 折叠栈最多返回几条（按样本数从多到少），0–10000，默认 500；另有约 8 MiB 的总长度上限 |
+
+结果字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `running` | 还有 VM 在采样 |
+| `samples` | 有效样本数（暂停在断点 / 单步时到点的不计入，个数在 `pausedSkipped`） |
+| `durationMs` | 从 `start` 到 `stop`（或到现在）的时长 |
+| `overheadMs` | 采样回调本身花的时间（不含 Lua 5.4 挂钩子后逐条指令检查的固有开销，见原生核心 README「采样性能分析」） |
+| `functions` | 函数表：`fn` 显示名（函数名来自调用处，从宿主 C 代码调进来的取不到时是 `<匿名>`；主 chunk 是 `<主 chunk>`）、`source` chunkName 原样（C 函数为 `=[C]`）、`line` 函数定义行（C 函数 -1、主 chunk 0）、`selfSamples` / `totalSamples`、`selfPercent` / `totalPercent`（占 `samples` 的百分比，保留两位小数）。同一个样本里递归出现多次的函数 `total` 只算一次 |
+| `totalFunctions` | 不截断时的函数个数 |
+| `stacks` | 折叠栈：`stack` 是根在前、`;` 分隔的帧名（`函数名 (chunk:定义行)`，C 函数 `名字 [C]`），和 flamegraph.pl / speedscope 的 `.folded` 一行「`stack samples`」一致 |
+| `totalStacks` / `stacksTruncated` | 不同栈的总数；超过 `stackLimit` 或长度上限时 `stacksTruncated: true` |
+| `truncatedSamples` | 可选：栈深超过 64 层、根部被截掉的样本数（这些栈以 `<截断>` 开头） |
+| `otherSamples` | 可选：每个 VM 不同栈超过 1 万条后，之后新出现的栈合并成一条 `<其他>` |
+
+约定：
+
+- 不采样时 runtime 不挂任何为采样准备的钩子；`start` 经 HookMux 注册一个 COUNT 客户端，`stop` 摘掉。
+- 只用 `lua_getstack` / `lua_getinfo`（`S`，C 函数和第一次见到的函数加 `n`），dynamic 模式下不读宿主 `lua_Debug` 里 Lua 私有的字段。
+- 采样不改变游戏状态（不暂停、不改变量）。IDE 断开时 runtime 停掉所有 VM 的采样。
+- 样本按执行的 Lua 指令数分布，不按墙钟时间：COUNT 钩子只在执行 Lua 指令时计数，花在 C 函数（引擎接口、`string` 库等）里的时间不计入任何样本。看「哪段 Lua 逻辑执行得最多」很准，看「Lua 调了哪个慢的引擎接口」要配合引擎自己的分析器。
+- 错误：`action` / 范围不对回 `INVALID_ARGS`，`vmId` 不存在或进程里还没有 VM 回 `VM_NOT_FOUND`。

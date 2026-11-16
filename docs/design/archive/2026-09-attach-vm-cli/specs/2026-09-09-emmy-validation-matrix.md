@@ -42,7 +42,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/verify-emmy-native-res
 98017A9CD5AC79ED3A7238642604E9A1626785F3E8F337596B8E3A617BC96C37
 ```
 
-JVM 报告位于根、`modules/*`、`tools/emmy-debug` 的 `build/test-results/test`；Verifier 位于 `build/reports/pluginVerifier/IC-252.23892.409`。Native 的构建目录、配置、命令与 TCP 放行前后报告见 [Native 验收记录](../../../../../native/docs/native_socket_acceptance_20260910.md)。拦截证据、应用规则对照及尚未确定的策略来源见 [本机 TCP 诊断](../../../../native-tcp-firewall-diagnosis-20260910.md)。项目保留 TCP，不引入 WebSocket。
+JVM 报告位于根、`modules/*`、`tools/emmy-debug` 的 `build/test-results/test`；Verifier 位于 `build/reports/pluginVerifier/IC-252.23892.409`。Native 的构建目录、配置、命令与 TCP 放行前后报告见 [Native 验收记录](../../../../../native/docs/native_socket_acceptance_20260910.md)。拦截证据、应用规则对照及尚未确定的策略来源见 [本机 TCP 诊断](../../native-tcp-firewall-diagnosis-20260910.md)。项目保留 TCP，不引入 WebSocket。
 
 统计范围固定为根插件、`debugger-core`、`debugger-transport`、`debugger-emmy-protocol`、`debugger-cli-protocol`、`debugger-luapanda-protocol` 和 `tools/emmy-debug`。不递归累计旧构建目录中已经退出 settings.gradle 的 AI/MCP 模块报告；此前记录的 223 项混入这些历史报告，已纠正。全量日志为 `build/verification-tools/final-verification.log`；真实联调 JUnit 为 `build/test-results/test/TEST-com.tang.intellij.test.debugger.EmmyNativeIdeFixtureIntegrationTest.xml`。
 

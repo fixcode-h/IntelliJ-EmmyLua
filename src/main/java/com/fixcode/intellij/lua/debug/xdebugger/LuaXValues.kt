@@ -2,9 +2,13 @@ package com.fixcode.intellij.lua.debug.xdebugger
 
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.editor.DefaultLanguageHighlighterColors
+import com.intellij.openapi.editor.Document
+import com.intellij.openapi.project.Project
+import com.intellij.openapi.util.TextRange
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.xdebugger.XDebuggerUtil
 import com.intellij.xdebugger.XSourcePosition
+import com.intellij.xdebugger.evaluation.ExpressionInfo
 import com.intellij.xdebugger.evaluation.XDebuggerEvaluator
 import com.intellij.xdebugger.frame.XCompositeNode
 import com.intellij.xdebugger.frame.XFullValueEvaluator
@@ -410,5 +414,15 @@ class LuaV3Evaluator(private val engine: DebugSession, private val frame: FrameH
         future.whenComplete { value, error ->
             if (error != null) callback.errorOccurred(messageOf(error)) else callback.evaluated(LuaV3EvalValue(engine, value))
         }
+    }
+
+    /** 鼠标悬停求值：平台默认返回 null，不覆写的话悬停时根本不求值，只剩语言服务的类型提示。 */
+    override fun getExpressionInfoAtOffset(project: Project, document: Document, offset: Int, sideEffectsAllowed: Boolean): ExpressionInfo? {
+        if (offset < 0 || offset >= document.textLength) return null
+        val line = document.getLineNumber(offset)
+        val lineStart = document.getLineStartOffset(line)
+        val text = document.charsSequence.subSequence(lineStart, document.getLineEndOffset(line))
+        val hover = LuaHoverExpression.find(text, offset - lineStart) ?: return null
+        return ExpressionInfo(TextRange(lineStart + hover.start, lineStart + hover.end), hover.expression)
     }
 }

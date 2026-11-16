@@ -5,9 +5,11 @@ import com.fixcode.intellij.lua.debugger.android.adb.AdbException
 import com.fixcode.intellij.lua.debugger.android.adb.AndroidDevices
 import com.fixcode.intellij.lua.debugger.android.adb.DeviceInfo
 import com.fixcode.intellij.lua.debugger.android.adb.DeviceProcess
-import com.fixcode.intellij.lua.debugger.android.elf.LuaSymbolResolver
+import com.fixcode.intellij.lua.debugger.android.adb.MappedLibrary
+import com.fixcode.intellij.lua.debugger.android.elf.DeviceLibrary
+import com.fixcode.intellij.lua.debugger.android.elf.LuaSymbolLocator
 import com.fixcode.intellij.lua.debugger.android.elf.LuaSymbolTable
-import com.fixcode.intellij.lua.debugger.android.elf.SymbolResolveException
+import com.fixcode.intellij.lua.debugger.android.elf.SymbolSearchOptions
 import com.fixcode.intellij.lua.debugger.android.jdwp.JdwpLoader
 import java.io.File
 import java.security.SecureRandom
@@ -30,10 +32,18 @@ data class AndroidAttachRequest(
     val pid: Int? = null,
     /** true = 重启应用并在启动时加载 agent，第一次执行 Lua 时停住等 IDE。 */
     val launch: Boolean = false,
-    val symbolFile: File,
+    /** 运行配置里指定的未裁剪 so；为空表示按 [symbolDirs]、设备 so、[referenceSo] 逐级找。 */
+    val symbolFile: File? = null,
     /** 静态链接 Lua 的 so 名，UE 是 libUnreal.so。 */
     val moduleName: String = "libUnreal.so",
-)
+    /** 设置里的符号目录，按 Build ID 找同一次构建的未裁剪 so。 */
+    val symbolDirs: List<File> = emptyList(),
+    /** 参考 so：没有同一次构建的符号时按特征码找函数。 */
+    val referenceSo: File? = null,
+) {
+    val symbolOptions: SymbolSearchOptions
+        get() = SymbolSearchOptions(symbolFile, symbolDirs, referenceSo, moduleName)
+}
 
 data class AndroidAttachResult(
     val host: String,
@@ -57,9 +67,11 @@ class AndroidAttachException(message: String, cause: Throwable? = null) : Except
 class AndroidAttachSession(
     private val adb: AdbClient,
     private val agents: AgentBinaryProvider,
-    private val symbolResolver: LuaSymbolResolver,
+    private val symbolLocator: LuaSymbolLocator,
     private val log: (String) -> Unit = {},
     private val sleeper: (Long) -> Unit = { Thread.sleep(it) },
+    /** 调试会话已停止时返回 true：特征码搜索、等 agent 都会尽快停下。 */
+    private val cancelled: () -> Boolean = { false },
 ) {
     private val devices = AndroidDevices(adb)
     private var forwardedPort: Int? = null
@@ -69,6 +81,8 @@ class AndroidAttachSession(
         doAttach(request)
     } catch (e: AdbException) {
         throw AndroidAttachException(e.message ?: "adb 调用失败", e)
+    } catch (e: java.util.concurrent.CancellationException) {
+        throw AndroidAttachException("已取消附加", e)
     }
 
     private fun doAttach(request: AndroidAttachRequest): AndroidAttachResult {
@@ -77,23 +91,20 @@ class AndroidAttachSession(
         if (device.state == "unauthorized") throw AndroidAttachException("设备未授权：请在手机上点「允许 USB 调试」")
         if (!device.isOnline) throw AndroidAttachException("设备 ${device.model} 当前状态是 ${device.state}，无法附加")
 
-        val symbols = resolveSymbols(request.symbolFile)
-        val abi = symbols.abi ?: throw AndroidAttachException("无法从 ${request.symbolFile.name} 判断 ABI")
-        if (device.abiList.isNotEmpty() && abi !in device.abiList) {
-            throw AndroidAttachException("${request.symbolFile.name} 是 $abi，设备只支持 ${device.abiList.joinToString()}")
-        }
-        val agentBinary = agents.agentFor(abi)
-            ?: throw AndroidAttachException("插件里没有 $abi 的 agent（$AGENT_FILE），请确认插件包完整")
-
-        val dataDir = appDataDir(device.serial, request.packageName)
-        val agentPath = "$dataDir/$REMOTE_DIR/$AGENT_FILE"
-        val configPath = "$dataDir/$REMOTE_DIR/$CONFIG_FILE"
-
         if (!request.launch) {
             val pid = request.pid ?: devices.findPid(device.serial, request.packageName)
             ?: throw AndroidAttachException("${request.packageName} 没有在运行：先启动游戏，或勾选「启动应用并附加」")
             val process = DeviceProcess(pid, request.packageName, debuggable = true)
-            verifyRemoteBuildId(device, process, request.moduleName, symbols)
+            val lib = devices.mappedLibrary(device.serial, process, request.moduleName)
+                ?: throw AndroidAttachException("进程 ${process.pid} 里没有加载 ${request.moduleName}：确认选的是游戏进程，或等游戏进入主界面后再附加")
+            val remoteId = devices.remoteBuildId(device.serial, process.packageName, lib)
+            if (remoteId == null) log("无法在附加前读取设备上 ${request.moduleName} 的 Build ID，交给 agent 校验")
+            val symbols = resolveSymbols(request, device, lib, remoteId)
+            verifyRemoteBuildId(remoteId, symbols)
+            val agentBinary = agentFor(device, symbols)
+            val dataDir = appDataDir(device.serial, request.packageName)
+            val agentPath = "$dataDir/$REMOTE_DIR/$AGENT_FILE"
+            val configPath = "$dataDir/$REMOTE_DIR/$CONFIG_FILE"
             reuseExisting(device, process, configPath)?.let { token ->
                 log("进程里已经有 agent，直接复用")
                 return finish(device, pid, token, symbols, reused = true, statusPath = "$dataDir/$REMOTE_DIR/$STATUS_FILE", packageName = request.packageName, launched = false)
@@ -104,7 +115,20 @@ class AndroidAttachSession(
             return finish(device, pid, token, symbols, reused = false, statusPath = "$dataDir/$REMOTE_DIR/$STATUS_FILE", packageName = request.packageName, launched = false)
         }
 
-        // 启动模式：先停掉应用，部署好 agent 再带着 agent 启动
+        // 启动模式：应用还没跑，从安装目录 / APK 里找 so 读 Build ID；找不到就只能靠本地文件，由 agent 校验
+        val lib = try {
+            devices.installedLibrary(device.serial, request.packageName, request.moduleName, device.abiList)
+        } catch (e: AdbException) {
+            null
+        }
+        val remoteId = lib?.let { devices.remoteBuildId(device.serial, request.packageName, it) }
+        val symbols = resolveSymbols(request, device, lib, remoteId)
+        verifyRemoteBuildId(remoteId, symbols)
+        val agentBinary = agentFor(device, symbols)
+        val dataDir = appDataDir(device.serial, request.packageName)
+        val agentPath = "$dataDir/$REMOTE_DIR/$AGENT_FILE"
+        val configPath = "$dataDir/$REMOTE_DIR/$CONFIG_FILE"
+        // 先停掉应用，部署好 agent 再带着 agent 启动
         val token = newToken()
         adb.shellChecked(device.serial, "am force-stop ${request.packageName}")
         deploy(device, request.packageName, agentBinary, AgentConfig.from(symbols, token, request.moduleName, request.packageName, waitForIde = true))
@@ -125,27 +149,28 @@ class AndroidAttachSession(
 
     // ---- 各步骤 ----
 
-    private fun resolveSymbols(file: File): LuaSymbolTable {
-        val table = try {
-            symbolResolver.resolve(file)
-        } catch (e: SymbolResolveException) {
-            throw AndroidAttachException(e.message ?: "读取符号失败", e)
-        } catch (e: java.io.IOException) {
-            throw AndroidAttachException("读取 ${file.name} 失败：${e.message}", e)
+    /** 逐级找 Lua 函数偏移（见 [LuaSymbolLocator]），拿不全必需函数就报错并说明每一级为什么不行。 */
+    private fun resolveSymbols(request: AndroidAttachRequest, device: DeviceInfo, lib: MappedLibrary?, remoteId: String?): LuaSymbolTable {
+        val deviceLib = lib?.let { l ->
+            DeviceLibrary(remoteId, "${device.serial}:${l.path}") { devices.openRemoteElf(device.serial, request.packageName, l) }
         }
+        val lookup = symbolLocator.locate(request.symbolOptions, deviceLib, log, cancelled)
+        val table = lookup.table ?: throw AndroidAttachException(lookup.failureMessage())
         log(table.describe())
-        if (!table.usable) throw AndroidAttachException(table.describe())
         return table
     }
 
-    private fun verifyRemoteBuildId(device: DeviceInfo, process: DeviceProcess, moduleName: String, symbols: LuaSymbolTable) {
-        val lib = devices.mappedLibrary(device.serial, process, moduleName)
-            ?: throw AndroidAttachException("进程 ${process.pid} 里没有加载 $moduleName：确认选的是游戏进程，或等游戏进入主界面后再附加")
-        val remote = devices.remoteBuildId(device.serial, process.packageName, lib)
-        if (remote == null) {
-            log("无法在附加前读取设备上 $moduleName 的 Build ID，交给 agent 校验")
-            return
+    private fun agentFor(device: DeviceInfo, symbols: LuaSymbolTable): File {
+        val abi = symbols.abi ?: throw AndroidAttachException("无法从 ${File(symbols.sourcePath).name} 判断 ABI")
+        if (device.abiList.isNotEmpty() && abi !in device.abiList) {
+            throw AndroidAttachException("${File(symbols.sourcePath).name} 是 $abi，设备只支持 ${device.abiList.joinToString()}")
         }
+        return agents.agentFor(abi)
+            ?: throw AndroidAttachException("插件里没有 $abi 的 agent（$AGENT_FILE），请确认插件包完整")
+    }
+
+    private fun verifyRemoteBuildId(remote: String?, symbols: LuaSymbolTable) {
+        if (remote == null) return
         if (!remote.equals(symbols.buildId, ignoreCase = true)) {
             throw AndroidAttachException(
                 "本地 so 和设备上的不是同一次构建（本地 Build ID ${symbols.buildId.take(12)}…，设备 ${remote.take(12)}…）：" +
@@ -275,6 +300,7 @@ class AndroidAttachSession(
         val deadline = System.currentTimeMillis() + timeoutMs
         var last: AgentStatus? = null
         while (System.currentTimeMillis() < deadline) {
+            if (cancelled()) throw AndroidAttachException("已取消附加")
             val r = adb.shell(device.serial, "run-as $pkg cat $statusPath")
             if (r.ok && r.stdout.isNotBlank()) {
                 val s = AgentStatus.parse(r.stdout)

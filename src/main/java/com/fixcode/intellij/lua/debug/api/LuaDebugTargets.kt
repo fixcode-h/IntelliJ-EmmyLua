@@ -32,6 +32,8 @@ sealed class LuaDebugTarget {
         val launchAndAttach: Boolean = false,
         /** 本地未裁剪 libUnreal.so（或其他带 lua_* 符号的 so）；为空表示按设置里的搜索目录自动找。 */
         val symbolFile: String? = null,
+        /** 参考 so（特征码兜底）；为空用设置里的。 */
+        val referenceSo: String? = null,
         val sourceMapping: SourceMappingConfig = SourceMappingConfig(),
     ) : LuaDebugTarget() {
         override val displayName: String get() = "$packageName @ $deviceSerial"

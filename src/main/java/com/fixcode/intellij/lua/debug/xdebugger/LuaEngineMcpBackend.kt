@@ -50,10 +50,19 @@ import com.fixcode.intellij.lua.debugger.mcp.LuaDebugBackendException
 import com.fixcode.intellij.lua.debugger.mcp.OutputCategory
 import com.fixcode.intellij.lua.debugger.mcp.OutputEntry
 import com.fixcode.intellij.lua.debugger.mcp.OutputPage
+import com.fixcode.intellij.lua.debugger.mcp.ProfileFunction
+import com.fixcode.intellij.lua.debugger.mcp.ProfileReport
+import com.fixcode.intellij.lua.debugger.mcp.ProfileSort
+import com.fixcode.intellij.lua.debug.protocol.ProfileSorts
 import com.fixcode.intellij.lua.debugger.mcp.PauseInfo
 import com.fixcode.intellij.lua.debugger.mcp.PauseReason
 import com.fixcode.intellij.lua.debugger.mcp.ProbeHit
 import com.fixcode.intellij.lua.debugger.mcp.ProbeHitPage
+import com.fixcode.intellij.lua.debugger.mcp.ReloadItem
+import com.fixcode.intellij.lua.debugger.mcp.ReloadRequest
+import com.fixcode.intellij.lua.debugger.mcp.ReloadResult
+import com.fixcode.intellij.lua.debugger.mcp.ReloadTargetResult
+import com.fixcode.intellij.lua.debug.ue.UnrealLuaReloader
 import com.fixcode.intellij.lua.debugger.mcp.SessionInfo
 import com.fixcode.intellij.lua.debugger.mcp.SessionKind
 import com.fixcode.intellij.lua.debugger.mcp.SessionState
@@ -623,6 +632,36 @@ class LuaEngineMcpBackend(private val project: Project) : LuaDebugBackend, Dispo
         values = hit.captures.associate { it.expression to (it.error?.let { e -> "<$e>" } ?: it.value) }
     )
 
+    // ---- 采样性能分析（协议第 20 节） ----
+
+    override fun startProfile(sessionId: String, vmId: String?, durationMs: Int): CompletableFuture<Unit> =
+        mapErrors(engine(sessionId).profileStart(vmId?.let(::parseVm) ?: 0L, durationMs = durationMs).thenApply { })
+
+    override fun stopProfile(sessionId: String, vmId: String?, sort: ProfileSort, limit: Int): CompletableFuture<ProfileReport> {
+        val engine = engine(sessionId)
+        val wire = if (sort == ProfileSort.TOTAL) ProfileSorts.TOTAL else ProfileSorts.SELF
+        // Agent 只看函数表，不要折叠栈（stackLimit = 0），帧小、回得快
+        return mapErrors(engine.profileStop(vmId?.let(::parseVm) ?: 0L, wire, limit, stackLimit = 0)).thenApply { r ->
+            ProfileReport(
+                samples = r.samples,
+                durationMs = r.durationMs,
+                functions = r.functions.map { f ->
+                    ProfileFunction(
+                        name = f.fn,
+                        file = if (f.isC || f.source.isEmpty()) null else engine.localPathOfChunk(f.source) ?: f.source.removePrefix("@"),
+                        line = f.line,
+                        selfSamples = f.selfSamples, totalSamples = f.totalSamples,
+                        selfPercent = f.selfPercent, totalPercent = f.totalPercent,
+                    )
+                },
+                totalFunctions = r.totalFunctions,
+                intervalInstructions = r.intervalInstructions,
+                overheadMs = r.overheadMs,
+                pausedSkipped = r.pausedSkipped,
+            )
+        }
+    }
+
     override fun sourceSnippet(file: String, line: Int, radius: Int): List<SourceLine>? {
         val f = File(file)
         if (!f.isFile) return null
@@ -635,6 +674,36 @@ class LuaEngineMcpBackend(private val project: Project) : LuaDebugBackend, Dispo
             null
         }
     }
+
+    // =====================================================================
+    // UE 热重载（经 UELink，不走调试连接）
+    // =====================================================================
+
+    override fun reloadModules(request: ReloadRequest): CompletableFuture<ReloadResult> =
+        CompletableFuture.supplyAsync({
+            val files = request.files.map { java.nio.file.Path.of(resolveFile(it)) }
+            val outcome = try {
+                UnrealLuaReloader.getInstance(project).reload(request.modules, files, request.changed)
+            } catch (e: UnrealLuaReloader.ReloadException) {
+                val code = when (e.reason) {
+                    UnrealLuaReloader.Reason.NOT_SUPPORTED -> ErrorCode.NOT_SUPPORTED
+                    UnrealLuaReloader.Reason.NO_UE_PROJECT, UnrealLuaReloader.Reason.NO_INSTANCE -> ErrorCode.TARGET_NOT_FOUND
+                }
+                throw LuaDebugBackendException(code, e.message.orEmpty())
+            }
+            ReloadResult(
+                targets = outcome.targets.map { t ->
+                    ReloadTargetResult(
+                        pid = t.instance.pid,
+                        kind = t.instance.kind,
+                        items = t.items.map { ReloadItem(it.module, it.ok, it.mode, it.error) },
+                        note = t.note,
+                        error = t.error,
+                    )
+                },
+                skipped = outcome.skipped,
+            )
+        }, AppExecutorUtil.getAppExecutorService())
 
     // =====================================================================
     // id 编解码

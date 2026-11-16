@@ -1,29 +1,32 @@
 <idea-plugin xmlns:xi="http://www.w3.org/2001/XInclude">
     <id>com.fixcode.emmylua.enhanced</id>
     <name>EmmyLua Enhanced</name>
-    <version>1.0.0</version>
-    <vendor email="fixcode@example.com">FixCode</vendor>
+    <vendor url="https://github.com/fixcode-h/IntelliJ-EmmyLua">FixCode</vendor>
     <category>Custom Languages</category>
     <resource-bundle>messages.LuaBundle</resource-bundle>
     <description><![CDATA[
-    Enhanced version of EmmyLua with custom modifications for Lua programming language support.<br>
-    <p>This is a customized version of EmmyLua with additional features and improvements.</p>
-    Features:
+    <p>Lua support for Unreal Engine (UnLua) projects, based on EmmyLua.</p>
     <ul>
-        <li>Lua 语言支持基于 EmmyLua 官方语言服务器 emmylua_ls（经 LSP4IJ）：跳转、补全、查找引用、重命名、诊断、格式化、语义高亮</li>
-        <li>UE / UnLua：只打开 Content/Script 时自动加入 UnLua 生成的 IntelliSense 声明</li>
-        <li>Lua 调试：附加本机进程（Windows）、Android 真机附加、给 AI Agent 用的 MCP 调试工具</li>
-        <li>Support for IntelliJ IDEA 2025.2 (252.*)</li>
+        <li>Language support powered by the official EmmyLua language server (emmylua_ls, via LSP4IJ):
+            go to definition, completion, find usages, rename, diagnostics, formatting, semantic highlighting.</li>
+        <li>UE / UnLua: picks up UnLua IntelliSense or UELink-generated declarations automatically.</li>
+        <li>Debugging: attach to a local process (Windows), attach to an Android device without changing the package,
+            and an MCP server so AI agents can debug Lua.</li>
+    </ul>
+    <p>基于 EmmyLua 的 Lua 插件，面向 UE（UnLua）项目：</p>
+    <ul>
+        <li>语言支持基于 EmmyLua 官方语言服务器 emmylua_ls（经 LSP4IJ）：跳转、补全、查找引用、重命名、诊断、格式化、语义高亮</li>
+        <li>UE / UnLua：自动加入 UnLua IntelliSense 或 UELink 后台生成的声明</li>
+        <li>Lua 调试：附加本机进程（Windows）、Android 真机附加（包体零改动）、给 AI Agent 用的 MCP 调试工具</li>
     </ul>
     ]]></description>
-
     <change-notes><![CDATA[
-    <strong>1.0.0</strong>
-    <ul>
-        <li>[NEW] 新调试链路</li>
-    </ul>
+    每个版本的更新内容见 <a href="https://github.com/fixcode-h/IntelliJ-EmmyLua/releases">GitHub Releases</a>。
     ]]></change-notes>
-    <idea-version since-build="252" until-build="252.*"/>
+    <!-- since-build / until-build 由 build.gradle.kts 写入（2025.2 起，不设上限） -->
+    <!-- 可选：JSON 插件在时给 .emmyrc.json 挂 schema；拼写检查模块在时挂 Lua 词典 -->
+    <depends optional="true" config-file="emmylua-json.xml">com.intellij.modules.json</depends>
+    <depends optional="true" config-file="emmylua-spellchecker.xml">com.intellij.modules.spellchecker</depends>
     <xi:include href="emmylua-core.xml" xpointer="xpointer(/idea-plugin/*)"/>
     <!-- 调试链路（附加 / Android 真机 / MCP / 变量视图） -->
     <xi:include href="emmylua-debug.xml" xpointer="xpointer(/idea-plugin/*)"/>

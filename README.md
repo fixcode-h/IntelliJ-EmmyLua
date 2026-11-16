@@ -25,12 +25,13 @@ EmmyLua 是一个功能强大的 Lua 语言支持插件，专为 IntelliJ IDEA �
 语言支持按 [语言支持迁移到 LSP](docs/design/lsp-migration.md) 改成了 IDE 只做编辑器外壳、语义分析交给 [emmylua_ls](https://github.com/EmmyLuaLs/emmylua-analyzer-rust)（EmmyLua 官方的 Rust 语言服务器，VS Code 版 EmmyLua 用的也是它）。IDE 里通过 [LSP4IJ](https://github.com/redhat-developer/lsp4ij) 和它通信，大项目不再在 IDE 里建 Lua 索引。
 
 - **IDE 侧**：Lua 文件类型（`.lua`、`.lua.txt`）、语法和注解标签高亮、括号匹配、注释切换、新建 Lua 文件和实时模板
+- **编辑小功能**（只靠词法器，不建语法树）：`then` / `do` / `function(...)` / `repeat` / `{` 后回车自动缩进并补上 `end` / `until` / `}`，打 `end` / `else` 自动回退缩进，`---` 注解行回车续行；Surround With（`if` / `do` / `for` / `function` / `--region`）；后缀模板（`.if` `.ifnot` `.nn` `.null` `.local` `.return` `.print` `.fori` `.forp` `.fora` `.par`）；意图动作「生成函数注解」；`.emmyrc.json` / `.luarc.json` 的字段补全和校验（JSON Schema）；项目树「外部库」里能浏览 UE 声明和额外库目录；拼写检查认得 Lua 关键字和标准库名
 - **emmylua_ls 提供**：补全、跳转到定义 / 实现、查找引用、重命名、悬停文档、参数提示、内联提示、诊断和快速修复、格式化、语义高亮、代码折叠、结构视图、转到符号、调用层次
 - **新版注解语法**：泛型、`---@enum`、`---@overload` 等，和 VS Code / Neovim 上的 EmmyLua 行为一致
 - **标准库**：emmylua_ls 内置，按配置的 Lua 版本（5.1–5.4、LuaJIT）选择
 - **Unreal Engine / UnLua**：IDE 只打开 UE 项目里的 `Content/Script` 时，插件自动往上找 `.uproject`，把 UnLua「Generate IntelliSense」生成的目录（如 `Plugins/UnLua/Intermediate/IntelliSense`）加进库目录，蓝图类型和 `UE.xxx` 都能补全和跳转
 
-以前的 PSI 实现里这些功能**已去掉**：后缀模板、Surround With、彩虹变量、Lua SDK 和 Lua 模块类型、LuaCheck 外部工具（诊断改由 emmylua_ls 做）。
+以前的 PSI 实现里这些功能**已去掉**：彩虹变量、内联变量等重构、Lua SDK 和 Lua 模块类型、LuaCheck 外部工具（诊断改由 emmylua_ls 做）。
 
 ### 🐛 调试功能
 - **Lua 附加** - 附加到本机正在运行的进程（Windows），不用改游戏代码
@@ -38,7 +39,10 @@ EmmyLua 是一个功能强大的 Lua 语言支持插件，专为 IntelliJ IDEA �
 - **断点** - 条件断点、命中次数、日志断点、Probe（不停下只记录值）、Lua 出错时暂停
 - **变量和协程** - 变量分组展示、修改变量值、查看其他协程的调用栈
 - **MCP 调试工具** - 让 Claude Code、Cursor 等 Agent 直接下断点、看栈和变量
+- **UE 一键热重载** - 编辑器右键「重载到 UE」（Ctrl+Alt+R）或设置里打开「保存后自动重载」，经 UELink 让开着的 UE 编辑器 / 游戏重新加载 Lua 模块，不用附加
+- **断点诊断** - 一直没对上代码的断点变灰并在悬停里说明原因；调试工具栏「诊断断点」列出加载过的 chunk 和建议的路径映射
 - **调试控制台** - 交互式调试控制台，支持表达式求值
+- **Lua 采样性能分析** - 调试窗口的「Lua 采样」页开始 / 停止采样，按函数看自身和总计占比、双击跳到源码，可导出折叠栈用 speedscope / flamegraph.pl 看火焰图；Android 真机附加也能用，Agent 用 `lua_debug_inspect action=profile`
 
 ## 🚀 安装方式
 
@@ -112,12 +116,15 @@ end
 1. **附加本机进程（Windows）**
    - `Run` → `Attach to Process…`，在列表里选「Lua 附加」下的游戏进程；或新建运行配置「Lua 附加」
    - 不需要在游戏里加任何代码，插件自动选择 32 / 64 位和 Lua 版本
+   - UE 项目装了 UELink（UEKit）时，带名片的编辑器 / 游戏排在列表最前，并标出项目名和类型
 
 2. **Android 真机附加**
    - 手机打开 USB 调试并用 adb 连上，游戏包需要可调试（debuggable）
    - 新建运行配置「Lua 真机附加」，选设备和进程后启动
 
-3. **调试设置**在 `Settings` → `Tools` → `EmmyLua 调试`：变量展示规则、MCP 安装等；出错时暂停在断点窗口的「Lua 错误」里打开
+3. **调试设置**在 `Settings` → `Tools` → `EmmyLua 调试`：变量展示规则、MCP 安装、保存后自动重载到 UE 等；出错时暂停在断点窗口的「Lua 错误」里打开
+
+4. **断点不触发**：断点图标变灰时把鼠标放上去看原因；调试中点调试工具栏（或 `Run` 菜单）的「诊断断点」，能看到游戏执行过的 chunk 名、每个断点的匹配结果，有建议的映射时可以一键应用
 
 ## 🔧 支持的 IDE 版本
 
@@ -133,10 +140,16 @@ end
 - **Android Studio**
 
 **版本要求：**
-- **最新版本：** 2025.2+ （推荐）
-- **最低版本：** 2025.1+
-- **Java 版本：** JDK 17+ （2025.1），JDK 21+ （2025.2）
+- **最低版本：** 2025.2，之后的版本（2025.3、2026.x）都能装，CI 逐个大版本做兼容校验
 - **依赖插件：** LSP4IJ（安装时 IDE 自动提示）
+
+## ⚠️ 已知限制
+
+- **调试只支持 Windows 本机附加和 Android 真机附加。** macOS / Linux 上语言支持正常，但不能调试；iOS 不支持（不改包没有可靠方案）。
+- **不支持 LuaJIT。** 附加到 LuaJIT 进程会直接提示；插件面向 UE + UnLua（Lua 5.4），Windows 附加也支持 Lua 5.1–5.3。Android 真机只支持 Lua 5.4。
+- **没有内嵌模式。** 游戏里 `require("emmy_core")` 再 `tcpListen` 的旧用法已经去掉，只能附加。
+- **断点所在函数会变慢。** 没有断点、断点在别的文件时游戏基本不受影响；但正在执行的函数里有断点时，这个函数每一行都要回调一次调试器，紧循环可能慢一个数量级（Lua 钩子本身的开销）。调完记得删掉这类断点。数字见 [native/emmy_debugger_core/README.md](native/emmy_debugger_core/README.md#性能)。
+- **Android 真机附加需要可调试的包和对应的符号。** 正式签名包只能在 root 设备上附加（暂不支持）。
 
 ## 📝 更新日志
 

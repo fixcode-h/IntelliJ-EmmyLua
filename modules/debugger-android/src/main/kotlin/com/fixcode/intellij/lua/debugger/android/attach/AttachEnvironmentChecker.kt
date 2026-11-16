@@ -4,8 +4,11 @@ import com.fixcode.intellij.lua.debugger.android.adb.AdbClient
 import com.fixcode.intellij.lua.debugger.android.adb.AdbException
 import com.fixcode.intellij.lua.debugger.android.adb.AndroidDevices
 import com.fixcode.intellij.lua.debugger.android.adb.DeviceProcess
-import com.fixcode.intellij.lua.debugger.android.elf.LuaSymbolResolver
-import java.io.File
+import com.fixcode.intellij.lua.debugger.android.adb.MappedLibrary
+import com.fixcode.intellij.lua.debugger.android.elf.AttemptStatus
+import com.fixcode.intellij.lua.debugger.android.elf.DeviceLibrary
+import com.fixcode.intellij.lua.debugger.android.elf.LuaSymbolLocator
+import com.fixcode.intellij.lua.debugger.android.elf.SymbolSearchOptions
 
 enum class CheckStatus { OK, WARNING, FAILED }
 
@@ -13,14 +16,15 @@ data class CheckItem(val title: String, val status: CheckStatus, val detail: Str
 
 /**
  * 「检查环境」：逐项检查并说清失败原因（设计文档 10.3）。前一项失败时后面依赖它的项不再检查。
+ * 符号按 [LuaSymbolLocator] 的顺序逐级找，每一级的结果单独一行，用户能看出用的是哪一级、前面几级为什么不行。
  * [adb] 为 null 表示没找到 adb。
  */
 class AttachEnvironmentChecker(
     private val adb: AdbClient?,
     private val agents: AgentBinaryProvider,
-    private val symbolResolver: LuaSymbolResolver,
+    private val symbolLocator: LuaSymbolLocator,
 ) {
-    fun check(serial: String?, packageName: String?, symbolFile: File?, moduleName: String = "libUnreal.so"): List<CheckItem> {
+    fun check(serial: String?, packageName: String?, options: SymbolSearchOptions, moduleName: String = "libUnreal.so"): List<CheckItem> {
         val items = ArrayList<CheckItem>()
         if (adb == null) {
             items += CheckItem("adb", CheckStatus.FAILED, "没有找到 adb", "安装 Android SDK Platform-Tools，或在设置里指定 adb 路径")
@@ -61,22 +65,70 @@ class AttachEnvironmentChecker(
                 "附加时游戏需要在前台；如果 Android Studio 正连着这个应用，请先断开")
         }
 
-        var symbolAbi: String? = null
-        var symbolBuildId: String? = null
-        if (symbolFile == null) {
-            items += CheckItem("符号", CheckStatus.FAILED, "没有找到未裁剪的 $moduleName",
-                "在运行配置里指定打包时保留的 so（一般在 Binaries/Android 或 Intermediate/Android 下）")
-        } else {
-            try {
-                val table = symbolResolver.resolve(symbolFile)
-                symbolAbi = table.abi
-                symbolBuildId = table.buildId
-                items += CheckItem("符号", if (table.usable) (if (table.missingOptional.isEmpty()) CheckStatus.OK else CheckStatus.WARNING) else CheckStatus.FAILED,
-                    table.describe(), if (table.usable) null else "确认指定的是静态链接了 Lua 的未裁剪 so")
-            } catch (e: Exception) {
-                items += CheckItem("符号", CheckStatus.FAILED, e.message ?: "读取失败", "确认文件是未裁剪的 ELF so")
+        // 应用和进程：拿到设备上的 so（运行中看 maps，没运行看安装目录 / APK）和它的 Build ID
+        var lib: MappedLibrary? = null
+        if (!packageName.isNullOrBlank()) {
+            if (!AndroidDevices.isValidPackage(packageName)) {
+                items += CheckItem("应用", CheckStatus.FAILED, "包名格式不对：$packageName")
+                return items
+            }
+            val runAs = adb.shell(device.serial, "run-as $packageName id")
+            val runAsOut = (runAs.stdout + runAs.stderr).trim()
+            if (!runAs.ok || !runAsOut.contains("uid=")) {
+                items += CheckItem("应用", CheckStatus.FAILED,
+                    when {
+                        runAsOut.contains("not debuggable") -> "$packageName 不可调试"
+                        runAsOut.contains("unknown package") -> "设备上没有安装 $packageName"
+                        else -> "run-as 失败：$runAsOut"
+                    },
+                    "安装 Development 包（android:debuggable=true）；正式签名包只能在 root 设备上附加，暂不支持")
+                return items
+            }
+            items += CheckItem("应用", CheckStatus.OK, "$packageName 可调试")
+
+            val pid = devices.findPid(device.serial, packageName)
+            if (pid == null) {
+                items += CheckItem("进程", CheckStatus.WARNING, "$packageName 没有在运行", "先启动游戏，或勾选「启动应用并附加」")
+                lib = try {
+                    devices.installedLibrary(device.serial, packageName, moduleName, device.abiList)
+                } catch (_: AdbException) {
+                    null
+                }
+            } else {
+                lib = devices.mappedLibrary(device.serial, DeviceProcess(pid, packageName, true), moduleName)
+                items += if (lib == null) {
+                    CheckItem("进程", CheckStatus.WARNING, "进程 $pid 里还没有加载 $moduleName", "等游戏进入主界面后再附加")
+                } else {
+                    CheckItem("进程", CheckStatus.OK, "进程 $pid 已加载 $moduleName")
+                }
             }
         }
+        val remoteId = lib?.let { devices.remoteBuildId(device.serial, packageName!!, it) }
+
+        // 符号：逐级兜底，每一级的结果都列出来
+        val deviceLib = lib?.let { l -> DeviceLibrary(remoteId, "${device.serial}:${l.path}") { devices.openRemoteElf(device.serial, packageName!!, l) } }
+        val lookup = try {
+            symbolLocator.locate(options.copy(moduleName = moduleName), deviceLib)
+        } catch (e: Exception) {
+            items += CheckItem("符号", CheckStatus.FAILED, e.message ?: "查找符号失败")
+            return items
+        }
+        val table = lookup.table
+        for (a in lookup.attempts) {
+            val status = when (a.status) {
+                AttemptStatus.USED -> CheckStatus.OK
+                else -> if (table != null) CheckStatus.WARNING else if (a.status == AttemptStatus.SKIPPED) CheckStatus.WARNING else CheckStatus.FAILED
+            }
+            items += CheckItem("符号来源 · ${a.source.label}", status, a.detail)
+        }
+        items += if (table != null) {
+            CheckItem("符号", if (table.missingOptional.isEmpty()) CheckStatus.OK else CheckStatus.WARNING,
+                "使用${table.source.label}：${table.describe()}")
+        } else {
+            CheckItem("符号", CheckStatus.FAILED, lookup.failureMessage().substringBefore('\n'),
+                "保留这次构建的未裁剪 so 并在运行配置里指定；或在设置里加符号目录（按 Build ID 匹配）；或在设置里指定参考 so（按特征码查找）")
+        }
+        val symbolAbi = table?.abi
         if (symbolAbi != null) {
             items += when {
                 device.abiList.isNotEmpty() && symbolAbi !in device.abiList ->
@@ -86,44 +138,12 @@ class AttachEnvironmentChecker(
                 else -> CheckItem("ABI", CheckStatus.OK, "$symbolAbi，agent 已就绪")
             }
         }
-
-        if (packageName.isNullOrBlank()) return items
-        if (!AndroidDevices.isValidPackage(packageName)) {
-            items += CheckItem("应用", CheckStatus.FAILED, "包名格式不对：$packageName")
-            return items
-        }
-        val runAs = adb.shell(device.serial, "run-as $packageName id")
-        val runAsOut = (runAs.stdout + runAs.stderr).trim()
-        if (!runAs.ok || !runAsOut.contains("uid=")) {
-            items += CheckItem("应用", CheckStatus.FAILED,
-                when {
-                    runAsOut.contains("not debuggable") -> "$packageName 不可调试"
-                    runAsOut.contains("unknown package") -> "设备上没有安装 $packageName"
-                    else -> "run-as 失败：$runAsOut"
-                },
-                "安装 Development 包（android:debuggable=true）；正式签名包只能在 root 设备上附加，暂不支持")
-            return items
-        }
-        items += CheckItem("应用", CheckStatus.OK, "$packageName 可调试")
-
-        val pid = devices.findPid(device.serial, packageName)
-        if (pid == null) {
-            items += CheckItem("进程", CheckStatus.WARNING, "$packageName 没有在运行", "先启动游戏，或勾选「启动应用并附加」")
-            return items
-        }
-        val lib = devices.mappedLibrary(device.serial, DeviceProcess(pid, packageName, true), moduleName)
-        if (lib == null) {
-            items += CheckItem("进程", CheckStatus.WARNING, "进程 $pid 里还没有加载 $moduleName", "等游戏进入主界面后再附加")
-            return items
-        }
-        items += CheckItem("进程", CheckStatus.OK, "进程 $pid 已加载 $moduleName")
-        if (symbolBuildId != null) {
-            val remote = devices.remoteBuildId(device.serial, packageName, lib)
+        if (lib != null && table != null) {
             items += when {
-                remote == null -> CheckItem("Build ID", CheckStatus.WARNING, "无法读取设备上的 Build ID，附加时由 agent 校验")
-                remote.equals(symbolBuildId, ignoreCase = true) -> CheckItem("Build ID", CheckStatus.OK, "与设备一致")
+                remoteId == null -> CheckItem("Build ID", CheckStatus.WARNING, "无法读取设备上的 Build ID，附加时由 agent 校验")
+                remoteId.equals(table.buildId, ignoreCase = true) -> CheckItem("Build ID", CheckStatus.OK, "与设备一致")
                 else -> CheckItem("Build ID", CheckStatus.FAILED,
-                    "本地 ${symbolBuildId.take(12)}…，设备 ${remote.take(12)}…，不是同一次构建",
+                    "本地 ${table.buildId.take(12)}…，设备 ${remoteId.take(12)}…，不是同一次构建",
                     "指定这次安装包对应的未裁剪 so，或重新打包安装")
             }
         }

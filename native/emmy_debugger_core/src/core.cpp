@@ -163,6 +163,8 @@ void Core::Deactivate(Session* session) {
 	}
 	configuredCv_.notify_all();
 	ClearBreakpoints();
+	// 采样是这个会话开的：IDE 断开后没人取结果，停掉，游戏回到零开销
+	for (auto& vm : Vms()) vm->profiler().Stop();
 	// 断开：暂停中的 VM 立刻恢复；运行中的 VM 在下一次钩子事件里摘掉调试器的钩子
 	NotifyVms(kFlagSession | kFlagDetach | kFlagRefresh);
 }

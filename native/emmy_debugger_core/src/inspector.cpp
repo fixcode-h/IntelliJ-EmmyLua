@@ -216,9 +216,12 @@ json Inspector::TopFrame() {
 	lua_getinfo(L, "nSl", &ar);
 	json f;
 	f["frameId"] = NewFrameId(L, skip_);
-	f["name"] = ar.name ? ar.name : "?";
+	f["name"] = ar.name ? ar.name : (ar.what && std::strcmp(ar.what, "main") == 0 ? "main chunk" : "?");
+	f["what"] = ar.what ? ar.what : "Lua";
 	f["chunkName"] = ar.source ? ar.source : "=?";
 	f["line"] = ar.currentline;
+	f["lineDefined"] = ar.linedefined;
+	f["lastLineDefined"] = ar.lastlinedefined;
 	return f;
 }
 

@@ -47,9 +47,12 @@ class EmmyLuaMcpServer(
             -> lua_debug_session action=step or continue -> wait again.
             To watch values without freezing the game: lua_debug_breakpoints action=add with capture=[paths] and auto_continue=true,
             then lua_debug_inspect action=probes. Print output and Lua errors: lua_debug_inspect action=output (pass next as cursor).
+            Slow scene: lua_debug_inspect action=profile duration_ms=3000 while it runs -> hottest Lua functions (self/total %).
             The first control action on a session and every attach ask the user in the IDE; on permission_denied ask the user, do not retry.
             eval defaults to read-only value paths (self.items[3].id, #list); mode=lua is off unless the user enabled it.
             Refs and frames die when the VM continues; on stale_reference fetch the stack again.
+            UE/UnLua: after editing scripts, lua_debug_session action=reload files=[...] (or changed=true) hot-reloads them
+            into the open UE editor/game through UELink, no restart and no debug session needed.
             Lines are 1-based, frame 0 is the top. Results are compact JSON; errors are {"error": code, "message": what to do}.
         """.trimIndent()
 
@@ -69,13 +72,19 @@ class EmmyLuaMcpServer(
             | A value | `lua_debug_inspect` action=`eval` expr="self.items[3].id" |
             | Step | `lua_debug_session` action=`step` kind=over/into/out/toLine |
             | print output, Lua errors | `lua_debug_inspect` action=`output` (cursor = previous next) |
+            | Which Lua functions are slow | `lua_debug_inspect` action=`profile` duration_ms (≤ 60000) sort=self/total limit; the game keeps running |
             | Clean up | `lua_debug_breakpoints` action=`clear` (only the agent's breakpoints) |
+            | Hot-reload edited UnLua scripts into the open UE editor / game | `lua_debug_session` action=`reload` files=[...] / modules=[...] / changed=true |
 
             - The user's own breakpoints are listed without `byAgent`; leave them alone.
             - While a VM is stopped the game thread is frozen: continue when done.
+            - `profile` samples the Lua call stack every 1000 VM instructions: `selfPct` is time in the function itself, `totalPct` includes
+              callees. It counts Lua instructions, not time inside C / engine calls, and Lua runs about 2x slower while sampling.
+              Trigger the slow scene during the window; 0 samples means no Lua ran (paused, or the scene did not run).
             - `verified: false` means the script is not loaded yet or the line has no code; it binds when the script loads.
             - Errors: `invalid_argument`, `unknown_tool`, `engine_unavailable`, `no_session`, `not_paused`, `stale_reference`,
-              `permission_denied`, `eval_forbidden`, `not_supported`, `timeout`, `attach_failed`, `internal_error`.
+              `permission_denied`, `eval_forbidden`, `not_supported`, `timeout`, `attach_failed`, `target_not_found`, `internal_error`.
+            - `reload` needs UELink (UEKit) in the UE project and UnLua; no UE editor or game running -> `target_not_found`.
         """.trimIndent()
     }
 }

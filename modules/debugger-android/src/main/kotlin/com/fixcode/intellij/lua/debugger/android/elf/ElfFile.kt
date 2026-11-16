@@ -14,7 +14,7 @@ import java.nio.file.StandardOpenOption
  * 未裁剪的 libUnreal.so 常见 1~3 GB，超过 MappedByteBuffer 的 2 GB 上限，
  * 所以这里全部按偏移读取（FileChannel.read），不整体映射，也不把整张字符串表读进内存。
  */
-class ElfFile private constructor(private val channel: FileChannel, val path: String) : Closeable {
+class ElfFile private constructor(private val source: ByteSource, val path: String) : Closeable {
 
     val is64: Boolean
     val machine: Int
@@ -108,8 +108,12 @@ class ElfFile private constructor(private val channel: FileChannel, val path: St
      * 遍历符号表（.symtab 优先，再 .dynsym）。[nameFilter] 先按字节判断，
      * 通过后才构造字符串，避免给几十万个符号都分配 String。
      */
-    fun forEachSymbol(nameFilter: (ByteArray, Int, Int) -> Boolean, consumer: (ElfSymbol) -> Unit) {
-        for (tableName in listOf(".symtab", ".dynsym")) {
+    fun forEachSymbol(
+        nameFilter: (ByteArray, Int, Int) -> Boolean,
+        tables: List<String> = listOf(".symtab", ".dynsym"),
+        consumer: (ElfSymbol) -> Unit,
+    ) {
+        for (tableName in tables) {
             val table = section(tableName) ?: continue
             if (table.link !in sections.indices) continue
             val strtab = sections[table.link]
@@ -137,7 +141,7 @@ class ElfFile private constructor(private val channel: FileChannel, val path: St
         val buf = ByteBuffer.allocate(length).order(ByteOrder.LITTLE_ENDIAN)
         var pos = offset
         while (buf.hasRemaining()) {
-            val n = channel.read(buf, pos)
+            val n = source.read(buf, pos)
             if (n < 0) throw ElfFormatException("文件被截断：$path（偏移 $pos）")
             pos += n
         }
@@ -145,9 +149,29 @@ class ElfFile private constructor(private val channel: FileChannel, val path: St
         return buf
     }
 
-    internal val fileSize: Long get() = channel.size()
+    /** 文件大小；远程读取（设备上的 so）时可能未知，返回 [Long.MAX_VALUE]。 */
+    internal val fileSize: Long get() = source.size
 
-    override fun close() = channel.close()
+    override fun close() = source.close()
+
+    /** 读 [length] 字节到新数组。 */
+    fun readBytes(offset: Long, length: Int): ByteArray {
+        val b = read(offset, length)
+        return ByteArray(length).also { b.get(it) }
+    }
+
+    /** 可执行的 PT_LOAD 段：特征码只在这些段里搜。 */
+    fun executableSegments(): List<ProgramHeader> =
+        programHeaders.filter { it.type == PT_LOAD && (it.flags and PF_X) != 0 && it.fileSize > 0 }
+
+    /** 虚拟地址 → 文件偏移（按 PT_LOAD 换算）；不在任何段的文件内容里返回 null。 */
+    fun vaddrToOffset(vaddr: Long): Long? {
+        for (p in programHeaders) {
+            if (p.type != PT_LOAD) continue
+            if (vaddr >= p.vaddr && vaddr < p.vaddr + p.fileSize) return p.offset + (vaddr - p.vaddr)
+        }
+        return null
+    }
 
     private fun parseProgramHeader(b: ByteBuffer, o: Int): ProgramHeader = if (is64) ProgramHeader(
         type = b.getInt(o),
@@ -212,18 +236,24 @@ class ElfFile private constructor(private val channel: FileChannel, val path: St
         const val EM_X86_64 = 62
         const val EM_AARCH64 = 183
         const val PT_LOAD = 1
+        const val PF_X = 1
         const val PT_NOTE = 4
         const val SHT_NOTE = 7
         const val STT_FUNC = 2
         const val SHN_UNDEF = 0
         private const val NT_GNU_BUILD_ID = 3
 
-        fun open(file: File): ElfFile {
-            val ch = FileChannel.open(file.toPath(), StandardOpenOption.READ)
+        fun open(file: File): ElfFile = open(FileByteSource(FileChannel.open(file.toPath(), StandardOpenOption.READ)), file.path)
+
+        /** 内存里的 ELF，例如 .gnu_debugdata 解压出来的 MiniDebugInfo。 */
+        fun fromBytes(bytes: ByteArray, name: String): ElfFile = open(ArrayByteSource(bytes), name)
+
+        /** 任意来源（例如经 adb 按需读取的设备 so）。打开失败时会关闭 [source]。 */
+        fun open(source: ByteSource, name: String): ElfFile {
             try {
-                return ElfFile(ch, file.path)
+                return ElfFile(source, name)
             } catch (e: Throwable) {
-                ch.close()
+                source.close()
                 throw e
             }
         }
@@ -264,6 +294,30 @@ class ElfFile private constructor(private val channel: FileChannel, val path: St
             return String(bytes, Charsets.UTF_8)
         }
     }
+}
+
+/** ELF 的字节来源：本地文件、内存、或经 adb 按需读取的设备文件。只需要按偏移读。 */
+interface ByteSource : Closeable {
+    /** 从 [position] 读到 [dst]，返回读到的字节数；文件结束返回 -1。 */
+    fun read(dst: ByteBuffer, position: Long): Int
+    val size: Long
+    override fun close() {}
+}
+
+class FileByteSource(private val channel: FileChannel) : ByteSource {
+    override fun read(dst: ByteBuffer, position: Long): Int = channel.read(dst, position)
+    override val size: Long get() = channel.size()
+    override fun close() = channel.close()
+}
+
+class ArrayByteSource(private val bytes: ByteArray) : ByteSource {
+    override fun read(dst: ByteBuffer, position: Long): Int {
+        if (position >= bytes.size) return -1
+        val n = minOf(dst.remaining().toLong(), bytes.size - position).toInt()
+        dst.put(bytes, position.toInt(), n)
+        return n
+    }
+    override val size: Long get() = bytes.size.toLong()
 }
 
 private fun ByteBuffer.u32(o: Int): Long = getInt(o).toLong() and 0xffffffffL

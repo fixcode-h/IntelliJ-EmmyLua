@@ -129,6 +129,11 @@ class CompositeLuaDebugBackend(private val members: () -> List<Member>) : LuaDeb
         return OutputPage(entries, pages.maxOfOrNull { it.nextSeq } ?: sinceSeq)
     }
 
+    override fun startProfile(sessionId: String, vmId: String?, durationMs: Int) = bySession(sessionId).startProfile(sessionId, vmId, durationMs)
+
+    override fun stopProfile(sessionId: String, vmId: String?, sort: ProfileSort, limit: Int) =
+        bySession(sessionId).stopProfile(sessionId, vmId, sort, limit)
+
     override fun getProbeHits(breakpointId: String?, sinceSeq: Long, limit: Int): ProbeHitPage {
         val members = all()
         if (members.size == 1) return members[0].backend.getProbeHits(breakpointId, sinceSeq, limit)
@@ -136,6 +141,10 @@ class CompositeLuaDebugBackend(private val members: () -> List<Member>) : LuaDeb
         val hits = pages.flatMap { it.hits }.sortedBy { it.timestampMillis }.take(limit)
         return ProbeHitPage(hits, pages.maxOfOrNull { it.nextSeq } ?: sinceSeq)
     }
+
+    /** 给了文件时按第一个文件所属的项目发（UE 项目根从项目目录往上找）；否则发给当前焦点项目。 */
+    override fun reloadModules(request: ReloadRequest): CompletableFuture<ReloadResult> =
+        (request.files.firstOrNull()?.let { byFile(it) } ?: primary()).reloadModules(request)
 
     override fun sourceSnippet(file: String, line: Int, radius: Int): List<SourceLine>? =
         all().firstNotNullOfOrNull { it.backend.sourceSnippet(file, line, radius) }

@@ -1,0 +1,6 @@
+<!-- 拼写检查是平台的可选模块：在时挂上 Lua 词典 -->
+<idea-plugin>
+    <extensions defaultExtensionNs="com.intellij">
+        <spellchecker.bundledDictionaryProvider implementation="com.fixcode.intellij.lua.spellchecker.LuaBundledDictionaryProvider"/>
+    </extensions>
+</idea-plugin>
