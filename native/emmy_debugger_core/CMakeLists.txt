@@ -105,6 +105,7 @@ set(EMMY_CORE_SOURCES
     src/hook_mux.cpp
     src/inspector.cpp
     src/host_value.cpp
+    src/rich_view.cpp
     src/vm.cpp
     src/session.cpp
     src/transport.cpp

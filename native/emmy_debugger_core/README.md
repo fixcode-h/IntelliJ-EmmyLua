@@ -67,8 +67,19 @@ Emmy_UnregisterLuaVm(L);                      // lua_close 之前
 - 断点所在函数自己的紧循环逃不掉 Lua 行钩子（每条指令都要判断），比旧架构的空钩子仍好，但达不到 2x；这一项的目标需要按函数粒度重新定。
 - 条件断点单次判断约 0.07 µs（目标 ≤ 2 µs）。
 
+## 变量视图（richVariables）
+
+hello 的 `caps` 里**明确写了** `richVariables` 才开（不写 caps 的老客户端拿到的还是 v3.0 的形状）。`variables` 收 `view`（`auto` / `raw`）和 `maxValueLength`（16–1024，默认 256），`setOptions.variableView` 收 13.5 的各项。实现在 `src/rich_view.cpp`：
+
+- 每个值给 `kind`、`objectId`、字符串的 `length`、函数和协程的 `location`；table 按 4.1 分 `array` / `record` / `object` / `class` / `module`，类名按 6.3 推断（`__name` → `__cname` 等字段 → `package.loaded` 反查，每次暂停建一次反查表、按元表缓存）。
+- 第一次展开 table 时建键快照（数组段 + 按 5.1 智能排序的字段段），之后每页只 `rawget` 这一页的值；键超过 `maxSortKeys` 不排序并回 `sorted: false`。`filter=indexed` 按下标区间分页。
+- 首页回 `groups`：方法、`__index` 链每层的「继承自 X」（被更近一层覆盖的标 `shadowed`）、「`__index` 是函数」、「元表 X」（元方法在前、标 `metamethod`）、全局作用域的「内置」、局部变量的「临时值」（`showTemporaries`）、宿主认领的表的「UE 对象」。
+- 局部变量里被遮蔽的同名外层变量也列出（`attrs: ["shadowed"]`），upvalue 不列 `_ENV`。
+- 一页估算超过 256 KiB 就少给几项并回 `truncated: true`。
+- 全程只用 rawget / lua_next / rawlen / lua_getinfo / lua_getlocal / lua_getupvalue，不调元方法。
+
 ## 还没做
 
 - `exceptions` 能力（错误时暂停）；`setOptions.exceptions` 只接受 `none`。
 - helper（`emmyHelper.queryVariable`）参与变量展示：脚本已能加载执行，还没接到 `variables`。
-- 变量视图的 `richVariables` / `viewRules`（[docs/design/variable-view.md](../../docs/design/variable-view.md) 13.1–13.5：智能排序、分组、继承成员、显示规则）。宿主值提供者已做，子项里的 `kind` / `hint` / `attrs` / `length` 已经输出。
+- 变量视图（[docs/design/variable-view.md](../../docs/design/variable-view.md)）还差：`variables.expand`（10.4 一次往返恢复展开）、`setViewRules` / 能力 `viewRules`（11.1）、`__tostring` 的安全调用（12，`toString` 选项先收下不生效）、协程的「调用栈」分组（4.6）、helper v2（11.2）。

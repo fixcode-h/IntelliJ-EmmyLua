@@ -6,6 +6,7 @@
 
 #include <chrono>
 #include <cstdio>
+#include <cstring>
 #include <random>
 #include <thread>
 #include <unordered_map>
@@ -28,7 +29,7 @@ namespace {
 
 const char* const kRuntimeCaps[] = {
 	"cbor", "valuePath", "luaEval", "setVariable", "condition", "hitCondition", "logpoint", "capture",
-	"runToLine", "coroutines", "output", "helpers", "sourceHash", "hookMux",
+	"runToLine", "coroutines", "output", "helpers", "sourceHash", "hookMux", "richVariables",
 };
 
 const char* PlatformName() {
@@ -289,8 +290,9 @@ void Session::CmdHello(uint64_t id, const json& args) {
 	json clientCaps = args.contains("caps") && args["caps"].is_array() ? args["caps"] : json();
 	json caps = json::array();
 	for (const char* c : kRuntimeCaps) {
-		bool want = clientCaps.is_null();
-		if (!want) {
+		// richVariables 改变 variables 的返回形状，只给明确要它的客户端
+		bool want = clientCaps.is_null() && std::strcmp(c, "richVariables") != 0;
+		if (!want && !clientCaps.is_null()) {
 			for (auto& x : clientCaps) {
 				if (x.is_string() && x.get<std::string>() == c) want = true;
 			}
@@ -306,6 +308,10 @@ void Session::CmdHello(uint64_t id, const json& args) {
 		return;
 	}
 	handshaken_ = true;
+	// Activate 会重置选项，所以协商结果放在它之后
+	for (auto& c : caps) {
+		if (c.get<std::string>() == "richVariables") core.options().richVariables = true;
+	}
 	json vms = json::array();
 	for (auto& vm : core.Vms()) vms.push_back(vm->Info());
 	json body = {
@@ -409,6 +415,34 @@ void Session::CmdSetOptions(uint64_t id, const json& args) {
 	}
 	if (args.contains("pauseLatencyMs") && args["pauseLatencyMs"].is_number_integer()) {
 		o.pauseLatencyMs = std::max(1, std::min(1000, args["pauseLatencyMs"].get<int>()));
+	}
+	if (args.contains("variableView") && args["variableView"].is_object()) {
+		const json& v = args["variableView"];
+		auto flag = [&](const char* k, std::atomic<bool>& dst) {
+			if (v.contains(k) && v[k].is_boolean()) dst = v[k].get<bool>();
+		};
+		if (v.contains("sort") && v["sort"].is_string()) {
+			const std::string m = v["sort"].get<std::string>();
+			if (m == "smart") o.viewSort = 0;
+			else if (m == "name") o.viewSort = 1;
+			else if (m == "none") o.viewSort = 2;
+			else return Fail(id, "INVALID_ARGS", "variableView.sort 只能是 smart / name / none。");
+		}
+		if (v.contains("toString") && v["toString"].is_string()) {
+			const std::string m = v["toString"].get<std::string>();
+			if (m == "tables") o.viewToString = 0;
+			else if (m == "all") o.viewToString = 1;
+			else if (m == "never") o.viewToString = 2;
+			else return Fail(id, "INVALID_ARGS", "variableView.toString 只能是 tables / all / never。");
+		}
+		flag("groupMethods", o.viewGroupMethods);
+		flag("showInherited", o.viewShowInherited);
+		flag("showMetatable", o.viewShowMetatable);
+		flag("hideStdGlobals", o.viewHideStdGlobals);
+		flag("showTemporaries", o.viewShowTemporaries);
+		if (v.contains("maxSortKeys") && v["maxSortKeys"].is_number_integer()) {
+			o.viewMaxSortKeys = std::max(0, std::min(1000000, v["maxSortKeys"].get<int>()));
+		}
 	}
 	if (args.contains("exceptions") && args["exceptions"].is_string() && args["exceptions"].get<std::string>() != "none") {
 		return Fail(id, "UNSUPPORTED", "这个 runtime 还不支持出错即停（缺少能力 exceptions）。");
@@ -576,12 +610,23 @@ void Session::CmdPaused(uint64_t id, const std::string& command, const json& arg
 	eo.invokeIndex = o.valuePathInvokeIndex.load();
 	eo.timeoutMs = o.evalTimeoutMs.load();
 	eo.maxLength = static_cast<size_t>(std::max(16, std::min(1 << 20, GetInt(args, "maxLength", 1024))));
+	ViewOptions vo;
+	vo.rich = o.richVariables.load() && GetStr(args, "view", "auto") != "raw";
+	vo.sort = o.viewSort.load();
+	vo.groupMethods = o.viewGroupMethods.load();
+	vo.showInherited = o.viewShowInherited.load();
+	vo.showMetatable = o.viewShowMetatable.load();
+	vo.hideStdGlobals = o.viewHideStdGlobals.load();
+	vo.showTemporaries = o.viewShowTemporaries.load();
+	vo.maxSortKeys = o.viewMaxSortKeys.load();
+	vo.maxValueLength = static_cast<size_t>(std::max(16, std::min(1024, GetInt(args, "maxValueLength", 256))));
 	std::weak_ptr<Session> weak = shared_from_this();
-	vm->Post([vm, weak, id, command, args, objId, eo](lua_State*) {
+	vm->Post([vm, weak, id, command, args, objId, eo, vo](lua_State*) {
 		auto s = weak.lock();
 		if (!s) return;
 		if (!vm->paused()) return s->Fail(id, "STALE_REFERENCE", "这次暂停已经结束（游戏已继续运行）。");
 		Inspector& ins = vm->inspector();
+		ins.SetView(vo);
 		json body;
 		ProtocolError err;
 		bool ok = false;

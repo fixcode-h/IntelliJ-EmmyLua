@@ -31,6 +31,16 @@ struct Options {
 	std::atomic<int> evalTimeoutMs{1000};
 	std::atomic<int> caseSensitive{-1}; // -1 按平台默认
 	std::atomic<int> pauseLatencyMs{20};
+	// variable-view 13.1 / 13.5：hello 协商到 richVariables 才生效
+	std::atomic<bool> richVariables{false};
+	std::atomic<int> viewSort{0}; // 0 smart / 1 name / 2 none
+	std::atomic<bool> viewGroupMethods{true};
+	std::atomic<bool> viewShowInherited{true};
+	std::atomic<bool> viewShowMetatable{true};
+	std::atomic<bool> viewHideStdGlobals{true};
+	std::atomic<bool> viewShowTemporaries{false};
+	std::atomic<int> viewMaxSortKeys{10000};
+	std::atomic<int> viewToString{0}; // 0 tables / 1 all / 2 never（__tostring 还没接，先记下）
 
 	bool CaseSensitive() const;
 	void Reset();

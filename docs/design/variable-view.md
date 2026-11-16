@@ -517,6 +517,8 @@ emmy.registerFormatter {
 | `richVariables` | 13.2–13.3 的所有新参数、新字段和新排序 |
 | `viewRules` | `setViewRules`（13.4） |
 
+`richVariables` 改变 `variables` 的返回形状，所以 runtime 只在 `hello.caps` **明确列出**它时开启；不带 `caps` 的客户端（「全要」）拿到的仍是 v3.0 的形状。
+
 ### 13.2 `Variable` 新增字段
 
 | 字段 | 类型 | 说明 |

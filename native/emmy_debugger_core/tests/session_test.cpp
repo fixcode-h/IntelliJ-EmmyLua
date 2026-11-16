@@ -9,7 +9,9 @@
 #include <atomic>
 #include <chrono>
 #include <cstring>
+#include <map>
 #include <thread>
+#include <vector>
 
 using namespace emmy;
 using emmy::test::TestClient;
@@ -479,6 +481,176 @@ TEST_CASE("session.host_value_provider") {
 	CHECK(Ok(Continue(c, pz)));
 	CHECK(g_hostReleases.load() >= 1);
 	CHECK_EQ(Emmy_UnregisterHostValueProviderV2(pid), 0);
+	c.Request("disconnect");
+}
+
+TEST_CASE("session.rich_variables") {
+	TestClient c;
+	CHECK(c.Connect("127.0.0.1", g_port));
+	json hello = Hello(c, json::array({"valuePath", "luaEval", "richVariables"}));
+	CHECK(Ok(hello));
+	bool rich = false;
+	for (auto& cap : hello["body"]["caps"]) if (cap == "richVariables") rich = true;
+	CHECK(rich);
+	g_rev = 0;
+	CHECK(Ok(SetBps(c, json::array({Bp("rv", 9)}))));
+	CHECK(Ok(c.Request("configurationDone")));
+	json pz = c.WaitEvent("paused");
+	CHECK(pz.is_object());
+	if (!pz.is_object()) return;
+	uint64_t vmId = pz["body"]["vmId"], pauseId = pz["body"]["pauseId"];
+	json stack = c.Request("stackTrace", {{"vmId", vmId}, {"pauseId", pauseId}});
+	uint64_t frameId = stack["body"]["frames"][0]["frameId"];
+
+	// 一个两层继承的对象：Base 在 package.loaded 里，Panel 用 __cname 声明类名
+	const char* build = R"L((function()
+  local Base = {} Base.__index = Base
+  function Base:Show(a, b) end
+  Base.speed = 5
+  Base.name = "base"
+  package.loaded["UI.BaseView"] = Base
+  local Panel = setmetatable({}, {__index = Base})
+  Panel.__index = Panel
+  Panel.__cname = "BagPanel"
+  function Panel:OnItemClick(index) end
+  Panel.name = "panel"
+  local o = setmetatable({item10 = 1, item2 = 2, Name = "N", name = "x", [7] = 0, ["display name"] = 1, [true] = 1,
+    10, 20, 30, string.rep("ab", 40)}, Panel)
+  o.onClick = function() end
+  return o
+end)())L";
+	json ev = c.Request("evaluate", {{"frameId", frameId}, {"expression", build}, {"mode", "lua"}});
+	CHECK(Ok(ev));
+	if (!Ok(ev)) { std::printf("%s\n", ev.dump().c_str()); CHECK(Ok(Continue(c, pz))); return; }
+	CHECK_EQ(ev["body"]["kind"].get<std::string>(), std::string("object"));
+	CHECK_EQ(ev["body"]["typeName"].get<std::string>(), std::string("BagPanel"));
+	CHECK(ev["body"]["value"].get<std::string>().rfind("BagPanel{", 0) == 0);
+	CHECK(ev["body"].contains("objectId"));
+	uint64_t oRef = ev["body"]["ref"];
+
+	json ov = c.Request("variables", {{"ref", oRef}, {"maxValueLength", 16}});
+	CHECK(Ok(ov));
+	std::vector<std::string> names;
+	for (auto& v : ov["body"]["variables"]) names.push_back(v["name"].get<std::string>());
+	const std::vector<std::string> want = {"[1]", "[2]", "[3]", "[4]", "item2", "item10", "Name", "name",
+		"[\"display name\"]", "[7]", "[true]"};
+	CHECK(names == want);
+	if (names != want) {
+		for (auto& n : names) std::printf("  name: %s\n", n.c_str());
+	}
+	CHECK_EQ(ov["body"]["total"].get<int>(), 11);
+	CHECK(ov["body"]["sorted"].get<bool>());
+	for (auto& v : ov["body"]["variables"]) {
+		if (v["name"] == "[4]") {
+			CHECK_EQ(v["length"].get<int>(), 80);
+			CHECK(v["value"].get<std::string>().find("（共 80 字节）") != std::string::npos);
+		}
+		if (v["name"] == "item2") {
+			CHECK(!v.contains("evaluateName")); // lua 模式求值的结果没有路径
+#if EMMY_LUA_VERSION_NUM >= 503
+			CHECK_EQ(v["kind"].get<std::string>(), std::string("integer"));
+#endif
+		}
+	}
+	std::map<std::string, json> groups;
+	for (auto& g : ov["body"]["groups"]) groups[g["name"].get<std::string>()] = g;
+	CHECK(groups.count("方法"));
+	CHECK(groups.count("继承自 BagPanel"));
+	CHECK(groups.count("继承自 BaseView"));
+	CHECK(groups.count("元表 BagPanel"));
+	if (groups.count("方法")) {
+		CHECK_EQ(groups["方法"]["namedCount"].get<int>(), 1);
+		json m = c.Request("variables", {{"ref", groups["方法"]["ref"]}});
+		CHECK_EQ(m["body"]["variables"][0]["name"].get<std::string>(), std::string("onClick"));
+		CHECK_EQ(m["body"]["variables"][0]["kind"].get<std::string>(), std::string("function"));
+		CHECK(m["body"]["variables"][0].contains("location"));
+	}
+	if (groups.count("继承自 BaseView")) {
+		CHECK_EQ(groups["继承自 BaseView"]["value"].get<std::string>(), std::string("module UI.BaseView"));
+		json b = c.Request("variables", {{"ref", groups["继承自 BaseView"]["ref"]}});
+		CHECK(Ok(b));
+		std::vector<std::string> bn;
+		for (auto& v : b["body"]["variables"]) bn.push_back(v["name"].get<std::string>());
+		CHECK((bn == std::vector<std::string>{"name", "speed", "Show"}));
+		for (auto& v : b["body"]["variables"]) {
+			bool shadowed = false, inherited = false;
+			for (auto& a : v.value("attrs", json::array())) {
+				if (a == "shadowed") shadowed = true;
+				if (a == "inherited") inherited = true;
+			}
+			CHECK(inherited);
+			CHECK_EQ(shadowed, v["name"] == "name");
+#if EMMY_LUA_VERSION_NUM >= 502
+			if (v["name"] == "Show") CHECK_EQ(v["value"].get<std::string>(), std::string("function BaseView:Show(a, b)"));
+#endif
+		}
+	}
+	if (groups.count("元表 BagPanel")) {
+		json m = c.Request("variables", {{"ref", groups["元表 BagPanel"]["ref"]}});
+		CHECK(Ok(m));
+		// 元方法排最前
+		auto& vars = m["body"]["variables"];
+		CHECK_EQ(vars[0]["name"].get<std::string>(), std::string("__index"));
+		CHECK_EQ(vars[0]["attrs"][0].get<std::string>(), std::string("metamethod"));
+		CHECK_EQ(vars[1]["name"].get<std::string>(), std::string("__cname"));
+		CHECK(!vars[1].contains("attrs"));
+	}
+	// 数组段按下标区间分页；分组只在首页
+	json idx = c.Request("variables", {{"ref", oRef}, {"filter", "indexed"}, {"start", 1}, {"count", 2}});
+	CHECK(Ok(idx));
+	CHECK_EQ(idx["body"]["variables"].size(), static_cast<size_t>(2));
+	CHECK_EQ(idx["body"]["variables"][0]["name"].get<std::string>(), std::string("[2]"));
+	CHECK_EQ(idx["body"]["total"].get<int>(), 4);
+	CHECK(!idx["body"].contains("groups"));
+	json named = c.Request("variables", {{"ref", oRef}, {"filter", "named"}, {"start", 2}, {"count", 2}});
+	CHECK_EQ(named["body"]["variables"][0]["name"].get<std::string>(), std::string("Name"));
+	CHECK_EQ(named["body"]["total"].get<int>(), 7);
+	// 原始视图：v3.0 的形状，元表是伪项
+	json raw = c.Request("variables", {{"ref", oRef}, {"view", "raw"}});
+	bool hasMetaItem = false;
+	for (auto& v : raw["body"]["variables"]) if (v["name"] == "(metatable)") hasMetaItem = true;
+	CHECK(hasMetaItem);
+	CHECK(!raw["body"].contains("groups"));
+
+	// 类表
+	json cls = c.Request("evaluate", {{"frameId", frameId}, {"expression", "package.loaded['UI.BaseView']"}, {"mode", "lua"}});
+	CHECK_EQ(cls["body"]["kind"].get<std::string>(), std::string("class"));
+	CHECK_EQ(cls["body"]["value"].get<std::string>(), std::string("class BaseView (1 个方法)"));
+
+	// 作用域：局部变量按声明顺序；全局里标准库收进「内置」；upvalue 不列 _ENV
+	json scopes = c.Request("scopes", {{"frameId", frameId}});
+	uint64_t localsRef = 0, upRef = 0, globalsRef = 0;
+	for (auto& s : scopes["body"]["scopes"]) {
+		if (s["name"] == "locals") localsRef = s["ref"];
+		if (s["name"] == "upvalues") upRef = s["ref"];
+		if (s["name"] == "globals") globalsRef = s["ref"];
+	}
+	json lv = c.Request("variables", {{"ref", localsRef}});
+	CHECK_EQ(lv["body"]["variables"][0]["name"].get<std::string>(), std::string("i"));
+	for (auto& v : lv["body"]["variables"]) {
+		if (v["name"] == "t") CHECK_EQ(v["kind"].get<std::string>(), std::string("record"));
+	}
+	if (upRef) {
+		json uv = c.Request("variables", {{"ref", upRef}});
+		for (auto& v : uv["body"]["variables"]) CHECK(v["name"] != "_ENV");
+	}
+	json gv = c.Request("variables", {{"ref", globalsRef}, {"count", 1000}});
+	CHECK(Ok(gv));
+	bool hasPrint = false, hasBuiltins = false;
+	for (auto& v : gv["body"]["variables"]) if (v["name"] == "print") hasPrint = true;
+	for (auto& g : gv["body"]["groups"]) if (g["name"] == "内置") hasBuiltins = true;
+	CHECK(!hasPrint);
+	CHECK(hasBuiltins);
+
+	// 关掉方法分组和元表后重取
+	CHECK(Ok(c.Request("setOptions", {{"variableView", {{"groupMethods", false}, {"showMetatable", false}}}})));
+	json ev2 = c.Request("evaluate", {{"frameId", frameId}, {"expression", "package.loaded['UI.BaseView']"}, {"mode", "lua"}});
+	json bv = c.Request("variables", {{"ref", ev2["body"]["ref"]}});
+	for (auto& g : bv["body"].value("groups", json::array())) CHECK(g["name"].get<std::string>().rfind("元表", 0) != 0);
+	CHECK_EQ(c.Request("setOptions", {{"variableView", {{"sort", "bogus"}}}})["error"]["code"].get<std::string>(), std::string("INVALID_ARGS"));
+
+	CHECK(Ok(SetBps(c, json::array())));
+	CHECK(Ok(Continue(c, pz)));
 	c.Request("disconnect");
 }
 

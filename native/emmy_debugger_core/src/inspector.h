@@ -21,6 +21,19 @@ struct ProtocolError {
 	std::string message;
 };
 
+// variable-view 13.3 / 13.5：本次请求的显示方式。rich=false 时完全按 v3.0 原文
+struct ViewOptions {
+	bool rich = false;
+	int sort = 0; // 0 smart / 1 name / 2 none
+	bool groupMethods = true;
+	bool showInherited = true;
+	bool showMetatable = true;
+	bool hideStdGlobals = true;
+	bool showTemporaries = false;
+	int maxSortKeys = 10000;
+	size_t maxValueLength = 256;
+};
+
 struct EvalOptions {
 	bool allowLua = true;
 	bool invokeIndex = false;
@@ -45,6 +58,9 @@ struct VariableItem {
 	std::string hint;
 	std::vector<std::string> attrs;
 	int64_t length = -1;
+	std::string objectId;
+	std::string locationChunk; // location = { chunkName, line }
+	int locationLine = 0;
 
 	json ToJson() const;
 };
@@ -57,6 +73,10 @@ public:
 	void BeginPause(lua_State* L);
 	void EndPause(lua_State* L);
 	bool active() const { return pausedL_ != nullptr; }
+
+	// 每条协议命令前设置（Session 按协商的能力和请求参数算好）
+	void SetView(const ViewOptions& v) { view_ = v; }
+	const ViewOptions& view() const { return view_; }
 
 	// ---- 协议命令（暂停中） ----
 	bool StackTrace(int start, int count, json& body, ProtocolError& err);
@@ -88,7 +108,20 @@ private:
 		int level = 0;
 	};
 	// HostList：子项来自宿主值提供者（slot 处的值，或 hostRef 句柄）
-	enum class RefKind { Locals, Upvalues, Varargs, Globals, Value, HostList };
+	// Group：底部分组，子项来自 slot 处的表、键在建分组时就定好；Static：子项是现成的 VariableItem
+	enum class RefKind { Locals, Upvalues, Varargs, Globals, Value, HostList, Group, Static };
+	enum : uint8_t { kAttrInherited = 1, kAttrShadowed = 2, kAttrMetamethod = 4 };
+	// 键快照里的一项（variable-view 10.2）：数组段只记下标，其他键放进锚表，C++ 只记槽位
+	struct RichKey {
+		int64_t index = 0;   // 数组段的下标
+		int keySlot = 0;     // 其他键在锚表里的槽位
+		bool indexed = false;
+		uint8_t attrs = 0;
+		std::string name;    // 显示名（5.2）
+		std::string nameType;
+		std::string field;   // 字符串键原文（函数名用）
+		std::string evaluateName;
+	};
 	struct RefEntry {
 		RefKind kind = RefKind::Value;
 		uint64_t frameId = 0;
@@ -99,6 +132,16 @@ private:
 		uint64_t providerId = 0; // 被宿主值提供者认领的值
 		std::string hostRef;
 		std::string hostSummary;
+		// richVariables
+		bool keysBuilt = false;
+		bool sorted = true;
+		size_t arrayKeys = 0; // keys 前面多少项是数组段
+		int64_t arrayLen = 0; // rawlen，filter=indexed 时的 total
+		std::vector<RichKey> keys;
+		bool richBuilt = false;
+		std::vector<VariableItem> richChildren;
+		std::vector<VariableItem> groups;
+		std::string owner; // 子项函数名的前缀（类名）
 	};
 
 	uint64_t NewFrameId(lua_State* thread, int level);
@@ -118,6 +161,22 @@ private:
 	bool LookupRoot(lua_State* L, lua_State* thread, int level, const std::string& name);
 	bool IndexValue(lua_State* L, const struct PathSegment& seg, bool invokeIndex, std::string& err);
 	std::string FormatNumber(lua_State* L, int idx);
+	// ---- richVariables（rich_view.cpp） ----
+	static void RichEvalFields(const VariableItem& item, json& body);
+	bool RichVariables(RefEntry& entry, int start, int count, const std::string& filter, json& body);
+	void MakeItemRich(lua_State* L, int idx, VariableItem& item, const std::string& evaluateName,
+		const std::string& field, const std::string& owner);
+	void RichTable(lua_State* L, int idx, VariableItem& item);
+	void RichFunction(lua_State* L, int idx, VariableItem& item, const std::string& field, const std::string& owner);
+	void BuildRichFrame(RefEntry& entry);
+	void BuildTableKeys(RefEntry& entry, int obj);
+	void BuildGroups(RefEntry& entry, int obj, const std::vector<std::string>& ownKeys);
+	uint64_t NewGroup(int sourceSlot, std::vector<RichKey> keys, bool sorted);
+	void SortKeys(lua_State* L, std::vector<RichKey>& keys, bool& sorted);
+	std::string RichKeyName(lua_State* L, int keyIdx);
+	std::string NestedSummary(lua_State* L, int idx);
+	std::string ClassName(lua_State* L, int idx);
+	const std::string& LoadedName(lua_State* L, int idx);
 	std::string TableSummary(lua_State* L, int idx, size_t maxLen);
 
 	Vm& vm_;
@@ -133,6 +192,11 @@ private:
 	int64_t evalDeadlineMs_ = 0;
 	std::vector<uint64_t> usedProviders_; // 本次暂停里调用过的宿主值提供者，暂停结束时通知释放
 	uint64_t pauseIdForHost_ = 0;
+	ViewOptions view_;
+	// 本次暂停内的缓存（variable-view 14.4）
+	std::unordered_map<const void*, std::string> classNames_;
+	std::unordered_map<const void*, std::string> loadedNames_;
+	bool loadedBuilt_ = false;
 };
 
 } // namespace emmy

@@ -36,6 +36,15 @@ void Options::Reset() {
 	evalTimeoutMs = 1000;
 	caseSensitive = -1;
 	pauseLatencyMs = 20;
+	richVariables = false;
+	viewSort = 0;
+	viewGroupMethods = true;
+	viewShowInherited = true;
+	viewShowMetatable = true;
+	viewHideStdGlobals = true;
+	viewShowTemporaries = false;
+	viewMaxSortKeys = 10000;
+	viewToString = 0;
 }
 
 // ---------------------------------------------------------------- Core
