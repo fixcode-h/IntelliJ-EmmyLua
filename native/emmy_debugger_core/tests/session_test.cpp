@@ -1029,6 +1029,98 @@ end)())L");
 	c.Request("disconnect");
 }
 
+TEST_CASE("session.profile_sampling") {
+	TestClient c;
+	CHECK(c.Connect("127.0.0.1", g_port));
+	json hello = Hello(c, json::array({"profiler"}));
+	CHECK(Ok(hello));
+	bool hasCap = false;
+	for (auto& cap : hello["body"]["caps"]) if (cap == "profiler") hasCap = true;
+	CHECK(hasCap);
+	CHECK(Ok(c.Request("configurationDone")));
+	g_rev = 0;
+	CHECK(Ok(SetBps(c, json::array())));
+
+	CHECK_EQ(c.Request("profile", {{"action", "bogus"}})["error"]["code"].get<std::string>(), std::string("INVALID_ARGS"));
+	CHECK_EQ(c.Request("profile", {{"action", "start"}, {"intervalInstructions", 5}})["error"]["code"].get<std::string>(),
+		std::string("INVALID_ARGS"));
+	CHECK_EQ(c.Request("profile", {{"action", "result"}, {"vmId", 999}})["error"]["code"].get<std::string>(), std::string("VM_NOT_FOUND"));
+
+	json st = c.Request("profile", {{"action", "start"}, {"intervalInstructions", 100}});
+	CHECK(Ok(st));
+	CHECK_EQ(st["body"]["vms"].size(), static_cast<size_t>(1));
+	std::this_thread::sleep_for(std::chrono::milliseconds(500));
+	json r = c.Request("profile", {{"action", "result"}, {"sort", "total"}, {"limit", 10}});
+	CHECK(Ok(r));
+	CHECK(r["body"]["running"].get<bool>());
+	CHECK(r["body"]["samples"].get<uint64_t>() > 0);
+	bool hasTick = false, hasAdd = false;
+	double tickTotal = 0;
+	for (auto& f : r["body"]["functions"]) {
+		if (f["source"] == "@game/main.lua" && f["line"] == 7) { // tick 总是从宿主 lua_pcall 进来，没有名字
+			hasTick = true;
+			tickTotal = f["totalPercent"].get<double>();
+		}
+		if (f["fn"] == "add" && f["line"] == 3) hasAdd = true;
+	}
+	CHECK(hasTick);
+	CHECK(hasAdd);
+	CHECK(tickTotal > 50.0); // 游戏线程每次进 Lua 都从 tick 开始
+	CHECK(r["body"]["functions"].size() <= static_cast<size_t>(10));
+	bool foldedOk = false;
+	for (auto& sk : r["body"]["stacks"]) {
+		const std::string text = sk["stack"].get<std::string>();
+		if (text.find("(game/main.lua:7);add (game/main.lua:3)") != std::string::npos) foldedOk = true;
+	}
+	CHECK(foldedOk);
+
+	// 暂停在断点时不采样
+	CHECK(Ok(SetBps(c, json::array({Bp("bp-9", 9)}))));
+	json p = c.WaitEvent("paused");
+	CHECK(p.is_object());
+	if (p.is_object()) {
+		uint64_t before = c.Request("profile", {{"action", "result"}})["body"]["samples"].get<uint64_t>();
+		std::this_thread::sleep_for(std::chrono::milliseconds(200));
+		uint64_t after = c.Request("profile", {{"action", "result"}})["body"]["samples"].get<uint64_t>();
+		CHECK_EQ(before, after);
+		CHECK(Ok(SetBps(c, json::array())));
+		CHECK(Ok(Continue(c, p)));
+	}
+
+	json stop = c.Request("profile", {{"action", "stop"}, {"stackLimit", 0}});
+	CHECK(Ok(stop));
+	CHECK(!stop["body"]["running"].get<bool>());
+	CHECK(stop["body"]["stacks"].empty());
+	CHECK(stop["body"]["stacksTruncated"].get<bool>());
+	// 停了以后钩子摘掉（没有断点时完全不挂钩子）
+	bool cleared = false;
+	for (int i = 0; i < 200 && !cleared; ++i) {
+		std::this_thread::sleep_for(std::chrono::milliseconds(5));
+		cleared = g_game->hookCleared.load();
+	}
+	CHECK(cleared);
+
+	// 限时采样：到点自动停
+	CHECK(Ok(c.Request("profile", {{"action", "start"}, {"durationMs", 100}})));
+	bool autoStopped = false;
+	for (int i = 0; i < 100 && !autoStopped; ++i) {
+		std::this_thread::sleep_for(std::chrono::milliseconds(10));
+		autoStopped = !c.Request("profile", {{"action", "result"}})["body"]["running"].get<bool>();
+	}
+	CHECK(autoStopped);
+
+	// 断开时停掉采样
+	CHECK(Ok(c.Request("profile", {{"action", "start"}})));
+	c.Request("disconnect");
+	c.Close();
+	cleared = false;
+	for (int i = 0; i < 200 && !cleared; ++i) {
+		std::this_thread::sleep_for(std::chrono::milliseconds(5));
+		cleared = g_game->hookCleared.load();
+	}
+	CHECK(cleared);
+}
+
 int main() {
 	g_port = 39000 + static_cast<int>(std::chrono::steady_clock::now().time_since_epoch().count() % 2000);
 	char err[256] = {0};

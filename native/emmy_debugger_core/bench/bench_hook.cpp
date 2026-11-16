@@ -4,9 +4,13 @@
 //   baseline          没注册 VM
 //   registered        注册了 VM，但没有 IDE 连接（目标 1.00x）
 //   connected         IDE 已连接，没有任何断点（目标 ≤ 1.05x）
-//   bp_other_file     断点在别的文件（目标 ≤ 1.3x）
-//   bp_same_file      断点在正在执行的文件、但不在执行到的行（目标 ≤ 2x）
+//   bp_other_file     断点在别的文件（只作参照，见 README「性能」）
+//   bp_same_file      断点在正在执行的文件、但不在执行到的行（只作参照）
+//   profiling         IDE 已连接、没有断点，开着采样分析（默认每 1000 条指令采一次）。只作参照：挂了 COUNT 钩子后
+//                     Lua 5.3 / 5.4 解释器每条指令都要进 luaG_traceexec，这部分开销和采样间隔无关，见 README「采样性能分析」
+//   profiling_10k     同上，每 10000 条指令采一次（和上一行比，看出采样回调本身的份额）
 //   ref_call_hook     参照：只挂 CALL、回调什么都不做（任何「按函数判断」方案在 Lua 层面的下限）
+//   ref_count_hook    参照：只挂 COUNT（每 1000 条指令）、回调什么都不做（采样分析在 Lua 层面的下限）
 //   legacy_line_hook  参照：常开 LINE|CALL|RET、回调什么都不做（旧架构的下限，旧实现每行还要加锁和复制断点表）
 // 另外单独量条件断点的单次判断耗时（目标 ≤ 2 µs）。
 //
@@ -156,7 +160,10 @@ int main(int argc, char** argv) {
 		// 下面两项是 Lua CALL / LINE 钩子本身的开销，不改 Lua 降不下来，2026-11-16 起只作参照（README「性能」）
 		{"bp_other_file", 0},
 		{"bp_same_file", 0},
+		{"profiling", 0},
+		{"profiling_10k", 0},
 		{"ref_call_hook", 0},
+		{"ref_count_hook", 0},
 		{"legacy_line_hook", 0},
 	};
 
@@ -172,6 +179,8 @@ int main(int argc, char** argv) {
 		for (const Workload& w : kWorkloads) ms["baseline"][w.name] = Measure(L, mod, w, repeat);
 		lua_sethook(L, &EmptyHook, LUA_MASKCALL, 0);
 		for (const Workload& w : kWorkloads) ms["ref_call_hook"][w.name] = Measure(L, mod, w, repeat);
+		lua_sethook(L, &EmptyHook, LUA_MASKCOUNT, 1000);
+		for (const Workload& w : kWorkloads) ms["ref_count_hook"][w.name] = Measure(L, mod, w, repeat);
 		lua_sethook(L, &EmptyHook, LUA_MASKLINE | LUA_MASKCALL | LUA_MASKRET, 0);
 		for (const Workload& w : kWorkloads) ms["legacy_line_hook"][w.name] = Measure(L, mod, w, repeat);
 		lua_close(L);
@@ -190,6 +199,24 @@ int main(int argc, char** argv) {
 	ide.Request("configurationDone");
 	Settle(L, mod);
 	for (const Workload& w : kWorkloads) ms["connected"][w.name] = Measure(L, mod, w, repeat);
+
+	// 采样分析：开着采样跑同样的负载，另外算每个样本的平均耗时（采样回调自己量的）
+	json profileStats = json::object();
+	auto profileRun = [&](const char* scenario, int interval) {
+		ide.Request("profile", {{"action", "start"}, {"intervalInstructions", interval}});
+		Settle(L, mod);
+		ide.Request("profile", {{"action", "start"}, {"intervalInstructions", interval}}); // 清掉 Settle 的样本
+		for (const Workload& w : kWorkloads) ms[scenario][w.name] = Measure(L, mod, w, repeat);
+		json r = ide.Request("profile", {{"action", "stop"}, {"stackLimit", 0}, {"limit", 1}});
+		const json& b = r["body"];
+		uint64_t samples = b.value("samples", static_cast<uint64_t>(0));
+		double overheadMs = b.value("overheadMs", 0.0);
+		profileStats[scenario] = {{"samples", samples}, {"overheadMs", overheadMs},
+			{"usPerSample", samples ? overheadMs * 1000.0 / static_cast<double>(samples) : 0.0}};
+		Settle(L, mod); // 让钩子摘掉
+	};
+	profileRun("profiling", 1000);
+	profileRun("profiling_10k", 10000);
 
 	uint64_t rev = 0;
 	auto setBp = [&](const char* path, int line, json extra = json::object()) {
@@ -242,6 +269,11 @@ int main(int argc, char** argv) {
 	}
 	std::printf("\n条件断点单次判断：%.2f µs（目标 ≤ 2 µs）\n", condUs);
 	report["conditionUs"] = condUs;
+	for (auto& kv : profileStats.items()) {
+		std::printf("%s：%llu 个样本，平均每个 %.2f µs\n", kv.key().c_str(),
+			static_cast<unsigned long long>(kv.value()["samples"].get<uint64_t>()), kv.value()["usPerSample"].get<double>());
+	}
+	report["profile"] = profileStats;
 	if (check && condUs > 2.0 * 1.15) failed = true;
 
 	if (!jsonOut.empty()) {

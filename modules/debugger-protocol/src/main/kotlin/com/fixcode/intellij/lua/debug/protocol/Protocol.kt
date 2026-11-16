@@ -33,6 +33,8 @@ object Commands {
     const val EVALUATE = "evaluate"
     const val SET_VARIABLE = "setVariable"
     const val SET_VIEW_RULES = "setViewRules"
+    /** 采样性能分析（第 20 节，能力 profiler）。 */
+    const val PROFILE = "profile"
     const val CANCEL = "cancel"
     const val PING = "ping"
     const val DISCONNECT = "disconnect"
@@ -71,11 +73,13 @@ object Capabilities {
     const val RICH_VARIABLES = "richVariables"
     /** setViewRules（variable-view.md 13.4）。 */
     const val VIEW_RULES = "viewRules"
+    /** 采样性能分析 profile（第 20 节）。没协商到时 IDE 不发 profile、不显示采样按钮。 */
+    const val PROFILER = "profiler"
 
     /** IDE 在 hello 里声明想用的能力；最终生效的是 welcome 里的交集。 */
     val CLIENT_WANTED: List<String> = listOf(
         VALUE_PATH, LUA_EVAL, SET_VARIABLE, CONDITION, HIT_CONDITION, LOGPOINT, CAPTURE, RUN_TO_LINE,
-        EXCEPTIONS, COROUTINES, OUTPUT, HELPERS, SOURCE_HASH, TERMINATE, RICH_VARIABLES, VIEW_RULES
+        EXCEPTIONS, COROUTINES, OUTPUT, HELPERS, SOURCE_HASH, TERMINATE, RICH_VARIABLES, VIEW_RULES, PROFILER
     )
 }
 
@@ -175,4 +179,17 @@ object ExceptionModes {
     const val NONE = "none"
     const val UNCAUGHT = "uncaught"
     const val ALL = "all"
+}
+
+/** profile.action（第 20 节）。 */
+object ProfileActions {
+    const val START = "start"
+    const val STOP = "stop"
+    const val RESULT = "result"
+}
+
+/** profile.sort：函数表按自身样本还是总样本排序。 */
+object ProfileSorts {
+    const val SELF = "self"
+    const val TOTAL = "total"
 }

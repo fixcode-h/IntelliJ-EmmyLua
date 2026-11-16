@@ -50,6 +50,10 @@ import com.fixcode.intellij.lua.debugger.mcp.LuaDebugBackendException
 import com.fixcode.intellij.lua.debugger.mcp.OutputCategory
 import com.fixcode.intellij.lua.debugger.mcp.OutputEntry
 import com.fixcode.intellij.lua.debugger.mcp.OutputPage
+import com.fixcode.intellij.lua.debugger.mcp.ProfileFunction
+import com.fixcode.intellij.lua.debugger.mcp.ProfileReport
+import com.fixcode.intellij.lua.debugger.mcp.ProfileSort
+import com.fixcode.intellij.lua.debug.protocol.ProfileSorts
 import com.fixcode.intellij.lua.debugger.mcp.PauseInfo
 import com.fixcode.intellij.lua.debugger.mcp.PauseReason
 import com.fixcode.intellij.lua.debugger.mcp.ProbeHit
@@ -627,6 +631,36 @@ class LuaEngineMcpBackend(private val project: Project) : LuaDebugBackend, Dispo
         line = hit.line,
         values = hit.captures.associate { it.expression to (it.error?.let { e -> "<$e>" } ?: it.value) }
     )
+
+    // ---- 采样性能分析（协议第 20 节） ----
+
+    override fun startProfile(sessionId: String, vmId: String?, durationMs: Int): CompletableFuture<Unit> =
+        mapErrors(engine(sessionId).profileStart(vmId?.let(::parseVm) ?: 0L, durationMs = durationMs).thenApply { })
+
+    override fun stopProfile(sessionId: String, vmId: String?, sort: ProfileSort, limit: Int): CompletableFuture<ProfileReport> {
+        val engine = engine(sessionId)
+        val wire = if (sort == ProfileSort.TOTAL) ProfileSorts.TOTAL else ProfileSorts.SELF
+        // Agent 只看函数表，不要折叠栈（stackLimit = 0），帧小、回得快
+        return mapErrors(engine.profileStop(vmId?.let(::parseVm) ?: 0L, wire, limit, stackLimit = 0)).thenApply { r ->
+            ProfileReport(
+                samples = r.samples,
+                durationMs = r.durationMs,
+                functions = r.functions.map { f ->
+                    ProfileFunction(
+                        name = f.fn,
+                        file = if (f.isC || f.source.isEmpty()) null else engine.localPathOfChunk(f.source) ?: f.source.removePrefix("@"),
+                        line = f.line,
+                        selfSamples = f.selfSamples, totalSamples = f.totalSamples,
+                        selfPercent = f.selfPercent, totalPercent = f.totalPercent,
+                    )
+                },
+                totalFunctions = r.totalFunctions,
+                intervalInstructions = r.intervalInstructions,
+                overheadMs = r.overheadMs,
+                pausedSkipped = r.pausedSkipped,
+            )
+        }
+    }
 
     override fun sourceSnippet(file: String, line: Int, radius: Int): List<SourceLine>? {
         val f = File(file)

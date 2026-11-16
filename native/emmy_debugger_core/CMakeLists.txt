@@ -110,6 +110,7 @@ set(EMMY_CORE_SOURCES
     src/value_path.cpp
     src/lua_internal.cpp
     src/hook_mux.cpp
+    src/profiler.cpp
     src/inspector.cpp
     src/host_value.cpp
     src/rich_view.cpp

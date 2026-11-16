@@ -117,6 +117,17 @@ internal object ResultJson {
         "values" to h.values,
     )
 
+    /** 采样函数表的一行：百分比保留一位小数（Agent 看排名，不需要更细），样本数给出判断可信度。 */
+    fun profileFunction(f: ProfileFunction): Map<String, Any?> = obj(
+        "fn" to f.name,
+        "file" to f.file,
+        "line" to f.line.takeIf { it > 0 },
+        "selfPct" to Math.round(f.selfPercent * 10) / 10.0,
+        "totalPct" to Math.round(f.totalPercent * 10) / 10.0,
+        "selfSamples" to f.selfSamples,
+        "totalSamples" to f.totalSamples,
+    )
+
     fun output(e: OutputEntry): Map<String, Any?> = obj(
         "seq" to e.seq,
         "cat" to e.category.name.lowercase(),

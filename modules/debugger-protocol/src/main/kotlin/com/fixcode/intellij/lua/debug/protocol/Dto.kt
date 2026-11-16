@@ -732,6 +732,120 @@ data class SetVariableArgs(val ref: Long, val name: String, val value: String, v
     }
 }
 
+// ---------- 采样性能分析（第 20 节，能力 profiler） ----------
+
+/**
+ * profile 的参数。vmId = 0 表示所有 VM（start / stop 作用于全部，result 合并全部）。
+ * intervalInstructions、durationMs 只有 start 用；sort、limit、stackLimit 只有 stop / result 用。
+ */
+data class ProfileArgs(
+    val action: String,
+    val vmId: Long = 0,
+    val intervalInstructions: Int? = null,
+    val durationMs: Int? = null,
+    val sort: String? = null,
+    val limit: Int? = null,
+    val stackLimit: Int? = null
+) : JsonDto {
+    override fun toJson() = jsonObject {
+        put("action", action); if (vmId != 0L) put("vmId", vmId); put("intervalInstructions", intervalInstructions)
+        put("durationMs", durationMs); put("sort", sort); put("limit", limit); put("stackLimit", stackLimit)
+    }
+
+    companion object {
+        fun fromJson(json: JsonObject) = ProfileArgs(
+            json.reqString("action"), json.optLong("vmId") ?: 0, json.optInt("intervalInstructions"), json.optInt("durationMs"),
+            json.optString("sort"), json.optInt("limit"), json.optInt("stackLimit")
+        )
+    }
+}
+
+data class ProfileStartResult(val vms: List<Long>, val intervalInstructions: Int, val durationMs: Int = 0) : JsonDto {
+    override fun toJson() = jsonObject { putLongs("vms", vms); put("intervalInstructions", intervalInstructions); put("durationMs", durationMs) }
+
+    companion object {
+        fun fromJson(json: JsonObject) = ProfileStartResult(
+            json.longs("vms"), json.optInt("intervalInstructions") ?: 0, json.optInt("durationMs") ?: 0
+        )
+    }
+}
+
+/** 函数表的一行。source 是 chunkName 原样（C 函数为 "=[C]"），line 是 linedefined（C 函数 -1、主 chunk 0）。 */
+data class ProfileFunctionDto(
+    val fn: String,
+    val source: String,
+    val line: Int,
+    val selfSamples: Long,
+    val totalSamples: Long,
+    val selfPercent: Double,
+    val totalPercent: Double
+) : JsonDto {
+    val isC: Boolean get() = source == "=[C]"
+
+    override fun toJson() = jsonObject {
+        put("fn", fn); put("source", source); put("line", line); put("selfSamples", selfSamples); put("totalSamples", totalSamples)
+        put("selfPercent", selfPercent); put("totalPercent", totalPercent)
+    }
+
+    companion object {
+        fun fromJson(json: JsonObject) = ProfileFunctionDto(
+            json.optString("fn") ?: "?", json.optString("source") ?: "", json.optInt("line") ?: 0,
+            json.optLong("selfSamples") ?: 0, json.optLong("totalSamples") ?: 0,
+            json.optDouble("selfPercent") ?: 0.0, json.optDouble("totalPercent") ?: 0.0
+        )
+    }
+}
+
+/** 折叠栈：stack 是根在前、';' 分隔的帧（与 flamegraph.pl / speedscope 的 .folded 格式一致）。 */
+data class ProfileStackDto(val stack: String, val samples: Long) : JsonDto {
+    override fun toJson() = jsonObject { put("stack", stack); put("samples", samples) }
+
+    companion object {
+        fun fromJson(json: JsonObject) = ProfileStackDto(json.optString("stack") ?: "", json.optLong("samples") ?: 0)
+    }
+}
+
+data class ProfileResult(
+    val running: Boolean,
+    val vms: List<Long>,
+    val samples: Long,
+    val durationMs: Long,
+    val intervalInstructions: Int,
+    val functions: List<ProfileFunctionDto>,
+    val totalFunctions: Int,
+    val stacks: List<ProfileStackDto>,
+    val totalStacks: Int,
+    val stacksTruncated: Boolean = false,
+    val overheadMs: Double? = null,
+    val pausedSkipped: Long? = null,
+    val truncatedSamples: Long? = null,
+    val otherSamples: Long? = null
+) : JsonDto {
+    /** 折叠栈文本（每行「帧;帧;帧 次数」），可直接存成 .folded。 */
+    fun folded(): String = buildString { stacks.forEach { append(it.stack).append(' ').append(it.samples).append('\n') } }
+
+    override fun toJson() = jsonObject {
+        put("running", running); putLongs("vms", vms); put("samples", samples); put("durationMs", durationMs)
+        put("intervalInstructions", intervalInstructions); putObjects("functions", functions); put("totalFunctions", totalFunctions)
+        putObjects("stacks", stacks); put("totalStacks", totalStacks); put("stacksTruncated", stacksTruncated)
+        put("overheadMs", overheadMs); put("pausedSkipped", pausedSkipped); put("truncatedSamples", truncatedSamples)
+        put("otherSamples", otherSamples)
+    }
+
+    companion object {
+        fun fromJson(json: JsonObject): ProfileResult {
+            val functions = json.objects("functions", ProfileFunctionDto::fromJson)
+            val stacks = json.objects("stacks", ProfileStackDto::fromJson)
+            return ProfileResult(
+                json.optBoolean("running") ?: false, json.longs("vms"), json.optLong("samples") ?: 0, json.optLong("durationMs") ?: 0,
+                json.optInt("intervalInstructions") ?: 0, functions, json.optInt("totalFunctions") ?: functions.size,
+                stacks, json.optInt("totalStacks") ?: stacks.size, json.optBoolean("stacksTruncated") ?: false,
+                json.optDouble("overheadMs"), json.optLong("pausedSkipped"), json.optLong("truncatedSamples"), json.optLong("otherSamples")
+            )
+        }
+    }
+}
+
 // ---------- 输出与其他 ----------
 
 data class OutputEvent(

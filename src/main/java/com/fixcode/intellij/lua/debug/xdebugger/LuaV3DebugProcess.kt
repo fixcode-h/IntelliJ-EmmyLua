@@ -19,6 +19,9 @@ import com.intellij.xdebugger.frame.XSuspendContext
 import com.fixcode.intellij.lua.debug.api.LuaDebugSessionModel
 import com.fixcode.intellij.lua.debug.api.LuaDebugTarget
 import com.fixcode.intellij.lua.debug.api.LuaMappingStatus
+import com.fixcode.intellij.lua.debug.api.LuaProfileRow
+import com.fixcode.intellij.lua.debug.api.LuaProfileSnapshot
+import com.fixcode.intellij.lua.debug.api.LuaProfilerModel
 import com.fixcode.intellij.lua.debug.api.LuaSourceMappingEntry
 import com.fixcode.intellij.lua.debug.api.LuaVmInfo
 import com.fixcode.intellij.lua.debug.api.LuaVmState
@@ -38,6 +41,7 @@ import com.fixcode.intellij.lua.debug.protocol.OutputCategories
 import com.fixcode.intellij.lua.debug.protocol.SetOptionsArgs
 import com.intellij.xdebugger.breakpoints.XBreakpoint
 import com.fixcode.intellij.lua.debug.protocol.PauseReasons
+import com.fixcode.intellij.lua.debug.protocol.ProfileResult
 import com.fixcode.intellij.lua.debug.protocol.VmStates
 import com.fixcode.intellij.lua.debugger.LuaDebuggerEditorsProvider
 import com.fixcode.intellij.lua.debugger.LuaLineBreakpointType
@@ -59,7 +63,7 @@ class LuaV3DebugProcess(
     val target: LuaDebugTarget,
     /** 会话结束后要清理的建连资源（例如 adb 转发），在后台线程调用。 */
     private val onClosed: () -> Unit = {}
-) : XDebugProcess(session), LuaDebugSessionModel {
+) : XDebugProcess(session), LuaDebugSessionModel, LuaProfilerModel {
     private val editorsProvider = LuaDebuggerEditorsProvider()
     private val breakpointIds = ConcurrentHashMap<XLineBreakpoint<*>, CompletableFuture<String>>()
     private val subscription: AutoCloseable
@@ -486,6 +490,34 @@ class LuaV3DebugProcess(
             else -> Unit
         }
     }
+
+    // ---------- 调试窗口的「Lua 采样」页（LuaProfilerModel） ----------
+
+    override fun profilerSupported(): Boolean = engine.state.isConnected && engine.supportsProfiler
+
+    override fun startProfiling(): CompletableFuture<Unit> = engine.profileStart().thenApply { }
+
+    // 停止时要完整的函数表和尽量完整的折叠栈（导出用），runtime 那边还有约 8 MiB 的总长度上限
+    override fun stopProfiling(): CompletableFuture<LuaProfileSnapshot> =
+        engine.profileStop(limit = 1000, stackLimit = 10000).thenApply(::toSnapshot)
+
+    override fun profileSnapshot(): CompletableFuture<LuaProfileSnapshot> =
+        engine.profileResult(limit = 1000, stackLimit = 10000).thenApply(::toSnapshot)
+
+    private fun toSnapshot(result: ProfileResult) = LuaProfileSnapshot(
+        running = result.running,
+        samples = result.samples,
+        durationMs = result.durationMs,
+        rows = result.functions.map {
+            LuaProfileRow(
+                it.fn, it.source, it.line, if (it.isC) null else engine.localPathOfChunk(it.source),
+                it.selfSamples, it.totalSamples, it.selfPercent, it.totalPercent
+            )
+        },
+        folded = result.folded(),
+        totalStacks = result.totalStacks,
+        stacksTruncated = result.stacksTruncated,
+    )
 
     /** 接口约定监听器在 EDT 上收到通知。 */
     private fun fireModel(action: (LuaDebugSessionModel.Listener) -> Unit) {

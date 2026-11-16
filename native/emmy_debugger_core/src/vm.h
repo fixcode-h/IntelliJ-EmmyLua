@@ -7,6 +7,7 @@
 #include "inspector.h"
 #include "lua_internal.h"
 #include "lua_shim.h"
+#include "profiler.h"
 #include "nlohmann/json.hpp"
 
 #include <algorithm>
@@ -60,6 +61,7 @@ public:
 	const void* globalState() const { return g_; }
 	HookMux& mux() { return mux_; }
 	Inspector& inspector() { return inspector_; }
+	Profiler& profiler() { return profiler_; }
 
 	// ---- 任意线程 ----
 	void SetName(const std::string& name);
@@ -143,6 +145,7 @@ private:
 	const std::string discovery_;
 	HookMux mux_;
 	Inspector inspector_;
+	Profiler profiler_; // 采样分析（协议 v3 第 20 节）：只在采样期间往 mux_ 注册 COUNT 客户端
 
 	std::mutex infoMutex_;
 	std::string name_;

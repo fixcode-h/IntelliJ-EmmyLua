@@ -41,6 +41,7 @@ EmmyLua 是一个功能强大的 Lua 语言支持插件，专为 IntelliJ IDEA �
 - **UE 一键热重载** - 编辑器右键「重载到 UE」（Ctrl+Alt+R）或设置里打开「保存后自动重载」，经 UELink 让开着的 UE 编辑器 / 游戏重新加载 Lua 模块，不用附加
 - **断点诊断** - 一直没对上代码的断点变灰并在悬停里说明原因；调试工具栏「诊断断点」列出加载过的 chunk 和建议的路径映射
 - **调试控制台** - 交互式调试控制台，支持表达式求值
+- **Lua 采样性能分析** - 调试窗口的「Lua 采样」页开始 / 停止采样，按函数看自身和总计占比、双击跳到源码，可导出折叠栈用 speedscope / flamegraph.pl 看火焰图；Android 真机附加也能用，Agent 用 `lua_debug_inspect action=profile`
 
 ## 🚀 安装方式
 

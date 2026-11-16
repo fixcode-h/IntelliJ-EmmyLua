@@ -171,6 +171,29 @@ class FakeBackend : LuaDebugBackend {
         return CompletableFuture.completedFuture(ReloadResult(listOf(ReloadTargetResult(200, "editor", items, note = "require 兜底"))))
     }
 
+    /** 采样：记录开始参数，stop 时按 sort / limit 返回预置的函数表。 */
+    var profileFunctions: List<ProfileFunction> = listOf(
+        ProfileFunction("Bag:Refresh", "/proj/Bag.lua", 20, 70, 90, 70.0, 90.0),
+        ProfileFunction("tick", "/proj/Main.lua", 5, 10, 100, 10.0, 100.0),
+        ProfileFunction("pairs", null, -1, 20, 20, 20.0, 20.0),
+    )
+    var profileSamples: Long = 100
+    var profileStartedMs: Int? = null
+
+    override fun startProfile(sessionId: String, vmId: String?, durationMs: Int): CompletableFuture<Unit> {
+        commands += "profile start $durationMs"
+        profileStartedMs = durationMs
+        return CompletableFuture.completedFuture(Unit)
+    }
+
+    override fun stopProfile(sessionId: String, vmId: String?, sort: ProfileSort, limit: Int): CompletableFuture<ProfileReport> {
+        commands += "profile stop"
+        val sorted = profileFunctions.sortedByDescending { if (sort == ProfileSort.TOTAL) it.totalSamples else it.selfSamples }
+        return CompletableFuture.completedFuture(
+            ProfileReport(profileSamples, profileStartedMs?.toLong() ?: 0, sorted.take(limit), sorted.size, 1000, 0.4)
+        )
+    }
+
     override fun sourceSnippet(file: String, line: Int, radius: Int) =
         (line - radius..line + radius).map { SourceLine(it, "line $it") }
 }

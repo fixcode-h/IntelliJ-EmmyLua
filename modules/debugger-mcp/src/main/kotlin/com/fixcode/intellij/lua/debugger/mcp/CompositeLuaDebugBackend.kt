@@ -129,6 +129,11 @@ class CompositeLuaDebugBackend(private val members: () -> List<Member>) : LuaDeb
         return OutputPage(entries, pages.maxOfOrNull { it.nextSeq } ?: sinceSeq)
     }
 
+    override fun startProfile(sessionId: String, vmId: String?, durationMs: Int) = bySession(sessionId).startProfile(sessionId, vmId, durationMs)
+
+    override fun stopProfile(sessionId: String, vmId: String?, sort: ProfileSort, limit: Int) =
+        bySession(sessionId).stopProfile(sessionId, vmId, sort, limit)
+
     override fun getProbeHits(breakpointId: String?, sinceSeq: Long, limit: Int): ProbeHitPage {
         val members = all()
         if (members.size == 1) return members[0].backend.getProbeHits(breakpointId, sinceSeq, limit)

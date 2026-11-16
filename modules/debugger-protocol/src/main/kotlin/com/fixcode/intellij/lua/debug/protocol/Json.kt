@@ -33,6 +33,14 @@ fun JsonObject.optInt(name: String): Int? = optLong(name)?.toInt()
 
 fun JsonObject.reqInt(name: String): Int = reqLong(name).toInt()
 
+fun JsonObject.optDouble(name: String): Double? = get(name)?.takeUnless { it.isJsonNull }?.let {
+    try {
+        it.asDouble
+    } catch (error: RuntimeException) {
+        throw DtoException("字段 $name 应为数字")
+    }
+}
+
 fun JsonObject.optBoolean(name: String): Boolean? = get(name)?.takeUnless { it.isJsonNull }?.let {
     if (it.isJsonPrimitive && it.asJsonPrimitive.isBoolean) it.asBoolean else throw DtoException("字段 $name 应为布尔值")
 }
