@@ -366,7 +366,7 @@ FindBreakPoint(ar)       → manager->GetLineSet()：breakpointsMtx 加锁 + 复
 
 **验收方式**：`bench_hook` 和 IDE 侧的假 runtime 延迟测试进 CI，任一指标比基线退步超过 10% 直接失败；真机数字在 P5 结束时用 Android 中端机和 iPhone 各测一轮写进验证文档。
 
-### 5.3 其他原生端改动
+### 5.4 其他原生端改动
 
 | 项 | 改动 |
 | --- | --- |
