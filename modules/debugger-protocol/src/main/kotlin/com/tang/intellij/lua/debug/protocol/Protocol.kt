@@ -135,6 +135,13 @@ object BreakpointStateNames {
     const val INVALID = "invalid"
 }
 
+object ThreadStatuses {
+    const val RUNNING = "running"
+    const val SUSPENDED = "suspended"
+    const val NORMAL = "normal"
+    const val DEAD = "dead"
+}
+
 object ScopeNames {
     const val LOCALS = "locals"
     const val UPVALUES = "upvalues"

@@ -17,13 +17,15 @@ import com.tang.intellij.lua.debug.engine.FrameHandle
 import com.tang.intellij.lua.debug.engine.PauseInfo
 import com.tang.intellij.lua.debug.engine.VmView
 import com.tang.intellij.lua.debug.protocol.ScopeNames
+import com.tang.intellij.lua.debug.protocol.ThreadStatuses
 
 /** 栈分页大小：协议上限 200，一般 50 帧以内就够看。 */
 private const val STACK_PAGE = 50
 
 /**
- * 一次暂停对应的挂起上下文。多个 VM 同时暂停时，每个暂停的 VM 一个执行栈，
- * 用户在线程下拉框里切换（等价于在引擎里切焦点）。
+ * 一次暂停对应的挂起上下文。多个 VM 同时暂停时，每个暂停的 VM 一个执行栈；
+ * runtime 支持协程时，每个 VM 里其他活着的协程也各是一个执行栈（「GameVM · 协程 …」），
+ * 用户在线程下拉框里切换查看它们的栈和变量。
  */
 class LuaV3SuspendContext(
     private val engine: DebugSession,
@@ -39,15 +41,46 @@ class LuaV3SuspendContext(
         return (listOf<XExecutionStack>(active) + others).toTypedArray()
     }
 
+    /** 线程下拉框：先给各 VM 的暂停线程，再按 VM 异步补上协程（协程列表要问 runtime）。 */
+    override fun computeExecutionStacks(container: XExecutionStackContainer) {
+        val vms = engine.vms()
+        val paused = listOf(pause) + engine.pauses().filter { it.vmId != pause.vmId }
+        val main = getExecutionStacks().toList()
+        if (paused.isEmpty()) return container.addExecutionStack(main, true)
+        container.addExecutionStack(main, false)
+        var remaining = paused.size
+        paused.forEach { p ->
+            engine.threads(p).whenComplete { threads, _ ->
+                val coroutines = threads.orEmpty()
+                    .filter { it.threadId != p.threadId && it.status != ThreadStatuses.DEAD && it.status != ThreadStatuses.RUNNING }
+                    .map { t ->
+                        val label = t.name ?: "协程 ${t.threadId.removePrefix("t")}"
+                        LuaV3ExecutionStack(engine, p, "${vmName(vms, p.vmId)} · $label（${statusText(t.status)}）", t.threadId)
+                    }
+                val last = synchronized(this) { --remaining == 0 }
+                if (!container.isObsolete) container.addExecutionStack(coroutines, last)
+            }
+        }
+    }
+
+    private fun statusText(status: String) = when (status) {
+        ThreadStatuses.SUSPENDED -> "挂起"
+        ThreadStatuses.NORMAL -> "等待子协程"
+        else -> status
+    }
+
     private fun vmName(vms: List<VmView>, vmId: Long) = vms.firstOrNull { it.vmId == vmId }?.name ?: "Lua VM #$vmId"
 }
 
 class LuaV3ExecutionStack(
     private val engine: DebugSession,
     val pause: PauseInfo,
-    displayName: String
-) : XExecutionStack(displayName, AllIcons.Debugger.ThreadSuspended) {
-    private val top: XStackFrame? = engine.topFrame(pause)?.let { LuaV3StackFrame(engine, it) }
+    displayName: String,
+    /** 为空表示暂停所在的线程；否则是同一 VM 里另一个协程。 */
+    private val threadId: String? = null
+) : XExecutionStack(displayName, if (threadId == null) AllIcons.Debugger.ThreadSuspended else AllIcons.Debugger.ThreadFrozen) {
+    // 别的协程没有现成的栈顶帧，第一页取回来再说
+    private val top: XStackFrame? = if (threadId == null) engine.topFrame(pause)?.let { LuaV3StackFrame(engine, it) } else null
 
     override fun getTopFrame(): XStackFrame? = top
 
@@ -56,7 +89,7 @@ class LuaV3ExecutionStack(
     }
 
     private fun loadFrames(start: Int, container: XStackFrameContainer) {
-        engine.stackTrace(pause, start, STACK_PAGE).whenComplete { page, error ->
+        engine.stackTrace(pause, start, STACK_PAGE, threadId).whenComplete { page, error ->
             if (container.isObsolete) return@whenComplete
             if (error != null) {
                 container.errorOccurred(messageOf(error))

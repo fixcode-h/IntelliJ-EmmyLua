@@ -31,6 +31,9 @@
         <debug.processFactory implementation="com.tang.intellij.lua.debug.xdebugger.LocalProcessDebugProcessFactory"/>
         <debug.mcpBackend implementation="com.tang.intellij.lua.debug.xdebugger.LuaEngineMcpBackendProvider"/>
     </extensions>
+    <extensions defaultExtensionNs="com.intellij">
+        <xdebugger.breakpointType implementation="com.tang.intellij.lua.debug.xdebugger.LuaExceptionBreakpointType"/>
+    </extensions>
 
     <!-- ===== Android 真机 ===== -->
     <extensions defaultExtensionNs="com.tang.intellij.lua">

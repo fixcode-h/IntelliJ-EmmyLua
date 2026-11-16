@@ -38,6 +38,11 @@ import com.tang.intellij.lua.debug.protocol.StackFrameDto
 import com.tang.intellij.lua.debug.protocol.StackTraceArgs
 import com.tang.intellij.lua.debug.protocol.StackTraceResult
 import com.tang.intellij.lua.debug.protocol.TerminatedEvent
+import com.tang.intellij.lua.debug.protocol.ThreadInfo
+import com.tang.intellij.lua.debug.protocol.ThreadStatuses
+import com.tang.intellij.lua.debug.protocol.ThreadsArgs
+import com.tang.intellij.lua.debug.protocol.ThreadsResult
+import com.tang.intellij.lua.debug.protocol.ExceptionModes
 import com.tang.intellij.lua.debug.protocol.ValueResult
 import com.tang.intellij.lua.debug.protocol.VariablesArgs
 import com.tang.intellij.lua.debug.protocol.VariablesResult
@@ -113,7 +118,7 @@ class DebugSession(
     private val stopFuture = CompletableFuture<Unit>()
 
     private class PendingRequest(val command: String, val future: CompletableFuture<JsonObject>, var timeout: ScheduledFuture<*>?)
-    private data class StackKey(val vmId: Long, val pauseId: Long, val epoch: Long, val start: Int, val count: Int)
+    private data class StackKey(val vmId: Long, val pauseId: Long, val epoch: Long, val start: Int, val count: Int, val threadId: String?)
 
     // ---------- 对外只读快照（任意线程） ----------
     @Volatile
@@ -263,6 +268,8 @@ class DebugSession(
     /** 只发 runtime 认识的项：没有 luaEval 能力不发 allowLuaEval，没有 richVariables 不发 variableView。 */
     private fun effectiveOptions(options: SetOptionsArgs, welcome: Welcome): SetOptionsArgs = options.copy(
         allowLuaEval = options.allowLuaEval?.takeIf { welcome.has(Capabilities.LUA_EVAL) },
+        // 没有 exceptions 能力的 runtime 只接受 none（协议 11 节），其他值不发，避免整条 setOptions 被拒
+        exceptions = options.exceptions?.takeIf { it == ExceptionModes.NONE || welcome.has(Capabilities.EXCEPTIONS) },
         variableView = options.variableView?.takeIf { welcome.has(Capabilities.RICH_VARIABLES) }
     )
 
@@ -831,16 +838,37 @@ class DebugSession(
     // 按需取数据
     // =====================================================================
 
-    fun stackTrace(pause: PauseInfo, start: Int = 0, count: Int = 20): CompletableFuture<StackPage> = callAsync {
+    /**
+     * 取栈。[threadId] 为空时是暂停所在的线程；给了别的协程的 id（来自 [threads]）时取那个协程的栈，
+     * 帧的 frameId 同样绑定这次暂停，变量和求值照常可用。
+     */
+    fun stackTrace(pause: PauseInfo, start: Int = 0, count: Int = 20, threadId: String? = null): CompletableFuture<StackPage> = callAsync {
         ensureCurrent(pause)
-        val key = StackKey(pause.vmId, pause.pauseId, pause.connectionEpoch, start, count)
+        val thread = threadId?.takeIf { it != pause.threadId }
+        val key = StackKey(pause.vmId, pause.pauseId, pause.connectionEpoch, start, count, thread)
         stackCache[key]?.let { return@callAsync CompletableFuture.completedFuture(it) }
-        request(Commands.STACK_TRACE, StackTraceArgs(pause.target(), start, count).toJson()).handle { body, error ->
+        val target = if (thread == null) pause.target() else pause.target().copy(threadId = thread)
+        request(Commands.STACK_TRACE, StackTraceArgs(target, start, count).toJson()).handle { body, error ->
             if (error != null) throw staleOr(error)
             val result = StackTraceResult.fromJson(body)
             val page = StackPage(result.frames.map { FrameHandle(pause, it, localPathOf(it)) }, result.total)
             if (pauses.isCurrent(pause)) stackCache[key] = page
             page
+        }
+    }
+
+    /**
+     * 暂停的 VM 里的协程（含主线程）。runtime 没有 coroutines 能力时只返回暂停所在的线程。
+     * 列表可能不完整：没被引用的协程会被 GC（协议 6.4）。
+     */
+    fun threads(pause: PauseInfo): CompletableFuture<List<ThreadInfo>> = callAsync {
+        ensureCurrent(pause)
+        if (!hasCapability(Capabilities.COROUTINES)) {
+            return@callAsync CompletableFuture.completedFuture(listOf(ThreadInfo(pause.threadId ?: "main", ThreadStatuses.RUNNING, "main")))
+        }
+        request(Commands.THREADS, ThreadsArgs(pause.vmId, pause.pauseId).toJson()).handle { body, error ->
+            if (error != null) throw staleOr(error)
+            ThreadsResult.fromJson(body).threads
         }
     }
 
