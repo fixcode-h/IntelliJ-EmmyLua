@@ -181,8 +181,9 @@ class McpServer(
             linkedMapOf("error" to "internal_error", "message" to "${e.javaClass.simpleName}: ${e.message}（详情见 IDE 日志 idea.log）")
         }
         val ms = (System.nanoTime() - started) / 1_000_000
-        if (errorCode == null && ms > SLOW_MILLIS && !name.endsWith("wait")) {
-            // wait / 带等待的单步本来就慢，不算；其余超过 1 秒说明引擎或目标卡了
+        val waits = name.endsWith("wait") || rawArgs["action"] in WAITING_ACTIONS || rawArgs.containsKey("wait_ms")
+        if (errorCode == null && ms > SLOW_MILLIS && !waits) {
+            // wait / 带等待的单步 / 采样（按 duration_ms 等）本来就慢，不算；其余超过 1 秒说明引擎或目标卡了
             event += ".slow"
             level = McpLogger.Level.WARN
         }
@@ -226,6 +227,8 @@ class McpServer(
         val SUPPORTED_PROTOCOLS = setOf("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
         private const val MAX_SESSIONS = 64
         private const val SLOW_MILLIS = 1000L
+        /** 按参数等待的动作：耗时是 Agent 要求的，不记 .slow。 */
+        private val WAITING_ACTIONS = setOf("wait", "profile")
 
         const val PARSE_ERROR = -32700
         const val INVALID_REQUEST = -32600

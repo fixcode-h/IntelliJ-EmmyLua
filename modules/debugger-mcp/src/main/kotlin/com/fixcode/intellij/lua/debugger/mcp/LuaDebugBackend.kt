@@ -85,7 +85,47 @@ interface LuaDebugBackend {
 
     /** 读本地源码片段（[line] 前后 [radius] 行），给栈帧附源码；拿不到返回 null。 */
     fun sourceSnippet(file: String, line: Int, radius: Int): List<SourceLine>? = null
+
+    // ---- 采样性能分析（协议 v3 第 20 节，能力 profiler） ----
+
+    /**
+     * 开始采样（[vmId] 为空表示所有 VM），runtime 到 [durationMs] 自动停（MCP 中途断了也不会一直采下去）。
+     * runtime 没有 profiler 能力时抛 [ErrorCode.NOT_SUPPORTED]。
+     */
+    fun startProfile(sessionId: String, vmId: String?, durationMs: Int): CompletableFuture<Unit> =
+        CompletableFuture.failedFuture(LuaDebugBackendException(ErrorCode.NOT_SUPPORTED, "这个调试引擎不支持采样性能分析。"))
+
+    /** 停止采样（已经到点自动停了也可以调）并取函数表，按 [sort] 排序取前 [limit] 个。 */
+    fun stopProfile(sessionId: String, vmId: String?, sort: ProfileSort, limit: Int): CompletableFuture<ProfileReport> =
+        CompletableFuture.failedFuture(LuaDebugBackendException(ErrorCode.NOT_SUPPORTED, "这个调试引擎不支持采样性能分析。"))
 }
+
+enum class ProfileSort { SELF, TOTAL }
+
+data class ProfileFunction(
+    /** 函数名；取不到时 `<匿名>`，主 chunk `<主 chunk>`。 */
+    val name: String,
+    /** 映射到的本地文件；没映射上时是 chunkName，C 函数为空。 */
+    val file: String?,
+    /** 函数定义行；C 函数 -1、主 chunk 0。 */
+    val line: Int,
+    val selfSamples: Long,
+    val totalSamples: Long,
+    val selfPercent: Double,
+    val totalPercent: Double,
+)
+
+data class ProfileReport(
+    val samples: Long,
+    val durationMs: Long,
+    val functions: List<ProfileFunction>,
+    val totalFunctions: Int,
+    val intervalInstructions: Int = 0,
+    /** 采样回调本身的耗时，给 Agent 判断采样有没有影响结果。 */
+    val overheadMs: Double? = null,
+    /** 暂停在断点时到点、没计入的采样次数。 */
+    val pausedSkipped: Long? = null,
+)
 
 class LuaDebugBackendException(
     val code: ErrorCode,

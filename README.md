@@ -39,6 +39,7 @@ EmmyLua 是一个功能强大的 Lua 语言支持插件，专为 IntelliJ IDEA �
 - **变量和协程** - 变量分组展示、修改变量值、查看其他协程的调用栈
 - **MCP 调试工具** - 让 Claude Code、Cursor 等 Agent 直接下断点、看栈和变量
 - **调试控制台** - 交互式调试控制台，支持表达式求值
+- **Lua 采样性能分析** - 调试窗口的「Lua 采样」页开始 / 停止采样，按函数看自身和总计占比、双击跳到源码，可导出折叠栈用 speedscope / flamegraph.pl 看火焰图；Android 真机附加也能用，Agent 用 `lua_debug_inspect action=profile`
 
 ## 🚀 安装方式
 

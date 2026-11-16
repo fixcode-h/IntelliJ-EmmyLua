@@ -285,4 +285,48 @@ class LuaDebugToolsTest {
         assertEquals("hello", ((r["items"] as List<*>)[0] as Map<*, *>)["text"])
         assertEquals(0L, client.call(I, mapOf("action" to "output", "cursor" to 1))["count"])
     }
+
+    @Test
+    fun `profile 不用确认 采样指定时长后返回按自身排序的函数表`() {
+        backend.addSession()
+        val r = client.call(I, mapOf("action" to "profile", "duration_ms" to 100, "limit" to 2))
+        assertFalse(r.raw, r.isError)
+        assertTrue(confirmer.asked.isEmpty()) // 只观察，不改游戏状态：按只读处理
+        assertEquals(listOf("profile start 100", "profile stop"), backend.commands)
+        assertEquals(100L, r["samples"])
+        assertEquals("self", r["sort"])
+        assertEquals(2L, r["count"])
+        assertEquals(3L, r["total"])
+        assertEquals(true, r["hasMore"])
+        val items = r["items"] as List<*>
+        val first = items[0] as Map<*, *>
+        assertEquals("Bag:Refresh", first["fn"])
+        assertEquals("/proj/Bag.lua", first["file"])
+        assertEquals(20L, first["line"])
+        assertEquals(70.0, (first["selfPct"] as Number).toDouble(), 0.01)
+        val c = items[1] as Map<*, *>
+        assertEquals("pairs", c["fn"])
+        assertFalse("C 函数不给 file / line", c.containsKey("file") || c.containsKey("line"))
+    }
+
+    @Test
+    fun `profile 按 total 排序 参数越界报错`() {
+        backend.addSession()
+        val r = client.call(I, mapOf("action" to "profile", "duration_ms" to 100, "sort" to "total"))
+        assertEquals("tick", ((r["items"] as List<*>)[0] as Map<*, *>)["fn"])
+        assertEquals("invalid_argument", client.call(I, mapOf("action" to "profile", "duration_ms" to 120000)).code)
+        assertEquals("invalid_argument", client.call(I, mapOf("action" to "profile", "sort" to "fast")).code)
+        assertEquals("no_vm", client.call(I, mapOf("action" to "profile", "vm" to "vm-9")).code)
+    }
+
+    @Test
+    fun `profile 没有样本时说明原因 没有会话时报 no_session`() {
+        assertEquals("no_session", client.call(I, mapOf("action" to "profile", "duration_ms" to 100)).code)
+        backend.addSession()
+        backend.profileSamples = 0
+        backend.profileFunctions = emptyList()
+        val r = client.call(I, mapOf("action" to "profile", "duration_ms" to 100))
+        assertEquals(0L, r["count"])
+        assertTrue(r["note"] as String, (r["note"] as String).contains("没有采到样本"))
+    }
 }

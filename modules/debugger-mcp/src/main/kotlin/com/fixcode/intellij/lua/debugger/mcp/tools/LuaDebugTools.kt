@@ -19,7 +19,7 @@ import java.util.concurrent.TimeoutException
  *
  * - `lua_debug_session`：status / targets / attach / stop / pause / continue / step / wait
  * - `lua_debug_breakpoints`：list / add / remove / enable / clear
- * - `lua_debug_inspect`：stack / vms / locals / eval / output / probes
+ * - `lua_debug_inspect`：stack / vms / locals / eval / output / probes / profile
  *
  * [backend] 每次调用时取：IDE 没有打开项目、新引擎没装好时返回 null，工具报 engine_unavailable。
  */
@@ -416,7 +416,7 @@ class LuaDebugTools(
 
     // ======================================================================= lua_debug_inspect
 
-    private val inspectActions = arrayOf("stack", "vms", "locals", "eval", "output", "probes")
+    private val inspectActions = arrayOf("stack", "vms", "locals", "eval", "output", "probes", "profile")
 
     private fun inspectTool() = McpTool(
         name = INSPECT,
@@ -424,15 +424,15 @@ class LuaDebugTools(
         titleZh = "Lua 调试：栈和变量",
         description = ToolGuide(
             what = "Reads a stopped Lua VM in the IDE debugger: call stack with source lines, locals / upvalues / globals as a bounded tree, " +
-                "value paths (self.items[3].id, #list) and, if the user allowed it, any Lua expression; also the debug output (print, " +
-                "Lua errors, logpoints) and probe records, which work while the game runs.",
-            useWhen = "$SESSION reports event=break (breakpoint, step, Lua error): see where it is and why, read variables and table fields " +
-                "(depth 1-3, ref to expand further), evaluate value paths, switch frames with frame=N; output / probes any time.",
-            insteadOf = "guessing values from code or printing them: reads the live state without changing scripts.",
-            notFor = "a running VM (stack / locals / eval need event=break; pause or wait first). mode=lua runs arbitrary Lua and is off " +
-                "unless the user enabled it in the IDE: prefer value paths. Refs die when the VM continues.",
-            results = "stack: frames[{i,function,file,line}]; locals/eval: value nodes {n,t,v,c,more,ref,err}; output/probes: items + next " +
-                "for the following call.",
+                "value paths (self.items[3].id, #list) and, if allowed, any Lua expression; also debug output (print, Lua errors, " +
+                "logpoints), probe records and a sampling profile, which work while the game runs.",
+            useWhen = "$SESSION reports event=break: see where and why, read variables and table fields (depth 1-3, ref to expand), " +
+                "evaluate value paths, switch frames with frame=N; output / probes any time; profile while a slow scene runs to find hot Lua functions.",
+            insteadOf = "guessing values or adding print / os.clock() timers: reads the live state without changing scripts.",
+            notFor = "a running VM (stack / locals / eval need event=break). mode=lua is off unless the user enabled it: prefer value " +
+                "paths. Refs die when the VM continues. profile counts Lua instructions, not time in C/engine calls; Lua runs ~2x slower meanwhile.",
+            results = "stack: frames[{i,function,file,line}]; locals/eval: value nodes {n,t,v,c,more,ref,err}; output/probes: items + next; " +
+                "profile: samples + items[{fn,file,line,selfPct,totalPct}].",
         ).render(),
         inputSchema = schema {
             string("action", "What to read.", required = true, enum = inspectActions.toList())
@@ -451,8 +451,10 @@ class LuaDebugTools(
             integer("cursor", "output/probes: 'next' of the previous call, returns only newer items.", minimum = 0)
             integer("max_chars", "output: max characters (default 3000, newest kept).", minimum = 200, maximum = 10000)
             string("breakpoint", "probes: only this breakpoint id.")
-            integer("limit", "stack: frames (default 20); locals: items per level (default 50); probes: records (default 50).",
-                minimum = 1, maximum = 200)
+            integer("duration_ms", "profile: how long to sample while the game keeps running (default 3000).", minimum = 100, maximum = 60000)
+            string("sort", "profile: self (default, time in the function itself) / total (including callees).", enum = listOf("self", "total"))
+            integer("limit", "stack: frames (default 20); locals: items per level (default 50); probes: records (default 50); " +
+                "profile: functions (default 30).", minimum = 1, maximum = 200)
             integer("offset", "stack: frames to skip (use nextOffset).", minimum = 0)
         },
         level = PermissionLevel.READ,
@@ -466,6 +468,7 @@ class LuaDebugTools(
             "eval" -> eval(b, call)
             "output" -> output(b, call.args)
             "probes" -> probes(b, call.args)
+            "profile" -> profile(b, call.args)
             else -> throw ToolArgumentException("缺少参数 'action'")
         }
         }
@@ -597,6 +600,45 @@ class LuaDebugTools(
         m["count"] = items.size
         m["next"] = if (truncated) (page.hits[items.size - 1].seq) else page.nextSeq
         m["items"] = items
+        return m
+    }
+
+    /**
+     * 采样 duration_ms 后返回函数表。按只读处理（不弹控制确认）：采样不暂停、不改变量、不改执行路径，
+     * 和 output / probes 一样只观察；代价是采样期间 Lua 变慢，所以限时（≤ 60 秒）并且 runtime 到点自动停。
+     */
+    private fun profile(b: LuaDebugBackend, args: JsonArgs): Map<String, Any?> {
+        val s = resolveSession(b, args)
+        val vm = args.string("vm")?.takeIf { it.isNotBlank() }
+        val duration = args.int("duration_ms", 3000, 100, 60000)
+        val sort = if (args.choice("sort", "self", "self", "total") == "total") ProfileSort.TOTAL else ProfileSort.SELF
+        val limit = args.int("limit", 30, 1, 200)
+        if (vm != null && b.listVms(s.sessionId).none { it.vmId == vm }) {
+            throw ToolException("no_vm", "没有 VM $vm。用 $INSPECT action=vms 查看 VM。")
+        }
+        await(b.startProfile(s.sessionId, vm, duration), timeouts.requestMillis)
+        try {
+            Thread.sleep(duration.toLong() + 100) // runtime 按 duration_ms 自己停，这里多等一点保证停了再取
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw ToolException("cancelled", "采样被中断（IDE 正在关闭？）")
+        }
+        val report = await(b.stopProfile(s.sessionId, vm, sort, limit), timeouts.requestMillis)
+        val (items, truncated) = ResultJson.fit(report.functions, ResultJson.BUDGET) { ResultJson.profileFunction(it) }
+        val m = obj("sessionId" to s.sessionId, "vm" to vm, "samples" to report.samples, "durationMs" to report.durationMs,
+            "sort" to sort.name.lowercase())
+        val hasMore = report.totalFunctions > items.size
+        m["count"] = items.size
+        m["offset"] = 0
+        m["total"] = report.totalFunctions
+        m["hasMore"] = hasMore
+        if (truncated) m["truncated"] = true
+        m["items"] = items
+        when {
+            report.samples == 0L -> m["note"] = "没有采到样本：采样期间这个 VM 没执行 Lua（游戏在暂停、停在断点上，或这段时间没跑脚本）。" +
+                "先 $SESSION action=continue，并在采样期间触发要分析的场景。"
+            hasMore -> m["note"] = "只列出了前 ${items.size} 个函数；要更多用更大的 limit 重新采样（每次采样结果独立）。"
+        }
         return m
     }
 
