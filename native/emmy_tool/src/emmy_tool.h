@@ -9,6 +9,7 @@ public:
 	int Launch();
 
 	int Attach();
+	int AttachV3();
 
 	int ListProcesses();
 

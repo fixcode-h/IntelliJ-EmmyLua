@@ -729,10 +729,19 @@ IDE 收到不认识的错误码按 `INTERNAL` 处理并展示 `message`。
 
 | 场景 | 建连方式 | 端口 / 地址 |
 | --- | --- | --- |
-| PC 附加（注入） | runtime 监听回环，IDE 连 | `127.0.0.1:<port>`。端口由 IDE 选一个空闲端口，连同 token 一起写进注入参数；runtime 监听失败时写日志并退出注入，不影响宿主 |
+| PC 附加（注入，Windows） | runtime 监听回环，IDE 连 | `127.0.0.1:<port>`，端口按 PID 派生、以 `emmy_tool` 输出为准；token 由 IDE 每个会话生成，注入时传入。见 16.1 |
 | Android 真机附加 | runtime 监听 abstract unix socket，IDE `adb forward tcp:<本机端口> localabstract:emmylua-<pid>` 后连本机端口 | socket 名 `emmylua-<pid>`；token 由 IDE 生成，通过 `attach-agent` 参数传入 |
 | 内嵌 runtime（IDE 连 runtime） | runtime 监听，IDE 连 | 宿主指定，默认 `9966`；监听非回环地址时**必须**配置 token |
 | 内嵌 runtime（runtime 连 IDE） | IDE 监听，runtime 连 | 宿主指定 `host:port`；建连后仍由 IDE 先发 `hello` |
+
+### 16.1 Windows 本机附加（`emmy_tool` + `emmy_attach.dll`）
+
+1. 选位数：`emmy_tool.exe arch_pid <pid>`，用插件目录下对应的 `x86/` 或 `x64/`。
+2. 附加：`emmy_tool.exe attach -p <pid> -dir <位数目录> -dll emmy_hook.dll -auth-token <token> -protocol 3`。`-protocol 3` 时 `-dll` 被忽略，注入的是 `emmy_attach.dll`；token 建议 32 位十六进制，空串表示不校验。
+3. 结果：stdout **最后一行**是 JSON。成功 `{"ok":true,"protocol":3,"host":"127.0.0.1","port":N,"pid":P,"reinjected":false}`，退出码 0；失败 `{"ok":false,"protocol":3,"pid":P,"error":"中文原因"}`，退出码非 0。
+4. 重复附加（含 IDE 重连）：进程里已有 `emmy_attach.dll` 时不再注入，只换 token，返回 `reinjected:true`。进程里有旧版 `emmy_hook.dll` 时直接失败，提示重启目标进程。
+5. 目标进程里：`emmy_attach.dll` 在已加载模块里找导出 `lua_*` 的模块，按导出判断 Lua 版本（`lua_newuserdatauv` → 5.4，`lua_rotate` → 5.3，`lua_callk` → 5.2，否则 5.1；有 `luaJIT_setmode` 时报不支持），加载同目录的 `lua5X/emmy_debugger_core.dll`（dynamic 模式，用目标进程自己的 Lua），挂 `lua_pcall` / `lua_pcallk` / `lua_resume` / `lua_close` 在 Lua 线程上登记 VM，然后监听端口。附加时 Lua 必须已加载。
+6. 文件布局（每个位数目录）：`emmy_tool.exe`、`emmy_attach.dll`、`EasyHook.dll`、`lua51/` … `lua54/emmy_debugger_core.dll`。
 
 局域网发现（可选，内嵌模式）：runtime 每 2 秒向 UDP `255.255.255.255:9967` 广播一个 UTF-8 JSON 名片 `{"emmy":3,"name":"MyGame","pid":123,"port":9966,"platform":"android","arch":"arm64","needToken":true}`，不含 token。
 

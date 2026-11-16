@@ -259,7 +259,7 @@ bool IsBeingInjected(DWORD processId, LPCSTR moduleFileName) {
 }
 
 bool InjectDll(DWORD processId, const char *dllDir, const char *dllFileName, bool capture,
-	const std::string& authToken, bool* alreadyAttached) {
+	const std::string& authToken, bool* alreadyAttached, DWORD* initExitCode) {
 	const bool wasAttached = IsBeingInjected(processId, dllFileName);
 	if (alreadyAttached != nullptr) *alreadyAttached = wasAttached;
 	if (authToken.size() >= sizeof(RemoteThreadParam().authToken)) {
@@ -354,6 +354,7 @@ bool InjectDll(DWORD processId, const char *dllDir, const char *dllFileName, boo
 				success = false;
 			} else {
 				const bool gotExitCode = GetExitCodeThread(thread, &exitCode) != FALSE;
+				if (gotExitCode && initExitCode != nullptr) *initExitCode = exitCode;
 				CloseHandle(thread);
 				success = gotExitCode && exitCode == 0;
 			}

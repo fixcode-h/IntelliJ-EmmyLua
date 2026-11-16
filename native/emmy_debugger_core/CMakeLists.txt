@@ -3,6 +3,9 @@
 # 设计见 docs/design/2026-11-debugger-redesign.md 第 5 节，协议见 docs/design/protocol-v3.md。
 cmake_minimum_required(VERSION 3.14)
 project(emmy_debugger_core CXX C)
+if(POLICY CMP0091)
+    cmake_policy(SET CMP0091 NEW) # MSVC_RUNTIME_LIBRARY
+endif()
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -28,6 +31,8 @@ else()
 endif()
 option(EMMY_CORE_BUILD_TESTS "Build emmy_debugger_core tests" ${_emmy_top})
 option(EMMY_CORE_BUILD_BENCH "Build bench_hook" ${_emmy_top})
+# 另外编一个动态库 emmy_debugger_core.dll/.so（目标 emmy_debugger_core_shared）：Windows 附加时由 emmy_attach.dll 按 Lua 版本加载
+option(EMMY_CORE_BUILD_SHARED "Build emmy_debugger_core as a shared library too" OFF)
 set(EMMY_CORE_VERSION "3.0.0-dev" CACHE STRING "runtime version reported in welcome")
 
 get_filename_component(EMMY_NATIVE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
@@ -72,17 +77,25 @@ endif()
 # ---- 核心 ----
 set(EMMY_CORE_DYN_SOURCES "")
 if(EMMY_CORE_LUA_MODE STREQUAL "dynamic")
-    if(MSVC)
-        message(FATAL_ERROR "dynamic 模式暂只支持 GCC / Clang（自带 lauxlib.c 用到 __typeof__）")
-    endif()
     include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/gen_lua_dyn.cmake)
     set(EMMY_CORE_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
     file(MAKE_DIRECTORY "${EMMY_CORE_GEN_DIR}")
     emmy_gen_lua_dyn("${EMMY_CORE_LUA_DIR}" "${EMMY_CORE_GEN_DIR}")
-    set(EMMY_CORE_DYN_SOURCES src/lua_dyn.c "${EMMY_CORE_LUA_DIR}/lauxlib.c")
+    # 自带的 lauxlib.c 复制成 .cpp 按 C++ 编：函数指针类型用 decltype 取，MSVC 也能编；它的函数在强制包含头里
+    # 已在 extern "C" 中声明过，定义沿用 C 链接。复制而不是直接改源文件属性，是因为源文件属性按目录生效，
+    # 会连带改掉测试用的 emmy_core_lua 里同一个 lauxlib.c。
+    configure_file("${EMMY_CORE_LUA_DIR}/lauxlib.c" "${EMMY_CORE_GEN_DIR}/emmy_lauxlib.cpp" COPYONLY)
+    set(EMMY_CORE_DYN_SOURCES src/lua_dyn.cpp "${EMMY_CORE_GEN_DIR}/emmy_lauxlib.cpp")
+    # 强制包含的 lua_dyn.h 先于 lauxlib.c 自己的 #define LUA_LIB 读到 luaconf.h，所以这里提前定义
+    set_source_files_properties("${EMMY_CORE_GEN_DIR}/emmy_lauxlib.cpp" PROPERTIES COMPILE_DEFINITIONS LUA_LIB)
+    if(MSVC)
+        set_source_files_properties("${EMMY_CORE_GEN_DIR}/emmy_lauxlib.cpp" PROPERTIES COMPILE_OPTIONS "/w")
+    else()
+        set_source_files_properties("${EMMY_CORE_GEN_DIR}/emmy_lauxlib.cpp" PROPERTIES COMPILE_OPTIONS "-w")
+    endif()
 endif()
 
-add_library(emmy_debugger_core STATIC
+set(EMMY_CORE_SOURCES
     ${EMMY_CORE_DYN_SOURCES}
     src/frame.cpp
     src/path_match.cpp
@@ -96,33 +109,53 @@ add_library(emmy_debugger_core STATIC
     src/transport.cpp
     src/core.cpp
 )
-target_include_directories(emmy_debugger_core
+
+# 静态库和动态库共用的设置
+function(emmy_core_setup tgt)
+target_include_directories(${tgt}
     PUBLIC  "${CMAKE_CURRENT_SOURCE_DIR}/include"
     PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" "${EMMY_THIRD_PARTY}/nlohmann/include")
-target_compile_definitions(emmy_debugger_core PRIVATE
+target_compile_definitions(${tgt} PRIVATE
     EMMY_CORE_LUA_${EMMY_CORE_LUA_VERSION}
     EMMY_CORE_VERSION_STRING="${EMMY_CORE_VERSION}")
 if(EMMY_CORE_LUA_MODE STREQUAL "source")
-    target_link_libraries(emmy_debugger_core PUBLIC emmy_core_lua)
+    target_link_libraries(${tgt} PUBLIC emmy_core_lua)
 else()
     # 只要头文件；所有源文件（含 lauxlib.c）最先包含 lua_dyn.h，把 lua_* 调用换成函数指针
-    target_include_directories(emmy_debugger_core PRIVATE "${EMMY_CORE_LUA_DIR}" "${EMMY_CORE_GEN_DIR}")
-    target_compile_definitions(emmy_debugger_core PRIVATE EMMY_CORE_LUA_DYNAMIC)
-    target_compile_options(emmy_debugger_core PRIVATE
-        "SHELL:-include ${CMAKE_CURRENT_SOURCE_DIR}/src/lua_dyn.h" -fvisibility=hidden)
-    # 强制包含的 lua_dyn.h 先于 lauxlib.c 自己的 #define LUA_LIB 读到 luaconf.h，所以这里提前定义
-    set_source_files_properties("${EMMY_CORE_LUA_DIR}/lauxlib.c" PROPERTIES COMPILE_OPTIONS "-w" COMPILE_DEFINITIONS LUA_LIB)
-    target_link_libraries(emmy_debugger_core PUBLIC ${CMAKE_DL_LIBS})
+    target_include_directories(${tgt} PRIVATE "${EMMY_CORE_LUA_DIR}" "${EMMY_CORE_GEN_DIR}")
+    target_compile_definitions(${tgt} PRIVATE EMMY_CORE_LUA_DYNAMIC)
+    if(MSVC)
+        target_compile_options(${tgt} PRIVATE "/FI${CMAKE_CURRENT_SOURCE_DIR}/src/lua_dyn.h")
+    else()
+        target_compile_options(${tgt} PRIVATE
+            "SHELL:-include ${CMAKE_CURRENT_SOURCE_DIR}/src/lua_dyn.h" -fvisibility=hidden)
+    endif()
+    target_link_libraries(${tgt} PUBLIC ${CMAKE_DL_LIBS})
 endif()
 find_package(Threads REQUIRED)
-target_link_libraries(emmy_debugger_core PUBLIC Threads::Threads)
+target_link_libraries(${tgt} PUBLIC Threads::Threads)
 if(WIN32)
-    target_link_libraries(emmy_debugger_core PUBLIC ws2_32)
+    target_link_libraries(${tgt} PUBLIC ws2_32)
 endif()
 if(MSVC)
-    target_compile_options(emmy_debugger_core PRIVATE /W4 /utf-8 /wd4100)
+    target_compile_options(${tgt} PRIVATE /W4 /utf-8 /wd4100)
 else()
-    target_compile_options(emmy_debugger_core PRIVATE -Wall -Wextra -Wno-unused-parameter)
+    target_compile_options(${tgt} PRIVATE -Wall -Wextra -Wno-unused-parameter)
+endif()
+endfunction()
+
+add_library(emmy_debugger_core STATIC ${EMMY_CORE_SOURCES})
+emmy_core_setup(emmy_debugger_core)
+if(EMMY_CORE_BUILD_SHARED)
+    add_library(emmy_debugger_core_shared SHARED ${EMMY_CORE_SOURCES})
+    emmy_core_setup(emmy_debugger_core_shared)
+    # 宿主（UELink 等）按模块名 emmy_debugger_core 找导出，名字不要改
+    set_target_properties(emmy_debugger_core_shared PROPERTIES OUTPUT_NAME emmy_debugger_core PREFIX "")
+    target_compile_definitions(emmy_debugger_core_shared PRIVATE EMMY_CORE_BUILDING_DLL)
+    if(MSVC)
+        # 注入到别人的进程里，不依赖目标机器装没装 VC 运行库
+        set_property(TARGET emmy_debugger_core_shared PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
+    endif()
 endif()
 
 if(EMMY_CORE_BUILD_TESTS)

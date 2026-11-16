@@ -34,6 +34,8 @@ int main(int argc, char **argv) {
 	commandLine.Add<std::string>("args", true);
 	commandLine.Add<bool>("capture-log");
 	commandLine.Add<bool>("unitbuf");
+	// 3：协议 v3 的附加（注入 emmy_attach.dll，输出 v3 的结果 JSON）
+	commandLine.Add<std::string>("protocol");
 
 	if (!commandLine.Parse(argc, argv)) {
 		printf("parse fail");

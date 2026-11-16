@@ -12,6 +12,12 @@ function(emmy_gen_lua_dyn lua_dir out_dir)
         string(REGEX REPLACE ".*\\((lua_[A-Za-z0-9_]+)\\)[ \t]*\\($" "\\1" _n "${_d}")
         list(APPEND _api ${_n})
     endforeach()
+    # 5.1 的调试 API 名字不带括号：LUA_API int lua_getstack (lua_State *L, ...);
+    string(REGEX MATCHALL "LUA_API[^;(]*[ *](lua_[a-z][a-z0-9_]*)[ \t]*\\(" _m "${_luah}")
+    foreach(_d IN LISTS _m)
+        string(REGEX REPLACE ".*[ *](lua_[a-z][a-z0-9_]*)[ \t]*\\($" "\\1" _n "${_d}")
+        list(APPEND _api ${_n})
+    endforeach()
     list(REMOVE_DUPLICATES _api)
 
     # lauxlib.h 里出现的所有 luaL_* / luaI_* 名字（函数、类型）都改名，但跳过它自己定义成宏的

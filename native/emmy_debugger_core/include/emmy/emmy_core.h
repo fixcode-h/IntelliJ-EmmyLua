@@ -19,7 +19,11 @@ typedef struct lua_State lua_State;
 typedef struct lua_Debug lua_Debug;
 
 #if defined(_WIN32)
-#  define EMMY_API
+#  if defined(EMMY_CORE_BUILDING_DLL)
+#    define EMMY_API __declspec(dllexport)
+#  else
+#    define EMMY_API
+#  endif
 #else
 #  define EMMY_API __attribute__((visibility("default")))
 #endif

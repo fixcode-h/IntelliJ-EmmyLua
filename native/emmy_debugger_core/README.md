@@ -20,13 +20,14 @@ ctest --test-dir build/core               # 单元 + 端到端
 | 模式 | 用途 | 说明 |
 | --- | --- | --- |
 | `source`（桌面默认） | 内嵌到自己编 Lua 的宿主、测试、基准 | 链接 `native/third-party/lua-x` 编出的 `emmy_core_lua` |
-| `dynamic`（Android 默认） | 附加到别人的进程（Android agent） | 不带 Lua 实现；所有 `lua_*` 经函数指针调用宿主那份 Lua，指针由 `Emmy_SetLuaApiResolver` 按名字给出（不设则 `dlsym(RTLD_DEFAULT)`）。`luaL_*` 用自带的 lauxlib，改名成 `emmy_luaL_*`，宿主裁没裁 lauxlib 都不影响 |
+| `dynamic`（Android 默认） | 附加到别人的进程（Android agent、Windows 的 `emmy_attach.dll`） | 不带 Lua 实现；所有 `lua_*` 经函数指针调用宿主那份 Lua，指针由 `Emmy_SetLuaApiResolver` 按名字给出（不设则 `dlsym(RTLD_DEFAULT)`）。`luaL_*` 用自带的 lauxlib，改名成 `emmy_luaL_*`，宿主裁没裁 lauxlib 都不影响 |
 
 dynamic 模式的限制：
 
 - 头文件和内部结构（`CallInfo` / `Proto`，取函数信息和遍历协程用）按编译时选的 Lua 版本，宿主必须是同一大版本、默认 `luaconf.h`。一份 so 只支持一个 Lua 大版本，不支持 LuaJIT。
-- 只支持 GCC / Clang（自带 lauxlib.c 用了 `__typeof__`）。
-- 缺核心要用的 `lua_*` 时 `Emmy_RegisterLuaVm` 返回 0，原因用 `Emmy_LastError()` 取。
+- 函数分必需和可选两档（`src/lua_dyn.cpp`）：缺必需的 `Emmy_RegisterLuaVm` 返回 0，原因用 `Emmy_LastError()` 取；
+  缺可选的（`lua_setlocal`、`lua_concat`、`lua_pushvfstring` 等常被 `--gc-sections` 裁掉的）换成替代实现，只降级对应功能，IDE 连上时用 output warn 说明。
+- `-DEMMY_CORE_BUILD_SHARED=ON` 另编 `emmy_debugger_core.dll/.so`（导出 C ABI），Windows 附加按 Lua 版本各编一份放在 `lua5X/` 下。
 
 ## C ABI
 
@@ -68,4 +69,3 @@ Emmy_UnregisterLuaVm(L);                      // lua_close 之前
 - `exceptions` 能力（错误时暂停）；`setOptions.exceptions` 只接受 `none`。
 - helper（`emmyHelper.queryVariable`）参与变量展示：脚本已能加载执行，还没接到 `variables`。
 - 变量视图扩展字段（[docs/design/variable-view.md](../../docs/design/variable-view.md)）。
-- Windows 附加注入用的 dynamic 模式（MSVC）。

@@ -42,7 +42,8 @@ bool InjectDllForProcess(HANDLE hProcess, const char *dllDir, const char *dllFil
 bool IsBeingInjected(DWORD processId, LPCSTR moduleFileName);
 
 bool InjectDll(DWORD processId, const char *dllDir, const char *dllFileName, bool capture,
-	const std::string& authToken = std::string(), bool* alreadyAttached = nullptr);
+	const std::string& authToken = std::string(), bool* alreadyAttached = nullptr,
+	DWORD* initExitCode = nullptr);
 
 void ReceiveLog(DWORD processId);
 

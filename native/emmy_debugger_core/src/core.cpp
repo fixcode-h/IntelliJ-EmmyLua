@@ -168,6 +168,10 @@ void Core::Log(const std::string& category, const std::string& level, const std:
 }
 
 void Core::ConfigurationDone() {
+#if defined(EMMY_CORE_LUA_DYNAMIC)
+	// 宿主裁掉了部分可选 Lua 函数时，连上就告诉用户哪些功能降级了
+	if (const char* w = emmy_dyn_warnings(); w && *w) Log("runtime", "warn", w);
+#endif
 	configured_.store(true, std::memory_order_release);
 	{
 		std::lock_guard<std::mutex> lock(sessionMutex_);

@@ -33,10 +33,13 @@ EMMY_LUA_API_LIST(EMMY_DYN_DECLARE)
 #undef EMMY_DYN_DECLARE
 
 /* 按名字填全部函数指针。resolve 为空时用 dlsym(RTLD_DEFAULT)。
- * 核心用到的函数缺任何一个都返回非 0，并把缺的名字写进 err。可以重复调用（后一次覆盖）。 */
+ * 必需函数缺任何一个都返回缺的个数，并把名字写进 err；可选函数缺了换成替代实现（见 emmy_dyn_warnings）。
+ * 可以重复调用（后一次覆盖）。 */
 int emmy_dyn_resolve(void* (*resolve)(const char* name, void* ud), void* ud, char* err, size_t errLen);
 /* 已经成功解析过返回 1 */
 int emmy_dyn_ready(void);
+/* 缺了哪些可选函数（已换成替代实现）及影响，没有时为空串 */
+const char* emmy_dyn_warnings(void);
 
 #ifdef __cplusplus
 }

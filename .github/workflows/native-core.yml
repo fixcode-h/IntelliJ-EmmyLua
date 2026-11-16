@@ -7,11 +7,17 @@ on:
     paths:
       - "native/emmy_debugger_core/**"
       - "native/third-party/**"
+      - "native/emmy_attach/**"
+      - "native/emmy_tool/**"
+      - "native/shared/**"
       - ".github/workflows/native-core.yml"
   pull_request:
     paths:
       - "native/emmy_debugger_core/**"
       - "native/third-party/**"
+      - "native/emmy_attach/**"
+      - "native/emmy_tool/**"
+      - "native/shared/**"
       - ".github/workflows/native-core.yml"
 
 concurrency:
@@ -57,6 +63,48 @@ jobs:
             -DANDROID_ABI=${{ matrix.abi }} -DANDROID_PLATFORM=android-21 -DANDROID_STL=c++_static \
             -DCMAKE_BUILD_TYPE=Release
           cmake --build build/core-android --parallel 4
+
+  windows-attach:
+    # Windows 本机附加（协议 v3）的全部文件：emmy_tool.exe、emmy_attach.dll、EasyHook.dll、lua5X/emmy_debugger_core.dll
+    name: windows-attach (${{ matrix.arch }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x64, platform: x64 }
+          - { arch: x86, platform: Win32 }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build emmy_tool / emmy_attach
+        run: |
+          cmake -S native -B build/native-${{ matrix.arch }} -A ${{ matrix.platform }}
+          cmake --build build/native-${{ matrix.arch }} --config Release --target emmy_tool emmy_attach --parallel 4
+      - name: Build cores (dynamic, one per Lua version)
+        run: |
+          foreach ($v in "51", "52", "53", "54") {
+            cmake -S native/emmy_debugger_core -B build/core-${{ matrix.arch }}-$v -A ${{ matrix.platform }} `
+              -DEMMY_CORE_LUA_MODE=dynamic -DEMMY_CORE_LUA_VERSION=$v -DEMMY_CORE_BUILD_SHARED=ON `
+              -DEMMY_CORE_BUILD_TESTS=OFF -DEMMY_CORE_BUILD_BENCH=OFF
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+            cmake --build build/core-${{ matrix.arch }}-$v --config Release --target emmy_debugger_core_shared --parallel 4
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+          }
+      - name: Collect
+        run: |
+          $out = "out/${{ matrix.arch }}"
+          New-Item -ItemType Directory -Force $out | Out-Null
+          Get-ChildItem build/native-${{ matrix.arch }} -Recurse -Include emmy_tool.exe,emmy_attach.dll,EasyHook.dll |
+            Where-Object { $_.FullName -match "Release" } | Copy-Item -Destination $out
+          foreach ($v in "51", "52", "53", "54") {
+            New-Item -ItemType Directory -Force "$out/lua$v" | Out-Null
+            Copy-Item build/core-${{ matrix.arch }}-$v/Release/emmy_debugger_core.dll "$out/lua$v/"
+          }
+          Get-ChildItem -Recurse $out | Select-Object FullName, Length
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-attach-${{ matrix.arch }}
+          path: out/${{ matrix.arch }}
 
   bench:
     # 共享 CI 机器抖动大，只出报告不卡门槛；本地用 bench_hook --check 对照目标

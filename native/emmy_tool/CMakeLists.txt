@@ -34,3 +34,7 @@ install(
         LIBRARY DESTINATION lib
         RUNTIME DESTINATION bin
 )
+if(MSVC)
+    # 源文件和 attach_result.h 都是 UTF-8，输出给 IDE 的 JSON 也按 UTF-8
+    target_compile_options(emmy_tool PRIVATE /utf-8)
+endif()
