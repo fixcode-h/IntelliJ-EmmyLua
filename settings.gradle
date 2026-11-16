@@ -17,6 +17,7 @@ rootProject.name = 'EmmyLua'
 
 include 'modules:debugger-core'
 include 'modules:debugger-transport'
+include 'modules:debugger-android'
 include 'modules:debugger-emmy-protocol'
 include 'modules:debugger-cli-protocol'
 include 'modules:debugger-luapanda-protocol'
