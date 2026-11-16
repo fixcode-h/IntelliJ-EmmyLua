@@ -28,7 +28,7 @@ std::string ThreadIdOf(lua_State* L) {
 } // namespace
 
 Vm::Vm(uint64_t id, lua_State* L, std::string discovery)
-	: id_(id), mainL_(lua::MainThreadOf(L)), g_(lua::GlobalStateOf(L)), discovery_(std::move(discovery)), mux_(mainL_), inspector_(*this) {
+	: id_(id), mainL_(lua::MainThreadOf(L)), g_(lua::GlobalStateOf(L)), discovery_(std::move(discovery)), mux_(mainL_), inspector_(*this), profiler_(*this, mux_) {
 	name_ = "Lua VM #" + std::to_string(id);
 	mux_.SetDebugger(this);
 }
@@ -51,6 +51,7 @@ void Vm::Uninstall() {
 	if (errorsWrapped_) InstallErrorWrappers(mainL_, false);
 	inspector_.ResetConditionCache(mainL_);
 	ClearStep(mainL_);
+	profiler_.Stop();
 	mux_.Uninstall();
 	UnregisterMux(g_);
 	// 唤醒可能在等命令的线程（理论上 Unregister 在 VM 线程调用，此时不会在暂停循环里）

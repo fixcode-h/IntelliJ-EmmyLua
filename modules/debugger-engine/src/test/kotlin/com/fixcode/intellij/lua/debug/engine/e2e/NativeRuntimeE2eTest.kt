@@ -221,6 +221,24 @@ class NativeRuntimeE2eTest {
         secondEvents.assertNone<DebugEvent.Paused>(300)
     }
 
+    @Test
+    fun `采样分析取到函数表和折叠栈 停止后结果不再增长`() {
+        val (session, _) = session()
+        assumeTrue("runtime 没有声明 profiler", session.supportsProfiler)
+        session.profileStart(intervalInstructions = 100).await()
+        Thread.sleep(400)
+        val result = session.profileStop(sort = "total").await()
+        assertTrue("应该有样本：$result", result.samples > 0)
+        val tick = result.functions.firstOrNull { it.source == "@game/main.lua" && it.line == 7 }
+            ?: error("函数表里没有 tick：${result.functions}")
+        assertTrue("tick 的总占比应该最高：$tick", tick.totalPercent > 50.0)
+        assertEquals("game/main.lua", session.localPathOfChunk(tick.source)!!.replace('\\', '/').substringAfter(root.path.replace('\\', '/') + "/"))
+        assertTrue(result.folded().lines().any { it.contains("add (game/main.lua:3)") })
+        val again = session.profileResult().await()
+        Thread.sleep(100)
+        assertEquals(again.samples, session.profileResult().await().samples)
+    }
+
     private companion object {
         const val LINE_ADD_BODY = 4
         const val LINE_LOCAL_R = 9

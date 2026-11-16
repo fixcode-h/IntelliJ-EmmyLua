@@ -20,6 +20,10 @@ import com.fixcode.intellij.lua.debug.protocol.HelloArgs
 import com.fixcode.intellij.lua.debug.protocol.LoadHelpersArgs
 import com.fixcode.intellij.lua.debug.protocol.OutputCategories
 import com.fixcode.intellij.lua.debug.protocol.OutputEvent
+import com.fixcode.intellij.lua.debug.protocol.ProfileActions
+import com.fixcode.intellij.lua.debug.protocol.ProfileArgs
+import com.fixcode.intellij.lua.debug.protocol.ProfileResult
+import com.fixcode.intellij.lua.debug.protocol.ProfileStartResult
 import com.fixcode.intellij.lua.debug.protocol.PausedEvent
 import com.fixcode.intellij.lua.debug.protocol.Protocol
 import com.fixcode.intellij.lua.debug.protocol.ProtocolMessage
@@ -995,6 +999,48 @@ class DebugSession(
                 ValueResult.fromJson(body)
             }
         }
+
+    // =====================================================================
+    // 采样性能分析（协议第 20 节，能力 profiler）
+    // =====================================================================
+
+    /** runtime 协商到了 profiler 能力（UI 据此显示「开始采样」，MCP 据此决定 profile 动作能不能用）。 */
+    val supportsProfiler: Boolean get() = hasCapability(Capabilities.PROFILER)
+
+    /**
+     * 开始采样。[vmId] 为 0 表示所有 VM；已经在采样时清空重来。[durationMs] > 0 时 runtime 到点自动停。
+     * 采样不改变游戏状态（不暂停、不改变量），只在采样期间多一个 COUNT 钩子。
+     */
+    fun profileStart(vmId: Long = 0, intervalInstructions: Int? = null, durationMs: Int? = null): CompletableFuture<ProfileStartResult> =
+        callAsync {
+            requireProfiler()
+            request(Commands.PROFILE, ProfileArgs(ProfileActions.START, vmId, intervalInstructions, durationMs).toJson())
+                .thenApply { ProfileStartResult.fromJson(it) }
+        }
+
+    /** 停止采样并取结果（一个往返）。 */
+    fun profileStop(vmId: Long = 0, sort: String? = null, limit: Int? = null, stackLimit: Int? = null): CompletableFuture<ProfileResult> =
+        profileQuery(ProfileActions.STOP, vmId, sort, limit, stackLimit)
+
+    /** 取当前结果（采样中也可以取，不停止）。 */
+    fun profileResult(vmId: Long = 0, sort: String? = null, limit: Int? = null, stackLimit: Int? = null): CompletableFuture<ProfileResult> =
+        profileQuery(ProfileActions.RESULT, vmId, sort, limit, stackLimit)
+
+    private fun profileQuery(action: String, vmId: Long, sort: String?, limit: Int?, stackLimit: Int?): CompletableFuture<ProfileResult> =
+        callAsync {
+            requireProfiler()
+            request(Commands.PROFILE, ProfileArgs(action, vmId, sort = sort, limit = limit, stackLimit = stackLimit).toJson())
+                .thenApply { ProfileResult.fromJson(it) }
+        }
+
+    private fun requireProfiler() {
+        if (!state.isConnected || welcome == null) {
+            throw DebugEngineException(ErrorCodes.DISCONNECTED, "调试连接还没建立，连上游戏后再开始采样。")
+        }
+        if (!hasCapability(Capabilities.PROFILER)) {
+            throw DebugEngineException(ErrorCodes.UNSUPPORTED, "这个 runtime 不支持采样性能分析（缺少能力 profiler），请升级游戏里的调试 runtime。")
+        }
+    }
 
     private fun requireEvalMode(mode: String) {
         when (mode) {

@@ -49,6 +49,7 @@ private:
 	void CmdPause(uint64_t id, const json& args);
 	void CmdPaused(uint64_t id, const std::string& command, const json& args);
 	void CmdDisconnect(uint64_t id, const json& args);
+	void CmdProfile(uint64_t id, const json& args);
 
 	std::shared_ptr<Connection> conn_;
 	FrameDecoder decoder_;

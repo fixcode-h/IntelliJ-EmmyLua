@@ -30,7 +30,7 @@ namespace {
 
 const char* const kRuntimeCaps[] = {
 	"cbor", "valuePath", "luaEval", "setVariable", "condition", "hitCondition", "logpoint", "capture",
-	"runToLine", "coroutines", "output", "helpers", "sourceHash", "hookMux", "richVariables", "exceptions", "viewRules",
+	"runToLine", "coroutines", "output", "helpers", "sourceHash", "hookMux", "richVariables", "exceptions", "viewRules", "profiler",
 };
 
 const char* PlatformName() {
@@ -253,6 +253,7 @@ void Session::Dispatch(uint64_t id, const std::string& command, const json& args
 		command == "setVariable" || command == "threads") {
 		return CmdPaused(id, command, args);
 	}
+	if (command == "profile") return CmdProfile(id, args);
 	if (command == "cancel") return Reply(id, json::object());
 	if (command == "disconnect") return CmdDisconnect(id, args);
 	Fail(id, "UNKNOWN_COMMAND", "runtime 不支持命令 " + command + "，请升级 runtime。");
@@ -708,6 +709,143 @@ void Session::CmdPaused(uint64_t id, const std::string& command, const json& arg
 void Session::CmdDisconnect(uint64_t id, const json& args) {
 	Reply(id, json::object());
 	Close();
+}
+
+// ---------------------------------------------------------------- 采样性能分析（第 20 节）
+
+namespace {
+
+double Percent(uint64_t part, uint64_t whole) {
+	if (whole == 0) return 0;
+	return static_cast<double>(static_cast<int64_t>(static_cast<double>(part) * 10000.0 / static_cast<double>(whole) + 0.5)) / 100.0;
+}
+
+// 多个 VM 的结果按函数键 / 折叠栈文本合并；只有一个 VM 时就是它自己
+json ProfileBody(const std::vector<std::shared_ptr<Vm>>& vms, bool sortTotal, int limit, int stackLimit) {
+	constexpr size_t kStackBytesBudget = 8u << 20; // 帧上限 16 MiB，留一半余量
+	bool running = false;
+	uint64_t samples = 0, paused = 0, truncated = 0, other = 0;
+	int64_t durationMs = 0;
+	int interval = 0;
+	double overheadMs = 0;
+	std::vector<ProfileFunctionRow> funcs;
+	std::unordered_map<std::string, size_t> funcIdx;
+	std::unordered_map<std::string, uint64_t> stacks;
+	json vmIds = json::array();
+	for (auto& vm : vms) {
+		ProfileSnapshot s = vm->profiler().Snapshot();
+		vmIds.push_back(vm->id());
+		running = running || s.running;
+		samples += s.samples;
+		paused += s.pausedSkipped;
+		truncated += s.truncatedStacks;
+		other += s.otherSamples;
+		durationMs = std::max(durationMs, s.durationMs);
+		interval = std::max(interval, s.intervalInstructions);
+		overheadMs += s.overheadMs;
+		for (auto& f : s.functions) {
+			auto it = funcIdx.find(f.key);
+			if (it == funcIdx.end()) {
+				funcIdx.emplace(f.key, funcs.size());
+				funcs.push_back(std::move(f));
+			} else {
+				funcs[it->second].selfSamples += f.selfSamples;
+				funcs[it->second].totalSamples += f.totalSamples;
+			}
+		}
+		for (auto& kv : s.stacks) stacks[kv.first] += kv.second;
+	}
+	std::sort(funcs.begin(), funcs.end(), [sortTotal](const ProfileFunctionRow& a, const ProfileFunctionRow& b) {
+		uint64_t ka = sortTotal ? a.totalSamples : a.selfSamples, kb = sortTotal ? b.totalSamples : b.selfSamples;
+		if (ka != kb) return ka > kb;
+		uint64_t sa = sortTotal ? a.selfSamples : a.totalSamples, sb = sortTotal ? b.selfSamples : b.totalSamples;
+		if (sa != sb) return sa > sb;
+		return a.key < b.key;
+	});
+	json fnList = json::array();
+	for (size_t i = 0; i < funcs.size() && static_cast<int>(i) < limit; ++i) {
+		const auto& f = funcs[i];
+		fnList.push_back({{"fn", f.fn}, {"source", f.source}, {"line", f.line}, {"selfSamples", f.selfSamples},
+			{"totalSamples", f.totalSamples}, {"selfPercent", Percent(f.selfSamples, samples)},
+			{"totalPercent", Percent(f.totalSamples, samples)}});
+	}
+	std::vector<std::pair<std::string, uint64_t>> sorted(stacks.begin(), stacks.end());
+	std::sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) {
+		return a.second != b.second ? a.second > b.second : a.first < b.first;
+	});
+	json stackList = json::array();
+	size_t bytes = 0;
+	bool stacksTruncated = false;
+	for (size_t i = 0; i < sorted.size(); ++i) {
+		if (static_cast<int>(i) >= stackLimit || bytes + sorted[i].first.size() > kStackBytesBudget) {
+			stacksTruncated = true;
+			break;
+		}
+		bytes += sorted[i].first.size() + 32;
+		stackList.push_back({{"stack", sorted[i].first}, {"samples", sorted[i].second}});
+	}
+	json body = {
+		{"running", running},
+		{"vms", std::move(vmIds)},
+		{"samples", samples},
+		{"durationMs", durationMs},
+		{"intervalInstructions", interval},
+		{"overheadMs", static_cast<double>(static_cast<int64_t>(overheadMs * 100 + 0.5)) / 100.0},
+		{"functions", std::move(fnList)},
+		{"totalFunctions", funcs.size()},
+		{"stacks", std::move(stackList)},
+		{"totalStacks", sorted.size()},
+		{"stacksTruncated", stacksTruncated},
+	};
+	if (paused) body["pausedSkipped"] = paused;
+	if (truncated) body["truncatedSamples"] = truncated;
+	if (other) body["otherSamples"] = other;
+	return body;
+}
+
+} // namespace
+
+void Session::CmdProfile(uint64_t id, const json& args) {
+	Core& core = Core::Get();
+	const std::string action = GetStr(args, "action");
+	if (action != "start" && action != "stop" && action != "result") {
+		return Fail(id, "INVALID_ARGS", "profile 的 action 只能是 start / stop / result。");
+	}
+	const uint64_t vmId = GetU64(args, "vmId");
+	std::vector<std::shared_ptr<Vm>> vms;
+	if (vmId != 0) {
+		auto vm = core.FindVm(vmId);
+		if (!vm) return Fail(id, "VM_NOT_FOUND", "Lua VM " + std::to_string(vmId) + " 不存在或已经关闭，请刷新 VM 列表。");
+		vms.push_back(vm);
+	} else {
+		vms = core.Vms();
+		if (vms.empty()) return Fail(id, "VM_NOT_FOUND", "进程里还没有注册 Lua VM，等游戏执行 Lua 后再开始采样。");
+	}
+	if (action == "start") {
+		const int interval = GetInt(args, "intervalInstructions", Profiler::kDefaultInterval);
+		if (interval < Profiler::kMinInterval || interval > Profiler::kMaxInterval) {
+			return Fail(id, "INVALID_ARGS", "intervalInstructions 的范围是 " + std::to_string(Profiler::kMinInterval) + "–" +
+				std::to_string(Profiler::kMaxInterval) + "。");
+		}
+		const int durationMs = GetInt(args, "durationMs", 0);
+		if (durationMs < 0 || durationMs > 3600000) return Fail(id, "INVALID_ARGS", "durationMs 的范围是 0–3600000（0 表示直到 stop）。");
+		json ids = json::array();
+		for (auto& vm : vms) {
+			vm->profiler().Start(interval, durationMs);
+			ids.push_back(vm->id());
+		}
+		return Reply(id, {{"vms", std::move(ids)}, {"intervalInstructions", interval}, {"durationMs", durationMs}});
+	}
+	const std::string sort = GetStr(args, "sort", "self");
+	if (sort != "self" && sort != "total") return Fail(id, "INVALID_ARGS", "sort 只能是 self / total。");
+	const int limit = GetInt(args, "limit", 50);
+	if (limit < 1 || limit > 1000) return Fail(id, "INVALID_ARGS", "limit 的范围是 1–1000。");
+	const int stackLimit = GetInt(args, "stackLimit", 500);
+	if (stackLimit < 0 || stackLimit > 10000) return Fail(id, "INVALID_ARGS", "stackLimit 的范围是 0–10000。");
+	if (action == "stop") {
+		for (auto& vm : vms) vm->profiler().Stop();
+	}
+	Reply(id, ProfileBody(vms, sort == "total", limit, stackLimit));
 }
 
 } // namespace emmy

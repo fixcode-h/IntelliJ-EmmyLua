@@ -26,6 +26,13 @@ import com.fixcode.intellij.lua.debug.protocol.OutputEvent
 import com.fixcode.intellij.lua.debug.protocol.PauseReasons
 import com.fixcode.intellij.lua.debug.protocol.PausedEvent
 import com.fixcode.intellij.lua.debug.protocol.ProcessInfo
+import com.fixcode.intellij.lua.debug.protocol.ProfileActions
+import com.fixcode.intellij.lua.debug.protocol.ProfileArgs
+import com.fixcode.intellij.lua.debug.protocol.ProfileFunctionDto
+import com.fixcode.intellij.lua.debug.protocol.ProfileResult
+import com.fixcode.intellij.lua.debug.protocol.ProfileSorts
+import com.fixcode.intellij.lua.debug.protocol.ProfileStackDto
+import com.fixcode.intellij.lua.debug.protocol.ProfileStartResult
 import com.fixcode.intellij.lua.debug.protocol.ProtocolMessage
 import com.fixcode.intellij.lua.debug.protocol.ResumedBy
 import com.fixcode.intellij.lua.debug.protocol.ResumedEvent
@@ -361,8 +368,64 @@ class FakeRuntime(
         }
     }
 
+    // ---------- 采样分析（第 20 节）：测试预置结果，假 runtime 不真的采样 ----------
+
+    /** 每个 VM 的预置采样结果：函数（样本数）和折叠栈。result / stop 按 sort / limit / stackLimit 裁剪后返回。 */
+    val profileData: MutableMap<Long, Pair<List<ProfileFunctionDto>, List<ProfileStackDto>>> = java.util.concurrent.ConcurrentHashMap()
+    private val profiling = HashMap<Long, Int>() // vmId → intervalInstructions
+
+    fun isProfiling(vmId: Long): Boolean = synchronized(lock) { profiling.containsKey(vmId) }
+
+    private fun profile(request: ProtocolMessage.Request): Result {
+        val args = ProfileArgs.fromJson(request.args)
+        val targets = if (args.vmId != 0L) {
+            listOf(vms[args.vmId] ?: return error(ErrorCodes.VM_NOT_FOUND, "Lua VM ${args.vmId} 不存在或已经关闭，请刷新 VM 列表。"))
+        } else {
+            vms.values.toList().ifEmpty { return error(ErrorCodes.VM_NOT_FOUND, "进程里还没有注册 Lua VM，等游戏执行 Lua 后再开始采样。") }
+        }
+        when (args.action) {
+            ProfileActions.START -> {
+                val interval = args.intervalInstructions ?: 1000
+                if (interval !in 100..10_000_000) return error(ErrorCodes.INVALID_ARGS, "intervalInstructions 的范围是 100–10000000。")
+                val duration = args.durationMs ?: 0
+                if (duration !in 0..3_600_000) return error(ErrorCodes.INVALID_ARGS, "durationMs 的范围是 0–3600000（0 表示直到 stop）。")
+                targets.forEach { profiling[it.vmId] = interval }
+                return ok(ProfileStartResult(targets.map { it.vmId }, interval, duration))
+            }
+            ProfileActions.STOP, ProfileActions.RESULT -> {
+                val sort = args.sort ?: ProfileSorts.SELF
+                if (sort != ProfileSorts.SELF && sort != ProfileSorts.TOTAL) return error(ErrorCodes.INVALID_ARGS, "sort 只能是 self / total。")
+                val limit = args.limit ?: 50
+                if (limit !in 1..1000) return error(ErrorCodes.INVALID_ARGS, "limit 的范围是 1–1000。")
+                val stackLimit = args.stackLimit ?: 500
+                if (stackLimit !in 0..10000) return error(ErrorCodes.INVALID_ARGS, "stackLimit 的范围是 0–10000。")
+                val interval = targets.maxOf { profiling[it.vmId] ?: 0 }
+                val running = targets.any { profiling.containsKey(it.vmId) }
+                if (args.action == ProfileActions.STOP) targets.forEach { profiling.remove(it.vmId) }
+                val functions = targets.flatMap { profileData[it.vmId]?.first.orEmpty() }
+                val stacks = targets.flatMap { profileData[it.vmId]?.second.orEmpty() }.sortedByDescending { it.samples }
+                val samples = stacks.sumOf { it.samples }
+                val sorted = functions.sortedByDescending { if (sort == ProfileSorts.TOTAL) it.totalSamples else it.selfSamples }
+                    .map {
+                        it.copy(
+                            selfPercent = if (samples == 0L) 0.0 else it.selfSamples * 100.0 / samples,
+                            totalPercent = if (samples == 0L) 0.0 else it.totalSamples * 100.0 / samples
+                        )
+                    }
+                return ok(
+                    ProfileResult(
+                        running && args.action != ProfileActions.STOP, targets.map { it.vmId }, samples, 1000, interval,
+                        sorted.take(limit), sorted.size, stacks.take(stackLimit), stacks.size, stacks.size > stackLimit, overheadMs = 0.5
+                    )
+                )
+            }
+            else -> return error(ErrorCodes.INVALID_ARGS, "profile 的 action 只能是 start / stop / result。")
+        }
+    }
+
     /** 协议第 4 节：断线（主动或异常）后清空断点、恢复所有 VM，游戏不能因为 IDE 掉线而卡住。 */
     private fun onDisconnected(by: String) {
+        profiling.clear()
         breakpoints.clear()
         hitCounts.clear()
         statusSent.clear()
@@ -441,6 +504,8 @@ class FakeRuntime(
                     Commands.SET_VARIABLE -> setVariable(request)
                     Commands.PING -> if (ignorePings) return else ok(jsonObject { put("timeMs", System.currentTimeMillis()) })
                     Commands.CANCEL -> ok()
+                    Commands.PROFILE -> if (Capabilities.PROFILER in caps) profile(request) else
+                        error(ErrorCodes.UNKNOWN_COMMAND, "runtime 不支持命令 ${request.command}，请升级 runtime。")
                     Commands.DISCONNECT -> {
                         DisconnectArgs.fromJson(request.args)
                         reply(request, ok())
@@ -786,11 +851,11 @@ class FakeRuntime(
             Capabilities.VALUE_PATH, Capabilities.LUA_EVAL, Capabilities.SET_VARIABLE, Capabilities.CONDITION,
             Capabilities.HIT_CONDITION, Capabilities.LOGPOINT, Capabilities.CAPTURE, Capabilities.RUN_TO_LINE,
             Capabilities.EXCEPTIONS, Capabilities.OUTPUT, Capabilities.HELPERS, Capabilities.TERMINATE,
-            Capabilities.RICH_VARIABLES, Capabilities.VIEW_RULES, Capabilities.COROUTINES
+            Capabilities.RICH_VARIABLES, Capabilities.VIEW_RULES, Capabilities.COROUTINES, Capabilities.PROFILER
         )
 
-        /** v3.0 原文的 runtime：没有变量视图增量。 */
-        val CAPS_V30: List<String> = ALL_CAPS - Capabilities.RICH_VARIABLES - Capabilities.VIEW_RULES
+        /** v3.0 原文的 runtime：没有变量视图增量，也没有采样分析。 */
+        val CAPS_V30: List<String> = ALL_CAPS - Capabilities.RICH_VARIABLES - Capabilities.VIEW_RULES - Capabilities.PROFILER
 
         /** 没有 runToLine 的 runtime：IDE 要走「临时断点 + 确认后继续」的兜底。 */
         val CAPS_WITHOUT_RUN_TO_LINE: List<String> = ALL_CAPS - Capabilities.RUN_TO_LINE
