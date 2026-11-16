@@ -94,6 +94,8 @@ project(":") {
             intellijIdeaCommunity(buildVersionData.ideaMainVersion)
             // 语言支持走 LSP：LSP4IJ 当客户端，emmylua_ls 当服务器（docs/design/lsp-migration.md）
             plugin("com.redhat.devtools.lsp4ij", providers.gradleProperty("lsp4ijVersion").get())
+            // 可选依赖：.emmyrc.json 的 JSON Schema（plugin.xml 里 optional depends）
+            bundledPlugin("com.intellij.modules.json")
             pluginVerifier()
             testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Platform)
         }

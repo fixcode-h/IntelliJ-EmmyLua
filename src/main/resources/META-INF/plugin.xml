@@ -24,6 +24,8 @@
     </ul>
     ]]></change-notes>
     <idea-version since-build="252" until-build="252.*"/>
+    <!-- 可选：JSON 插件在时给 .emmyrc.json 挂 schema -->
+    <depends optional="true" config-file="emmylua-json.xml">com.intellij.modules.json</depends>
     <xi:include href="emmylua-core.xml" xpointer="xpointer(/idea-plugin/*)"/>
     <!-- 调试链路（附加 / Android 真机 / MCP / 变量视图） -->
     <xi:include href="emmylua-debug.xml" xpointer="xpointer(/idea-plugin/*)"/>
