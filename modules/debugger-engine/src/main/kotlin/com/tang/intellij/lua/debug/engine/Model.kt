@@ -74,7 +74,14 @@ data class VariableHandle(val pause: PauseInfo, val variable: VariableDto) {
         if (variable.ref > 0) VariableContainer(pause, variable.ref, variable.name, variable.namedCount?.plus(variable.indexedCount ?: 0)) else null
 }
 
-data class VariablePage(val variables: List<VariableHandle>, val total: Int)
+data class VariablePage(
+    val variables: List<VariableHandle>,
+    val total: Int,
+    /** 底部分组（继承成员、方法、元表），不计入 [total]。 */
+    val groups: List<VariableHandle> = emptyList(),
+    /** runtime 因字节上限少给了项。 */
+    val truncated: Boolean = false
+)
 
 data class EvalValue(
     val pause: PauseInfo,

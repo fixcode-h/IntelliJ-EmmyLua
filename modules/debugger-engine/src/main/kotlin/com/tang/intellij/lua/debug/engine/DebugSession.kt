@@ -31,6 +31,8 @@ import com.tang.intellij.lua.debug.protocol.SetBreakpointsArgs
 import com.tang.intellij.lua.debug.protocol.SetBreakpointsResult
 import com.tang.intellij.lua.debug.protocol.SetOptionsArgs
 import com.tang.intellij.lua.debug.protocol.SetVariableArgs
+import com.tang.intellij.lua.debug.protocol.SetViewRulesArgs
+import com.tang.intellij.lua.debug.protocol.SetViewRulesResult
 import com.tang.intellij.lua.debug.protocol.SourceRef
 import com.tang.intellij.lua.debug.protocol.StackFrameDto
 import com.tang.intellij.lua.debug.protocol.StackTraceArgs
@@ -94,6 +96,13 @@ class DebugSession(
     private val initiators = HashMap<Long, Initiator>()
     private val stackCache = HashMap<StackKey, StackPage>()
     private val shaCache = HashMap<String, String?>()
+    /** 当前选项：握手时全量下发，运行中由 [updateOptions] 累积修改。只在会话线程读写。 */
+    private var options: SetOptionsArgs = config.options
+    private var viewRules: JsonObject? = config.viewRules
+
+    /** variables.maxValueLength（设置页「字符串预览长度」），任意线程可改，下次取变量生效。 */
+    @Volatile
+    var maxValueLength: Int? = config.maxValueLength
     private var reconnecting = false
     private var reconnectAttempt = 0
     private var runtimeTerminatedReason: String? = null
@@ -242,15 +251,54 @@ class DebugSession(
                 if (error != null) logEngine("类型显示脚本加载失败：${unwrap(error).message}")
             }
         }
-        request(Commands.SET_OPTIONS, effectiveOptions(welcome).toJson()).whenComplete { _, error ->
+        // variable-view.md 13.4：loadHelpers 之后、setOptions 之前
+        viewRules?.let { rules -> if (welcome.has(Capabilities.VIEW_RULES)) sendViewRules(rules) }
+        request(Commands.SET_OPTIONS, effectiveOptions(options, welcome).toJson()).whenComplete { _, error ->
             if (error != null) logEngine("调试选项下发失败：${unwrap(error).message}")
         }
         sendBreakpoints(breakpoints.fullSnapshot())
         return request(Commands.CONFIGURATION_DONE, JsonObject())
     }
 
-    private fun effectiveOptions(welcome: Welcome): SetOptionsArgs =
-        config.options.copy(allowLuaEval = config.options.allowLuaEval?.takeIf { welcome.has(Capabilities.LUA_EVAL) })
+    /** 只发 runtime 认识的项：没有 luaEval 能力不发 allowLuaEval，没有 richVariables 不发 variableView。 */
+    private fun effectiveOptions(options: SetOptionsArgs, welcome: Welcome): SetOptionsArgs = options.copy(
+        allowLuaEval = options.allowLuaEval?.takeIf { welcome.has(Capabilities.LUA_EVAL) },
+        variableView = options.variableView?.takeIf { welcome.has(Capabilities.RICH_VARIABLES) }
+    )
+
+    /**
+     * 运行中改选项（设置页「应用」、MCP 打开任意求值）：只发给出的项，并记下来，重连后的握手带上最新值。
+     * 没连上时只记下来，完成时不报错。
+     */
+    fun updateOptions(change: SetOptionsArgs): CompletableFuture<Unit> = callAsync {
+        options = options.merge(change)
+        val welcome = this.welcome
+        if (!state.isConnected || welcome == null) return@callAsync CompletableFuture.completedFuture(Unit)
+        val effective = effectiveOptions(change, welcome)
+        if (effective.toJson().size() == 0) return@callAsync CompletableFuture.completedFuture(Unit)
+        request(Commands.SET_OPTIONS, effective.toJson()).thenApply { }
+    }
+
+    /** 整体替换显示规则（variable-view.md 13.4）；runtime 不支持时返回 null。为空表示清空规则。 */
+    fun setViewRules(rules: JsonObject?): CompletableFuture<SetViewRulesResult?> = callAsync {
+        viewRules = rules
+        val welcome = this.welcome
+        if (!state.isConnected || welcome == null || !welcome.has(Capabilities.VIEW_RULES)) {
+            return@callAsync CompletableFuture.completedFuture(null)
+        }
+        sendViewRules(rules ?: JsonObject()).thenApply { it }
+    }
+
+    private fun sendViewRules(rules: JsonObject): CompletableFuture<SetViewRulesResult?> =
+        request(Commands.SET_VIEW_RULES, SetViewRulesArgs(rules).toJson()).handle { body, error ->
+            if (error != null) {
+                logEngine("显示规则下发失败：${unwrap(error).message}")
+                return@handle null
+            }
+            val result = SetViewRulesResult.fromJson(body)
+            result.warnings.forEach { logEngine("显示规则 ${it.type ?: ""}：${it.message}") }
+            result
+        }
 
     private fun onWelcome(welcome: Welcome) {
         val previous = this.welcome
@@ -807,13 +855,36 @@ class DebugSession(
         }
     }
 
-    fun variables(container: VariableContainer, start: Int = 0, count: Int = 100, filter: String? = null): CompletableFuture<VariablePage> =
+    /**
+     * 取一页子项。[view]、[expand] 和 maxValueLength 是 richVariables 增量，runtime 没有这个能力时不发。
+     * 没有 richVariables 时把 v3.0 的 `(metatable)` 伪项挪进 groups，UI 和 MCP 只认一种模型（variable-view.md 15.1）。
+     */
+    fun variables(
+        container: VariableContainer,
+        start: Int = 0,
+        count: Int = 100,
+        filter: String? = null,
+        view: String? = null,
+        expand: List<List<String>>? = null
+    ): CompletableFuture<VariablePage> =
         callAsync {
             ensureCurrent(container.pause)
-            request(Commands.VARIABLES, VariablesArgs(container.ref, start, count, filter).toJson()).handle { body, error ->
+            val rich = hasCapability(Capabilities.RICH_VARIABLES)
+            val args = if (rich) {
+                VariablesArgs(container.ref, start, count, filter, view, maxValueLength, expand)
+            } else {
+                VariablesArgs(container.ref, start, count, filter)
+            }
+            request(Commands.VARIABLES, args.toJson()).handle { body, error ->
                 if (error != null) throw staleOr(error)
                 val result = VariablesResult.fromJson(body)
-                VariablePage(result.variables.map { VariableHandle(container.pause, it) }, result.total)
+                val handles = result.variables.map { VariableHandle(container.pause, it) }
+                if (rich) {
+                    VariablePage(handles, result.total, result.groups.map { VariableHandle(container.pause, it) }, result.truncated == true)
+                } else {
+                    val (meta, plain) = handles.partition { it.variable.name == METATABLE_PSEUDO }
+                    VariablePage(plain, result.total - meta.size, meta)
+                }
             }
         }
 
@@ -988,6 +1059,8 @@ class DebugSession(
     }
 
     companion object {
+        /** v3.0 runtime 把元表作为子项返回时用的名字。 */
+        const val METATABLE_PSEUDO = "(metatable)"
         fun unwrap(error: Throwable): Throwable {
             var current = error
             while ((current is CompletionException || current is ExecutionException) && current.cause != null) current = current.cause!!

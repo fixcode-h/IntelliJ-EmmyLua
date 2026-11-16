@@ -1,5 +1,6 @@
 package com.tang.intellij.lua.debug.engine
 
+import com.google.gson.JsonObject
 import com.tang.intellij.lua.debug.protocol.HelperScript
 import com.tang.intellij.lua.debug.protocol.SetOptionsArgs
 
@@ -28,6 +29,10 @@ data class SessionConfig(
     val helpers: List<HelperScript> = emptyList(),
     val helperMain: String = "emmyHelper",
     val options: SetOptionsArgs = SetOptionsArgs(captureOutput = true),
+    /** 显示规则（variable-view.md 11.1 的文件内容）；runtime 有 viewRules 能力时握手后下发。 */
+    val viewRules: JsonObject? = null,
+    /** variables.maxValueLength；只在协商了 richVariables 时发送。 */
+    val maxValueLength: Int? = null,
     val requestTimeoutMillis: Long = 10_000,
     val handshakeTimeoutMillis: Long = 5_000,
     /** 心跳间隔，0 关闭（协议第 4 节：5 秒一次，连续 3 次无回应视为断线）。 */

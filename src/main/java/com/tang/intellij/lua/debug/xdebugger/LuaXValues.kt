@@ -25,8 +25,8 @@ import com.tang.intellij.lua.debug.protocol.EvalModes
 import com.tang.intellij.lua.debug.protocol.VariableDto
 import java.util.concurrent.CompletableFuture
 
-/** 一页取多少子项（协议 9.3：默认 100）。更多的用「显示更多」按需再取。 */
-internal const val CHILDREN_PAGE = 100
+/** 一页取多少子项：设置页「每页条数」（默认 100）。更多的用「显示更多」按需再取。 */
+internal fun childrenPage(): Int = LuaVariableViewSync.settings().pageSize
 
 /** 摘要直接用 runtime 给的 value，不在 IDE 侧拼（变量展示设计 15.2）。 */
 internal fun presentationOf(type: String, value: String, typeName: String?): XValuePresentation = when (type) {
@@ -44,7 +44,7 @@ private fun unquote(value: String): String =
 
 /** 子项加载：分页、过期时静默显示提示（协议第 18 节：STALE 不弹错误）。 */
 internal fun loadChildren(engine: DebugSession, container: VariableContainer, node: XCompositeNode, start: Int) {
-    engine.variables(container, start, CHILDREN_PAGE).whenComplete { page, error ->
+    engine.variables(container, start, childrenPage()).whenComplete { page, error ->
         if (node.isObsolete) return@whenComplete
         if (error != null) {
             node.setErrorMessage(messageOf(error))
@@ -52,6 +52,8 @@ internal fun loadChildren(engine: DebugSession, container: VariableContainer, no
         }
         val list = XValueChildrenList()
         page.variables.forEach { list.add(LuaV3Value(engine, it.variable, container)) }
+        // 继承成员、方法、元表放在底部分组（variable-view.md 5.4），只在第一页给
+        page.groups.forEach { group -> group.children()?.let { list.addBottomGroup(LuaV3VariableGroup(engine, it, group.variable.value)) } }
         val loaded = start + page.variables.size
         val remaining = page.total - loaded
         node.addChildren(list, remaining <= 0)
@@ -119,6 +121,17 @@ class LuaV3EvalValue(private val engine: DebugSession, private val value: EvalVa
     }
 
     override fun getEvaluationExpression(): String = value.expression
+}
+
+/** runtime 给的底部分组（「继承自 BagPanel」「方法」「元表」）。[summary] 显示在分组名后面。 */
+class LuaV3VariableGroup(
+    private val engine: DebugSession,
+    private val container: VariableContainer,
+    private val summary: String
+) : XValueGroup(container.name) {
+    override fun getComment(): String? = summary.takeIf { it.isNotBlank() }
+
+    override fun computeChildren(node: XCompositeNode) = loadChildren(engine, container, node, 0)
 }
 
 /** 作用域分组（upvalues / varargs / globals）。locals 直接平铺在帧下面。 */

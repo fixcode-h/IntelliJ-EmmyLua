@@ -56,7 +56,8 @@ class LuaV3DebugProcessFactory : LuaDebugProcessFactory {
                 autoLearn = mapping.autoLearn,
                 caseSensitive = SystemInfo.isFileSystemCaseSensitive
             )
-            val config = configure(SessionConfig(name = target.displayName, token = token, helpers = helpers()))
+            val base = SessionConfig(name = target.displayName, token = token, helpers = helpers())
+            val config = configure(LuaVariableViewSync.configure(session.project, base))
             val engine = DebugSession(config, connector, mapper)
             return LuaV3DebugProcess(session, engine, target, onClosed)
         }

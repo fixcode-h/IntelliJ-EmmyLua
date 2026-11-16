@@ -149,7 +149,12 @@ class LuaDebugConfigurable : BoundConfigurable(LuaDebugBundle.message("settings.
                     .bindItem(settings::logLevel.toNullableProperty())
             }
         }
-        onApply { LuaMcpService.getInstance()?.applySettings(); refreshMcpState() }
+        onApply {
+            LuaMcpService.getInstance()?.applySettings()
+            refreshMcpState()
+            // 变量视图设置推给正在调试的会话（variable-view.md 15.3）
+            com.tang.intellij.lua.debug.xdebugger.LuaVariableViewSync.applyToAllSessions()
+        }
         refreshMcpState()
         refreshInstallState()
     }

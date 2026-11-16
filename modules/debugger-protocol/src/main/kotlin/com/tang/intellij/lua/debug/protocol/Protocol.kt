@@ -32,6 +32,7 @@ object Commands {
     const val VARIABLES = "variables"
     const val EVALUATE = "evaluate"
     const val SET_VARIABLE = "setVariable"
+    const val SET_VIEW_RULES = "setViewRules"
     const val CANCEL = "cancel"
     const val PING = "ping"
     const val DISCONNECT = "disconnect"
@@ -66,11 +67,15 @@ object Capabilities {
     const val SOURCE_HASH = "sourceHash"
     const val HOOK_MUX = "hookMux"
     const val TERMINATE = "terminate"
+    /** 变量视图增量（variable-view.md 13.2–13.3、13.5）：kind / groups / expand / variableView 选项。 */
+    const val RICH_VARIABLES = "richVariables"
+    /** setViewRules（variable-view.md 13.4）。 */
+    const val VIEW_RULES = "viewRules"
 
     /** IDE 在 hello 里声明想用的能力；最终生效的是 welcome 里的交集。 */
     val CLIENT_WANTED: List<String> = listOf(
         VALUE_PATH, LUA_EVAL, SET_VARIABLE, CONDITION, HIT_CONDITION, LOGPOINT, CAPTURE, RUN_TO_LINE,
-        EXCEPTIONS, COROUTINES, OUTPUT, HELPERS, SOURCE_HASH, TERMINATE
+        EXCEPTIONS, COROUTINES, OUTPUT, HELPERS, SOURCE_HASH, TERMINATE, RICH_VARIABLES, VIEW_RULES
     )
 }
 
@@ -135,6 +140,13 @@ object ScopeNames {
     const val UPVALUES = "upvalues"
     const val VARARGS = "varargs"
     const val GLOBALS = "globals"
+}
+
+/** variables.view（variable-view.md 13.3）。 */
+object VariableViews {
+    const val AUTO = "auto"
+    /** lua_next 原始顺序、不分组、不调 helper / 宿主 / __tostring。 */
+    const val RAW = "raw"
 }
 
 object EvalModes {

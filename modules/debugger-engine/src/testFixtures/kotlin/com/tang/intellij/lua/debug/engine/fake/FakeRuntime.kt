@@ -37,6 +37,8 @@ import com.tang.intellij.lua.debug.protocol.ScopesResult
 import com.tang.intellij.lua.debug.protocol.SetBreakpointsArgs
 import com.tang.intellij.lua.debug.protocol.SetBreakpointsResult
 import com.tang.intellij.lua.debug.protocol.SetOptionsArgs
+import com.tang.intellij.lua.debug.protocol.SetViewRulesArgs
+import com.tang.intellij.lua.debug.protocol.SetViewRulesResult
 import com.tang.intellij.lua.debug.protocol.SetVariableArgs
 import com.tang.intellij.lua.debug.protocol.SourceRef
 import com.tang.intellij.lua.debug.protocol.StackFrameDto
@@ -113,6 +115,9 @@ class FakeRuntime(
     private val frames = HashMap<Long, Pair<FakeVm, FakeFrame>>()
     private val refs = HashMap<Long, Pair<FakeVm, LinkedHashMap<String, FakeValue>>>()
     var helpers: LoadHelpersArgs? = null
+    /** 最近一次 setViewRules 收到的规则。 */
+    @Volatile
+    var viewRules: com.google.gson.JsonObject? = null
         private set
     var connections: Int = 0
         private set
@@ -397,6 +402,11 @@ class FakeRuntime(
                         options = merge(options, incoming)
                         ok()
                     }
+                    Commands.SET_VIEW_RULES -> {
+                        val rules = SetViewRulesArgs.fromJson(request.args).rules
+                        viewRules = rules
+                        ok(SetViewRulesResult(rules.size()))
+                    }
                     Commands.SET_BREAKPOINTS -> setBreakpoints(request)
                     Commands.CONFIGURATION_DONE -> {
                         configured = true
@@ -632,8 +642,16 @@ class FakeRuntime(
     private fun variables(request: ProtocolMessage.Request): Result {
         val args = VariablesArgs.fromJson(request.args)
         val (vm, entries) = refs[args.ref] ?: return error(ErrorCodes.STALE_REFERENCE, "这个变量已失效（游戏已继续运行），请重新获取调用栈。")
-        val page = entries.entries.drop(args.start).take(args.count).map { (name, value) -> variableDto(vm, name, value, name) }
-        return ok(VariablesResult(page, entries.size))
+        // 名字带括号的（(metatable) 等）是伪项：v3.0 混在子项里；有 richVariables 时放进 groups（variable-view.md 13.3）
+        val rich = Capabilities.RICH_VARIABLES in caps
+        val (pseudo, plain) = entries.entries.partition { rich && it.key.startsWith("(") }
+        val page = plain.drop(args.start).take(args.count).map { (name, value) ->
+            val dto = variableDto(vm, name, value, name)
+            val max = args.maxValueLength
+            if (rich && max != null && dto.value.length > max) dto.copy(value = dto.value.take(max) + "…", attrs = listOf("truncated")) else dto
+        }
+        val groups = if (args.start == 0) pseudo.map { (name, value) -> variableDto(vm, name, value, name).copy(kind = "group") } else emptyList()
+        return ok(VariablesResult(page, plain.size, groups, sorted = if (rich) false else null))
     }
 
     private fun evaluate(request: ProtocolMessage.Request): Result {
@@ -747,23 +765,18 @@ class FakeRuntime(
         return current
     }
 
-    private fun merge(base: SetOptionsArgs, incoming: SetOptionsArgs) = SetOptionsArgs(
-        incoming.stopOnEntry ?: base.stopOnEntry,
-        incoming.exceptions ?: base.exceptions,
-        incoming.captureOutput ?: base.captureOutput,
-        incoming.allowLuaEval ?: base.allowLuaEval,
-        incoming.valuePathInvokeIndex ?: base.valuePathInvokeIndex,
-        incoming.evalTimeoutMs ?: base.evalTimeoutMs,
-        incoming.caseSensitive ?: base.caseSensitive,
-        incoming.pauseLatencyMs ?: base.pauseLatencyMs
-    )
+    private fun merge(base: SetOptionsArgs, incoming: SetOptionsArgs) = base.merge(incoming)
 
     companion object {
         val ALL_CAPS: List<String> = listOf(
             Capabilities.VALUE_PATH, Capabilities.LUA_EVAL, Capabilities.SET_VARIABLE, Capabilities.CONDITION,
             Capabilities.HIT_CONDITION, Capabilities.LOGPOINT, Capabilities.CAPTURE, Capabilities.RUN_TO_LINE,
-            Capabilities.EXCEPTIONS, Capabilities.OUTPUT, Capabilities.HELPERS, Capabilities.TERMINATE
+            Capabilities.EXCEPTIONS, Capabilities.OUTPUT, Capabilities.HELPERS, Capabilities.TERMINATE,
+            Capabilities.RICH_VARIABLES, Capabilities.VIEW_RULES
         )
+
+        /** v3.0 原文的 runtime：没有变量视图增量。 */
+        val CAPS_V30: List<String> = ALL_CAPS - Capabilities.RICH_VARIABLES - Capabilities.VIEW_RULES
 
         /** 没有 runToLine 的 runtime：IDE 要走「临时断点 + 确认后继续」的兜底。 */
         val CAPS_WITHOUT_RUN_TO_LINE: List<String> = ALL_CAPS - Capabilities.RUN_TO_LINE

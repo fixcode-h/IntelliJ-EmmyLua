@@ -1,5 +1,6 @@
 package com.tang.intellij.lua.debug.protocol
 
+import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 
 // 协议 v3 的消息体，字段名就是线上的名字（见 docs/design/protocol-v3.md）。
@@ -159,19 +160,30 @@ data class SetOptionsArgs(
     val valuePathInvokeIndex: Boolean? = null,
     val evalTimeoutMs: Int? = null,
     val caseSensitive: Boolean? = null,
-    val pauseLatencyMs: Int? = null
+    val pauseLatencyMs: Int? = null,
+    /** variable-view.md 13.5，只在协商了 richVariables 时下发；内容原样转发（设置页决定字段）。 */
+    val variableView: JsonObject? = null
 ) : JsonDto {
     override fun toJson() = jsonObject {
         put("stopOnEntry", stopOnEntry); put("exceptions", exceptions); put("captureOutput", captureOutput)
         put("allowLuaEval", allowLuaEval); put("valuePathInvokeIndex", valuePathInvokeIndex)
         put("evalTimeoutMs", evalTimeoutMs); put("caseSensitive", caseSensitive); put("pauseLatencyMs", pauseLatencyMs)
+        put("variableView", variableView)
     }
+
+    /** 用 [other] 里给出的项覆盖本对象（setOptions 只改给出的项，本地也按同样规则累积）。 */
+    fun merge(other: SetOptionsArgs) = SetOptionsArgs(
+        other.stopOnEntry ?: stopOnEntry, other.exceptions ?: exceptions, other.captureOutput ?: captureOutput,
+        other.allowLuaEval ?: allowLuaEval, other.valuePathInvokeIndex ?: valuePathInvokeIndex,
+        other.evalTimeoutMs ?: evalTimeoutMs, other.caseSensitive ?: caseSensitive, other.pauseLatencyMs ?: pauseLatencyMs,
+        other.variableView ?: variableView
+    )
 
     companion object {
         fun fromJson(json: JsonObject) = SetOptionsArgs(
             json.optBoolean("stopOnEntry"), json.optString("exceptions"), json.optBoolean("captureOutput"),
             json.optBoolean("allowLuaEval"), json.optBoolean("valuePathInvokeIndex"), json.optInt("evalTimeoutMs"),
-            json.optBoolean("caseSensitive"), json.optInt("pauseLatencyMs")
+            json.optBoolean("caseSensitive"), json.optInt("pauseLatencyMs"), json.optObject("variableView")
         )
     }
 }
@@ -532,11 +544,38 @@ data class ScopesResult(val scopes: List<ScopeDto>) : JsonDto {
     }
 }
 
-data class VariablesArgs(val ref: Long, val start: Int = 0, val count: Int = 100, val filter: String? = null) : JsonDto {
-    override fun toJson() = jsonObject { put("ref", ref); put("start", start); put("count", count); put("filter", filter) }
+data class VariablesArgs(
+    val ref: Long,
+    val start: Int = 0,
+    val count: Int = 100,
+    val filter: String? = null,
+    /** 以下三项是 richVariables 增量（variable-view.md 13.3），没协商时不发。 */
+    val view: String? = null,
+    val maxValueLength: Int? = null,
+    /** 顺带展开的子路径（按显示名），结果放在对应变量的 children 里。 */
+    val expand: List<List<String>>? = null
+) : JsonDto {
+    override fun toJson() = jsonObject {
+        put("ref", ref); put("start", start); put("count", count); put("filter", filter)
+        put("view", view); put("maxValueLength", maxValueLength)
+        if (!expand.isNullOrEmpty()) put("expand", JsonArray().apply { expand.forEach { path -> add(JsonArray().apply { path.forEach(::add) }) } })
+    }
 
     companion object {
-        fun fromJson(json: JsonObject) = VariablesArgs(json.reqLong("ref"), json.optInt("start") ?: 0, json.optInt("count") ?: 100, json.optString("filter"))
+        fun fromJson(json: JsonObject) = VariablesArgs(
+            json.reqLong("ref"), json.optInt("start") ?: 0, json.optInt("count") ?: 100, json.optString("filter"),
+            json.optString("view"), json.optInt("maxValueLength"),
+            json.optArray("expand")?.map { path -> path.asJsonArray.map { it.asString } }
+        )
+    }
+}
+
+/** 函数定义处、协程栈顶、模块文件（variable-view.md 13.2）。 */
+data class LocationDto(val chunkName: String, val line: Int) : JsonDto {
+    override fun toJson() = jsonObject { put("chunkName", chunkName); put("line", line) }
+
+    companion object {
+        fun fromJson(json: JsonObject) = LocationDto(json.optString("chunkName") ?: "", json.optInt("line") ?: 0)
     }
 }
 
@@ -551,32 +590,93 @@ data class VariableDto(
     val namedCount: Int? = null,
     val indexedCount: Int? = null,
     /** 能在 valuePath 语法下重新取到这个值的表达式（添加到监视、setVariable 用）。 */
-    val evaluateName: String? = null
+    val evaluateName: String? = null,
+    // ---- 以下是 richVariables 增量（variable-view.md 13.2），没协商时全为空 ----
+    /** 显示形态：array / record / object / class / module / function / group …，未知值按 type 显示。 */
+    val kind: String? = null,
+    /** inherited / shadowed / metamethod / invalid / readOnly / lazy / pinned / truncated / helperError */
+    val attrs: List<String>? = null,
+    /** 地址 hex，本次暂停内有效，用来识别循环引用。 */
+    val objectId: String? = null,
+    /** 字符串完整字节长度，或容器元素总数。 */
+    val length: Long? = null,
+    val location: LocationDto? = null,
+    /** 行尾灰色提示。 */
+    val hint: String? = null,
+    /** 只在请求了 expand 时出现。 */
+    val children: VariablesResult? = null
 ) : JsonDto {
     val expandable: Boolean get() = ref > 0
+
+    fun hasAttr(attr: String): Boolean = attrs?.contains(attr) == true
 
     override fun toJson() = jsonObject {
         put("name", name); put("nameType", nameType); put("value", value); put("type", type); put("typeName", typeName)
         put("ref", ref); put("namedCount", namedCount); put("indexedCount", indexedCount); put("evaluateName", evaluateName)
+        put("kind", kind); putStrings("attrs", attrs); put("objectId", objectId); put("length", length)
+        put("location", location); put("hint", hint); put("children", children)
     }
 
     companion object {
-        fun fromJson(json: JsonObject) = VariableDto(
+        fun fromJson(json: JsonObject): VariableDto = VariableDto(
             json.optString("name") ?: "", json.optString("value") ?: "", json.optString("type") ?: "nil",
             json.optLong("ref") ?: 0, json.optString("typeName"), json.optString("nameType"), json.optInt("namedCount"),
-            json.optInt("indexedCount"), json.optString("evaluateName")
+            json.optInt("indexedCount"), json.optString("evaluateName"),
+            json.optString("kind"), json.optArray("attrs")?.map { it.asString }, json.optString("objectId"), json.optLong("length"),
+            json.optObject("location")?.let(LocationDto::fromJson), json.optString("hint"),
+            json.optObject("children")?.let(VariablesResult::fromJson)
         )
     }
 }
 
-data class VariablesResult(val variables: List<VariableDto>, val total: Int) : JsonDto {
-    override fun toJson() = jsonObject { putObjects("variables", variables); put("total", total) }
+data class VariablesResult(
+    val variables: List<VariableDto>,
+    val total: Int,
+    /** 底部分组（继承成员、方法、元表……），不计入 total；richVariables 增量。 */
+    val groups: List<VariableDto> = emptyList(),
+    val sorted: Boolean? = null,
+    /** 因字节上限少给了项。 */
+    val truncated: Boolean? = null
+) : JsonDto {
+    override fun toJson() = jsonObject {
+        putObjects("variables", variables); put("total", total)
+        if (groups.isNotEmpty()) putObjects("groups", groups)
+        put("sorted", sorted); put("truncated", truncated)
+    }
 
     companion object {
         fun fromJson(json: JsonObject): VariablesResult {
             val variables = json.objects("variables", VariableDto::fromJson)
-            return VariablesResult(variables, json.optInt("total") ?: variables.size)
+            return VariablesResult(
+                variables, json.optInt("total") ?: variables.size,
+                json.objects("groups", VariableDto::fromJson), json.optBoolean("sorted"), json.optBoolean("truncated")
+            )
         }
+    }
+}
+
+/** setViewRules（variable-view.md 13.4）：整体替换显示规则。 */
+data class SetViewRulesArgs(val rules: JsonObject) : JsonDto {
+    override fun toJson() = jsonObject { put("rules", rules) }
+
+    companion object {
+        fun fromJson(json: JsonObject) = SetViewRulesArgs(json.reqObject("rules"))
+    }
+}
+
+data class ViewRuleWarning(val type: String?, val message: String) : JsonDto {
+    override fun toJson() = jsonObject { put("type", type); put("message", message) }
+
+    companion object {
+        fun fromJson(json: JsonObject) = ViewRuleWarning(json.optString("type"), json.optString("message") ?: "")
+    }
+}
+
+data class SetViewRulesResult(val accepted: Int, val warnings: List<ViewRuleWarning> = emptyList()) : JsonDto {
+    override fun toJson() = jsonObject { put("accepted", accepted); putObjects("warnings", warnings) }
+
+    companion object {
+        fun fromJson(json: JsonObject) = SetViewRulesResult(json.optInt("accepted") ?: 0, json.objects("warnings", ViewRuleWarning::fromJson))
     }
 }
 
