@@ -897,12 +897,13 @@ class DebugSession(
         expression: String,
         frame: FrameHandle? = null,
         mode: String = EvalModes.LUA,
-        context: String? = null
+        context: String? = null,
+        maxLength: Int? = null
     ): CompletableFuture<EvalValue> = callAsync {
         ensureCurrent(pause)
         requireEvalMode(mode)
         val frameId = frame?.frameId ?: pause.top?.frameId ?: 0L
-        request(Commands.EVALUATE, EvaluateArgs(frameId, expression, mode, context).toJson()).handle { body, error ->
+        request(Commands.EVALUATE, EvaluateArgs(frameId, expression, mode, context, maxLength).toJson()).handle { body, error ->
             if (error != null) throw staleOr(error)
             val result = ValueResult.fromJson(body)
             EvalValue(pause, expression, result.value, result.type, result.ref, result.typeName)
@@ -945,6 +946,9 @@ class DebugSession(
         val stale = code == ErrorCodes.STALE_REFERENCE || code == ErrorCodes.STALE_PAUSE || code == ErrorCodes.NOT_PAUSED
         return CompletionException(if (stale && cause !is StaleReferenceException) StaleReferenceException() else cause)
     }
+
+    /** chunkName 映射到的本地文件（变量的 location：函数定义处、模块文件）；未映射时为空。 */
+    fun localPathOfChunk(chunkName: String): String? = sourceMapper.localPathOf(chunkName)
 
     private fun localPathOf(frame: StackFrameDto): String? = if (frame.hasSource) sourceMapper.localPathOf(frame.chunkName) else null
 

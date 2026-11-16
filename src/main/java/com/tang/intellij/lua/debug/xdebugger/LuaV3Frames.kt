@@ -107,13 +107,13 @@ class LuaV3StackFrame(private val engine: DebugSession, val handle: FrameHandle)
             }
             val locals = scopes.firstOrNull { it.name == ScopeNames.LOCALS }
             val groups = XValueChildrenList()
-            scopes.filter { it !== locals }.forEach { groups.addBottomGroup(LuaV3ScopeGroup(engine, it)) }
+            scopes.filter { it !== locals }.forEach { groups.addBottomGroup(LuaV3ScopeGroup(engine, it, handle)) }
             if (locals == null) {
                 node.addChildren(groups, true)
             } else {
                 // 局部变量直接平铺在帧下面（和旧版一致），其余作用域放在底部分组
                 node.addChildren(groups, false)
-                loadChildren(engine, locals, node, 0)
+                loadChildren(engine, locals, node, 0, ExpandContext(handle))
             }
         }
     }
