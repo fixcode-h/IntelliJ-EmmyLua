@@ -26,7 +26,7 @@ import com.fixcode.intellij.lua.debug.api.LuaProfileRow
 import com.fixcode.intellij.lua.debug.api.LuaProfileSnapshot
 import com.fixcode.intellij.lua.debug.api.LuaProfilerModel
 import com.fixcode.intellij.lua.debug.ui.LuaDebugBundle
-import com.fixcode.intellij.lua.debug.ui.mcp.LuaMcpEnablePrompt
+import com.fixcode.intellij.lua.debug.ui.mcp.LuaMcpInstallPrompt
 import java.awt.BorderLayout
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
@@ -179,7 +179,7 @@ internal class LuaProfilerPanel(
             status.text = LuaDebugBundle.message("tab.profiler.failed", error.message ?: error.toString())
             return
         }
-        NotificationGroupManager.getInstance().getNotificationGroup(LuaMcpEnablePrompt.GROUP_ID)
+        NotificationGroupManager.getInstance().getNotificationGroup(LuaMcpInstallPrompt.GROUP_ID)
             .createNotification(LuaDebugBundle.message("tab.profiler.exported", file.path), NotificationType.INFORMATION)
             .notify(project)
     }

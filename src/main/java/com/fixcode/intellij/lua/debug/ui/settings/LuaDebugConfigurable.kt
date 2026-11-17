@@ -1,6 +1,8 @@
 package com.fixcode.intellij.lua.debug.ui.settings
 
 import com.intellij.icons.AllIcons
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
@@ -22,16 +24,19 @@ import com.intellij.ui.dsl.builder.panel
 import com.intellij.ui.dsl.builder.toNullableProperty
 import com.fixcode.intellij.lua.debug.api.LuaMcpService
 import com.fixcode.intellij.lua.debug.ui.LuaDebugBundle
+import com.fixcode.intellij.lua.debug.ui.mcp.LuaMcpInstallDialog
 import com.fixcode.intellij.lua.debug.ui.mcp.LuaMcpStatusText
 import com.fixcode.intellij.lua.project.SettingsJump
 
 /**
  * `Settings > Tools > EmmyLua 调试`（设计文档 10.5）：MCP、UE、设备、变量视图、日志。
- * 用 Kotlin UI DSL v2 绑定到 [LuaDebugSettings]。MCP 的开关和端口归 IDE 自带的 MCP 服务器，这里只显示状态、给入口。
+ * 用 Kotlin UI DSL v2 绑定到 [LuaDebugSettings]。MCP 的开关和端口归 IDE 自带的 MCP 服务器，这里显示状态、给入口，
+ * 并显示本项目的安装状态（各 Agent 配置里有没有 IDE 服务器的地址）和「安装/更新…」。
  */
 class LuaDebugConfigurable : BoundConfigurable(LuaDebugBundle.message("settings.title")) {
     private val settings get() = LuaDebugSettings.getInstance()
     private val mcpState = JBLabel()
+    private val installState = JBLabel()
 
     override fun createPanel(): DialogPanel = panel {
         row {
@@ -48,6 +53,15 @@ class LuaDebugConfigurable : BoundConfigurable(LuaDebugBundle.message("settings.
                 button(LuaDebugBundle.message("settings.mcp.open")) {
                     LuaMcpService.getInstance()?.openServerSettings(ProjectUtil.getActiveProject())
                     refreshMcpState()
+                }.enabled(LuaMcpService.getInstance()?.serverState()?.available == true)
+            }
+            row(LuaDebugBundle.message("settings.mcp.installState")) {
+                cell(installState)
+                button(LuaDebugBundle.message("settings.mcp.install")) {
+                    val project = ProjectUtil.getActiveProject() ?: return@button
+                    LuaMcpInstallDialog.show(project)
+                    refreshMcpState()
+                    refreshInstallState()
                 }.enabled(LuaMcpService.getInstance()?.serverState()?.available == true)
             }
             row {
@@ -142,6 +156,7 @@ class LuaDebugConfigurable : BoundConfigurable(LuaDebugBundle.message("settings.
             com.fixcode.intellij.lua.debug.xdebugger.LuaVariableViewSync.applyToAllSessions()
         }
         refreshMcpState()
+        refreshInstallState()
     }
 
     private fun refreshMcpState() {
@@ -152,6 +167,31 @@ class LuaDebugConfigurable : BoundConfigurable(LuaDebugBundle.message("settings.
             else -> AllIcons.General.InspectionsPause
         }
         mcpState.text = "<html>" + LuaMcpStatusText.describe() + "</html>"
+    }
+
+    /** 「本项目安装状态：Claude Code ✓  Cursor ✗ …」，读文件放后台。 */
+    private fun refreshInstallState() {
+        val service = LuaMcpService.getInstance() ?: return
+        if (!service.serverState().available) return
+        val project = ProjectUtil.getActiveProject() ?: run {
+            installState.text = LuaDebugBundle.message("settings.mcp.noProject")
+            return
+        }
+        installState.text = LuaDebugBundle.message("mcp.dialog.loading")
+        val modality = ModalityState.stateForComponent(installState)
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val text = runCatching {
+                val root = service.installRoots(project).firstOrNull() ?: return@runCatching ""
+                service.installStatus(project, root).joinToString("  ") { s ->
+                    s.client.displayName + " " + when {
+                        s.installed && !s.outdated -> "✓"
+                        s.installed || s.legacy -> "⚠"
+                        else -> "✗"
+                    }
+                }
+            }.getOrElse { it.message.orEmpty() }
+            ApplicationManager.getApplication().invokeLater({ installState.text = text }, modality)
+        }
     }
 }
 

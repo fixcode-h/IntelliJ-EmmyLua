@@ -71,11 +71,16 @@
 
 ### 传输和接入（和 UEToVS 的差别）
 
-- UEToVS 用 stdio（每个 Agent 会话一个进程，读磁盘索引）。我们**不自己开 MCP 服务**：工具经扩展点 `com.intellij.mcpServer.mcpToolsProvider` 注册到 IDE 自带的 MCP 服务器（`src/main/resources/META-INF/emmylua-mcp.xml`，plugin.xml 里 `optional depends com.intellij.mcpServer`）。调试状态（会话、断点、暂停）只在 IDE 进程里，挂在 IDE 的服务器上最直接；端口、开关、客户端配置（「自动配置」）都归 IDE，插件不写任何 MCP 配置文件、不占端口。
-- 用户要在 **设置 → 工具 → MCP 服务器** 里打开 IDE 的 MCP 服务器；没开时第一次启动 Lua 调试会话提示一次（`LuaMcpEnablePrompt`），设置页「EmmyLua 调试」显示状态和入口。MCP Server 插件被禁用时，只是没有这些工具，调试照常。
+- UEToVS 用 stdio（每个 Agent 会话一个进程，读磁盘索引）。我们**不自己开 MCP 服务**：工具经扩展点 `com.intellij.mcpServer.mcpToolsProvider` 注册到 IDE 自带的 MCP 服务器（`src/main/resources/META-INF/emmylua-mcp.xml`，plugin.xml 里 `optional depends com.intellij.mcpServer`）。调试状态（会话、断点、暂停）只在 IDE 进程里，挂在 IDE 的服务器上最直接；端口和开关归 IDE，插件不占端口。
+- **安装 MCP 到项目**（`LuaMcpInstallDialog` / `LuaMcpInstallPrompt`，安装器在 `modules/debugger-mcp` 的 `install/`）：把 **IDE 自带 MCP 服务器的地址**写进项目里各 Agent 的配置，全组提交一份就能用。
+  - 地址经 `ide/IdeMcpServerInfo` 反射读（它不碰 MCP Server 插件的类型，插件被禁用时也能调）：2025.2–2025.3 只有 SSE `http://127.0.0.1:<端口>/sse`；2026.1 起用 Streamable HTTP `/stream`（IDE 自己的自动配置也优先它）。服务在跑时取 IDE 给的地址和端口，没跑时读设置里的端口，再读不到用默认 64342，弹窗里说明是按默认值写的。主干（2026.3 之后）要求请求头 `IJ_MCP_AUTH_TOKEN`：配置里写成从同名环境变量展开（Claude Code / Gemini `${IJ_MCP_AUTH_TOKEN}`，Cursor / VS Code `${env:IJ_MCP_AUTH_TOKEN}`，Codex `env_http_headers`），令牌本身不进文件。
+  - 条目名照 IDE「自动配置」写的：2025.x `jetbrains`，2026.1 起按产品名（`McpClient.Companion.productSpecificServerKey()`，如 `idea`、`rider`），这样用户再点 IDE 的自动配置也只是更新同一项，客户端里不会出现两份工具。安装时删掉旧版插件服务（127.0.0.1:9330/mcp）的 `emmylua-debug` 项，以及指向同一端口的 `jetbrains` 旧项。
+  - 安装位置：项目目录往上找版本管理根（`.git` 目录或文件、`.hg`、`.svn` 取连续最外层、`.plastic`、P4CONFIG 文件；都没有时问 `p4 info` 的 client root，包含项目才用）；找不到就往上找含 `.uproject` 的 UE 项目根，再没有用项目目录。版本管理根在 UE 项目里面（脚本目录单独成库）时以 UE 项目为准（`VcsRoot.installRoot`）。
+  - 写入规则：只合并我们这一项（用户在这一项里加的其他字段保留），其余原样保留；不是严格 JSON（注释、尾逗号）不写，给手动片段；跟随原文件的缩进和换行；临时文件原子替换。每个客户端一个 `McpClientConfigWriter`：Claude Code `.mcp.json`（`type` http/sse + `url`）、Cursor `.cursor/mcp.json`（`url`）、VS Code / Copilot `.vscode/mcp.json`（`servers`，`type` + `url`）、Gemini CLI `.gemini/settings.json`（Streamable HTTP 用 `httpUrl`，SSE 用 `url`）、Codex 用户级 `~/.codex/config.toml`（`[mcp_servers.<名>]` 的 `url`；Codex 不支持 SSE，IDE 只有 SSE 时不写、让用户用 IDE 的自动配置）。
+  - 提示：项目打开后（项目里有 .lua 文件）和第一次启动 Lua 调试会话时检查，一个 IDE 会话每个项目最多弹一次，「不再提示」按项目记住（`LuaDebugProjectState.mcpPromptDismissed`）。IDE 的 MCP 服务器没开时合在同一个气泡里：按钮先打开「设置 → 工具 → MCP 服务器」，回来后开了就接着安装，没开不写；已经装好只差服务器时只提示去打开。MCP Server 插件被禁用时不提示，只是没有这些工具，调试照常。入口还有「工具 → EmmyLua 调试 → 安装 MCP 到项目」和设置页「EmmyLua 调试」（显示本项目安装状态）。
 - IDE 的 MCP 服务器接口 2025.2–2026.3 每版都在变：只有 `McpTool`、`McpToolsProvider`、`McpToolCallResultContent.Text` 稳定，`McpToolDescriptor`、输入 schema（2025.2 `McpToolInputSchema`，之后 `McpToolSchema`）、`McpToolCallResult`、客户端信息（2025.3 起 `McpCallInfo`）**一律经 `ide/IdeMcpCompat` 反射构造或读取**，不要在代码里直接调它们的构造函数。新版 IDE 改了接口时，在 `IdeMcpCompat` 的版本表里加一行，并用 `McpCompatTest` 验证（见「测试」）。
 - `McpTool.call` 是挂起函数；工具会阻塞（`wait` 最长 2 分钟、等用户确认），在 `runInterruptible(Dispatchers.IO)` 里跑，客户端取消时中断等待并返回 `cancelled`。
-- 旧版的独立 HTTP 服务（端口 9330）和「安装 MCP 到项目」已删除；用户项目里旧的 `emmylua-debug` 配置项要自己删掉（`docs/mcp-debug-guide.md` 有说明）。
+- 旧版的独立 HTTP 服务（端口 9330）已删除；用户项目里旧的 `emmylua-debug` 配置项由「安装 MCP 到项目」删掉并换成 IDE 服务器那一项。
 
 ### 日志
 
@@ -83,6 +88,7 @@
 
 ### 测试
 
+- 安装器（安装位置、各客户端格式、合并规则）用 `McpInstallerTest`。
 - `modules/debugger-mcp` 不依赖 IntelliJ，工具层用 `FakeBackend`（假引擎）单测，分发器（参数校验、错误格式、日志、调用记录）用 `McpDispatcherTest`。改工具时同步改 `LuaDebugToolsTest`。
 - `lua_code` 用 `FakeCodeBackend`（形状照 emmylua_ls 的真实回包）单测（`LuaCodeToolsTest`）；`LuaCodeRealServerTest` 用真的 emmylua_ls 跑一遍，只在环境变量 `EMMYLUA_LS` 指向可执行文件时运行，改了符号整形或 emmylua_ls 升级时跑一次。
 - IDE 适配用主插件的 `McpCompatTest`：编译用的 2025.2 总是测；其他版本把各版本 IDE 的 `plugins/mcpserver*/lib` 里的 MCP 服务器 jar（2026.2 起加 MCP Kotlin SDK 的 jar）放进 `EMMY_MCPSERVER_JARS/<版本>/` 再跑。2026.2 起的 jar 是 Java 25 字节码，在 Java 21 上测时先把类文件主版本号改成 65（只为验证构造参数，不进包）。

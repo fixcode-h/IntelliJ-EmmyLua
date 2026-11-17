@@ -1,18 +1,28 @@
 # 让 Agent 调试 Lua（MCP）
 
-插件把 Lua 调试工具注册到 **IDE 自带的 MCP 服务器**（IntelliJ 2025.2 起内置的 MCP Server 插件）。Claude Code、Cursor、VS Code（Copilot）、Codex 等 Agent 连上 IDE 的 MCP 服务器后，除了 IDE 自己的工具，还能直接调试 Lua：下断点、等暂停、看栈和变量、单步、采样性能。插件不再自己起 MCP 服务，也不再往项目里写配置文件。
+插件把 Lua 调试工具注册到 **IDE 自带的 MCP 服务器**（IntelliJ 2025.2 起内置的 MCP Server 插件）。Claude Code、Cursor、VS Code（Copilot）、Codex 等 Agent 连上 IDE 的 MCP 服务器后，除了 IDE 自己的工具，还能直接调试 Lua：下断点、等暂停、看栈和变量、单步、采样性能。插件不再自己起 MCP 服务；「安装 MCP 到项目」把 IDE 服务器的地址写进项目里各 Agent 的配置，全组提交一份就能用。
 
 ## 开启
 
 1. 打开 **设置 → 工具 → MCP 服务器**，勾选「启用 MCP 服务器」。
-2. 在同一页用「自动配置」把 IDE 加到你用的 Agent（Claude Code、Cursor、VS Code、Codex……），或者照页面上给的地址手动配置。地址和端口由 IDE 管理。
+2. 把 IDE 服务器写进 Agent 的配置，两种办法任选：
+   - **工具 → EmmyLua 调试 → 安装 MCP 到项目…**（或项目打开、第一次启动 Lua 调试会话时右下角的提示）：选安装位置、勾客户端，写进项目里的配置文件，可以提交给全组用。
+   - IDE 那一页的「自动配置」，或照页面上给的地址手动配置。
 3. 在「MCP 服务器 → 公开的工具」里能看到 `lua_debug_session`、`lua_debug_breakpoints`、`lua_debug_inspect` 三个调试工具和代码查找工具 `lua_code`（类别都是 LuaDebug），可以按需关掉。开了「仅路由器模式」的 IDE 版本里，Lua 调试工具和 IDE 自己的工具一样处理。
 
-第一次启动 Lua 调试会话时，如果 IDE 的 MCP 服务器还没开，右下角会提示一次，点「打开 MCP 服务器设置」即可。**设置 → 工具 → EmmyLua 调试** 和 **Tools → EmmyLua 调试 → MCP 状态** 里能看到服务器是否在运行。
+IDE 的 MCP 服务器没开时，提示里的按钮会先打开「设置 → 工具 → MCP 服务器」，打开服务器回来后接着安装（只弹一次）。**设置 → 工具 → EmmyLua 调试** 显示服务器状态和本项目的安装状态，**Tools → EmmyLua 调试 → MCP 状态** 显示服务器地址。
+
+### 安装写了什么
+
+- **地址**：IDE 2026.1 起是 Streamable HTTP `http://127.0.0.1:<端口>/stream`，2025.2–2025.3 是 SSE `http://127.0.0.1:<端口>/sse`。端口是 IDE 设置里的（默认 64342，被占用时 IDE 会顺延）；服务器没开时按设置里的端口写，读不到时按默认值写并在弹窗里说明。端口变了再装一次即可，提示会说「地址已过期」。
+- **条目名**：和 IDE 自己「自动配置」写的一样（2025.x 是 `jetbrains`，2026.1 起按产品名，如 `idea`、`rider`），所以两边写的是同一项，Agent 里不会出现两份工具。
+- **安装位置**：从项目目录往上找版本管理根（Git、Mercurial、SVN 最外层、Plastic、Perforce 的 P4CONFIG 或 `p4 info` 的 client root）；没有版本管理时往上找含 `.uproject` 的 UE 项目根；都没有用项目目录。IDE 只打开 UE 项目的 `Content/Script` 时也会装到仓库根或 UE 项目根。
+- **文件**：Claude Code `.mcp.json`、Cursor `.cursor/mcp.json`、VS Code / Copilot `.vscode/mcp.json`、Gemini CLI `.gemini/settings.json`；Codex 是用户级 `~/.codex/config.toml`（全局配置，默认不勾；Codex 不支持 SSE，2025.x 的 IDE 请用 IDE 的自动配置）。只改我们这一项，其他内容原样保留；文件有注释或尾逗号时不写，给出手动粘贴的片段。
+- 要求令牌的 IDE 版本（请求头 `IJ_MCP_AUTH_TOKEN`）：配置里写成从同名环境变量读，令牌不写进文件，启动 Agent 前设好这个环境变量。
 
 MCP Server 插件被禁用时，Lua 调试本身照常可用，只是 Agent 用不了这些工具。
 
-从旧版本升级：旧版写进项目的 `.mcp.json`、`.cursor/mcp.json` 等文件里的 `emmylua-debug` 项（`http://127.0.0.1:9330/mcp`）已经连不上，删掉这一项，改用 IDE 的 MCP 服务器。
+从旧版本升级：旧版写进项目的 `emmylua-debug` 项（`http://127.0.0.1:9330/mcp`）已经连不上。再装一次，安装时会删掉它、换成 IDE 服务器那一项。
 
 ## 安全
 

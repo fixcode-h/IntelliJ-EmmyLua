@@ -7,6 +7,23 @@ import com.intellij.openapi.ui.Messages
 import com.fixcode.intellij.lua.debug.api.LuaMcpService
 import com.fixcode.intellij.lua.debug.ui.LuaDebugBundle
 
+/** Tools > EmmyLua 调试 > 安装 MCP 到项目…：把 IDE 自带 MCP 服务器的地址写进本项目各 Agent 的配置。 */
+class InstallMcpAction : DumbAwareAction(
+    LuaDebugBundle.message("action.installMcp"),
+    LuaDebugBundle.message("action.installMcp.description"),
+    null,
+) {
+    override fun actionPerformed(e: AnActionEvent) {
+        LuaMcpInstallDialog.show(e.project ?: return)
+    }
+
+    override fun update(e: AnActionEvent) {
+        e.presentation.isEnabledAndVisible = e.project != null && LuaMcpService.getInstance()?.serverState()?.available == true
+    }
+
+    override fun getActionUpdateThread() = ActionUpdateThread.BGT
+}
+
 /** Tools > EmmyLua 调试 > 打开 MCP 服务器设置…：Lua 调试工具挂在 IDE 自带的 MCP 服务器上，开关和客户端配置都在那里。 */
 class OpenMcpServerSettingsAction : DumbAwareAction(
     LuaDebugBundle.message("action.openMcpSettings"),
