@@ -136,20 +136,7 @@ class LuaSettingsConfigurable(private val project: Project) :
         // 总开关关着时只记下蓝图开关，不碰 UE 那边
         val declChanged = unrealLuaDecl != proj.unrealLuaDecl || (unrealLuaDecl && unrealLuaDeclBlueprints != proj.unrealLuaDeclBlueprints)
         proj.unrealLuaDeclBlueprints = unrealLuaDeclBlueprints
-        if (declChanged) {
-            proj.unrealLuaDecl = unrealLuaDecl
-            val enabled = unrealLuaDecl
-            val blueprints = unrealLuaDeclBlueprints
-            UnrealDeclWatcher.getInstance(project).resetSync()
-            // UE 编辑器没开时只记下开关，编辑器打开后自动补开
-            UnrealDecl.runInBackground(project) {
-                try {
-                    UnrealDecl.setEnabled(project, enabled, blueprints)
-                } catch (e: IOException) {
-                    if (enabled) "已记下，UE 编辑器打开后自动开始生成（${e.message}）" else throw e
-                }
-            }
-        }
+        if (declChanged) UnrealDecl.setEnabledFromIde(project, unrealLuaDecl, unrealLuaDeclBlueprints)
     }
 
     override fun isModified(): Boolean =
@@ -167,15 +154,7 @@ class LuaSettingsConfigurable(private val project: Project) :
         super.reset()
     }
 
-    private fun describeServer(): String {
-        val located = EmmyLuaServerLocator.locate() ?: return "没找到"
-        val source = when (located.source) {
-            EmmyLuaServerLocator.Source.SETTINGS -> "设置"
-            EmmyLuaServerLocator.Source.BUNDLED -> "插件自带"
-            EmmyLuaServerLocator.Source.PATH -> "PATH"
-        }
-        return "${located.path}（$source）"
-    }
+    private fun describeServer(): String = EmmyLuaServerLocator.describe() ?: "没找到"
 
     private fun describeUnreal(): String {
         val root = EmmyLuaWorkspaceConfig.projectRoot(project) ?: return ""
