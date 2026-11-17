@@ -29,3 +29,4 @@ target_include_directories(attach_driver PRIVATE
 target_compile_options(attach_driver PRIVATE /utf-8)
 target_compile_options(attach_host PRIVATE /utf-8)
 target_link_libraries(attach_driver PRIVATE ws2_32)
+target_compile_definitions(attach_driver PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
