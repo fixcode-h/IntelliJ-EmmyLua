@@ -24,7 +24,7 @@ object LuaDebugSessionTabs {
     fun install(project: Project, session: XDebugSession) {
         val ui = session.ui ?: return
         // 会话结束时一起释放页签里的监听器
-        val disposable = Disposer.newDisposable("EmmyLua debug tabs")
+        val disposable = Disposer.newCheckedDisposable("EmmyLua debug tabs")
         session.addSessionListener(object : XDebugSessionListener {
             override fun sessionStopped() = Disposer.dispose(disposable)
         }, disposable)
@@ -50,13 +50,13 @@ object LuaDebugSessionTabs {
     }
 
     /** 调用栈列表两端对齐；帧页有时到第一次暂停才建好，没找到就每次暂停再试，装上为止。 */
-    private fun installFramesLayout(session: XDebugSession, root: JComponent, disposable: com.intellij.openapi.Disposable) {
+    private fun installFramesLayout(session: XDebugSession, root: JComponent, disposable: com.intellij.openapi.util.CheckedDisposable) {
         if (LuaFramesListLayout.install(root, disposable)) return
         var done = false
         session.addSessionListener(object : XDebugSessionListener {
             override fun sessionPaused() {
                 ApplicationManager.getApplication().invokeLater {
-                    if (!done && !Disposer.isDisposed(disposable)) done = LuaFramesListLayout.install(root, disposable)
+                    if (!done && !disposable.isDisposed) done = LuaFramesListLayout.install(root, disposable)
                 }
             }
         }, disposable)

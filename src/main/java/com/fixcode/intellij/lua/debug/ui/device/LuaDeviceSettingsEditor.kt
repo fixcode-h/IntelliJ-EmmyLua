@@ -48,6 +48,9 @@ import javax.swing.event.DocumentListener
 class LuaDeviceSettingsEditor(private val project: Project) : SettingsEditor<LuaDeviceConfiguration>() {
     private val service: LuaDeviceService? get() = LuaDeviceService.getInstance()
 
+    /** 编辑器关掉后后台任务的回调不再碰界面。 */
+    private val lifetime = Disposer.newCheckedDisposable(this)
+
     // 设备
     private val deviceModel = DefaultComboBoxModel<DeviceItem>()
     private val deviceCombo = ComboBox(deviceModel).apply {
@@ -459,7 +462,7 @@ class LuaDeviceSettingsEditor(private val project: Project) : SettingsEditor<Lua
         val modality = modality()
         ApplicationManager.getApplication().executeOnPooledThread {
             val result = runCatching(task)
-            ApplicationManager.getApplication().invokeLater({ if (!Disposer.isDisposed(this)) onEdt(result) }, modality)
+            ApplicationManager.getApplication().invokeLater({ if (!lifetime.isDisposed) onEdt(result) }, modality)
         }
     }
 }

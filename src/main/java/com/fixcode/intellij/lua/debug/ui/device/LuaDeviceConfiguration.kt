@@ -88,7 +88,7 @@ class LuaDeviceConfiguration(project: Project, factory: ConfigurationFactory) :
 
     public override fun getOptions(): LuaDeviceOptions = super.getOptions() as LuaDeviceOptions
 
-    override fun getConfigurationEditor(): SettingsEditor<out RunConfiguration> = LuaDeviceSettingsEditor(project)
+    override fun getConfigurationEditor(): SettingsEditor<LuaDeviceConfiguration> = LuaDeviceSettingsEditor(project)
 
     override fun getState(executor: Executor, environment: ExecutionEnvironment): RunProfileState = NoProcessState
 

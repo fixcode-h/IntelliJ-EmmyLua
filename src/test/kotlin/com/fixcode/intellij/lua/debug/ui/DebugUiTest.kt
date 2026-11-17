@@ -135,7 +135,7 @@ class DebugUiSmokeTest : BasePlatformTestCase() {
         assertTrue(com.intellij.execution.configurations.ConfigurationTypeUtil.findConfigurationType("EmmyLua.Device")
             is com.intellij.execution.configurations.VirtualConfigurationType)
         val conf = luaType.configurationFactories[1].createTemplateConfiguration(project) as com.fixcode.intellij.lua.debug.ui.device.LuaDeviceConfiguration
-        val editor = conf.configurationEditor as com.intellij.openapi.options.SettingsEditor<com.fixcode.intellij.lua.debug.ui.device.LuaDeviceConfiguration>
+        val editor = conf.configurationEditor
         editor.component
         conf.options.packageName = "com.x.y"
         editor.resetFrom(conf)
@@ -143,7 +143,7 @@ class DebugUiSmokeTest : BasePlatformTestCase() {
         assertEquals("com.x.y", conf.options.packageName)
         com.intellij.openapi.util.Disposer.dispose(editor)
         val a = luaType.configurationFactories[0].createTemplateConfiguration(project) as com.fixcode.intellij.lua.debug.ui.attach.LuaAttachConfiguration
-        val ae = a.configurationEditor as com.intellij.openapi.options.SettingsEditor<com.fixcode.intellij.lua.debug.ui.attach.LuaAttachConfiguration>
+        val ae = a.configurationEditor
         ae.component
         a.options.onlyLuaProcesses = false
         ae.resetFrom(a); ae.applyTo(a)

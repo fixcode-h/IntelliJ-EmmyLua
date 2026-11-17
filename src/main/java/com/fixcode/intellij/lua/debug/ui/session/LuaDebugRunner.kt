@@ -46,17 +46,17 @@ class LuaDebugRunner : GenericProgramRunner<RunnerSettings>() {
             profile is LuaDebugTargetConfiguration
 
     @Throws(ExecutionException::class)
-    override fun doExecute(state: RunProfileState, env: ExecutionEnvironment): RunContentDescriptor? {
-        if (env.executor.id != DefaultDebugExecutor.EXECUTOR_ID) {
+    override fun doExecute(state: RunProfileState, environment: ExecutionEnvironment): RunContentDescriptor? {
+        if (environment.executor.id != DefaultDebugExecutor.EXECUTOR_ID) {
             // 换成 Debug 执行器重新启动，会话出现在「调试」工具窗口，和用户点调试按钮一样
-            val debugEnv = ExecutionEnvironmentBuilder(env).executor(DefaultDebugExecutor.getDebugExecutorInstance()).runner(this).build()
-            ExecutionManager.getInstance(env.project).restartRunProfile(debugEnv)
+            val debugEnv = ExecutionEnvironmentBuilder(environment).executor(DefaultDebugExecutor.getDebugExecutorInstance()).runner(this).build()
+            ExecutionManager.getInstance(environment.project).restartRunProfile(debugEnv)
             return null
         }
         // 真机上没有本地文件，断点行号以磁盘内容为准，先保存
         FileDocumentManager.getInstance().saveAllDocuments()
-        val configuration = env.runProfile as LuaDebugTargetConfiguration
-        val target = configuration.resolveTarget(env)
-        return LuaDebugSessionStarter.start(env, target)
+        val configuration = environment.runProfile as LuaDebugTargetConfiguration
+        val target = configuration.resolveTarget(environment)
+        return LuaDebugSessionStarter.start(environment, target)
     }
 }
