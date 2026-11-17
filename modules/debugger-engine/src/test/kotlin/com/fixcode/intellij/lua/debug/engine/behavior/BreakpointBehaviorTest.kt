@@ -43,11 +43,11 @@ class BreakpointBehaviorTest : BehaviorTestBase() {
         connect()
         val id = session.addBreakpoint(BreakpointRequest("/project/Content/Script/ui/main.lua", 5)).await()
         session.syncBreakpoints().await()
-        assertEquals(null, runtime.breakpointTable()[id]!!.source.chunkName)
+        assertEquals(null, runtime.breakpointTable()[id]!!.source!!.chunkName)
 
         session.overrideMapping("@scripts/ui/main.lua", "/project/Content/Script/ui/main.lua").await()
         session.syncBreakpoints().await()
-        assertEquals("@scripts/ui/main.lua", runtime.breakpointTable()[id]!!.source.chunkName)
+        assertEquals("@scripts/ui/main.lua", runtime.breakpointTable()[id]!!.source!!.chunkName)
     }
 
     @Test

@@ -23,6 +23,8 @@ import com.fixcode.intellij.lua.debug.api.LuaMcpService
 import com.fixcode.intellij.lua.debug.ui.LuaDebugBundle
 import com.fixcode.intellij.lua.debug.ui.settings.LuaDebugProjectState
 import com.fixcode.intellij.lua.lang.LuaFileType
+import com.fixcode.intellij.lua.onboarding.LuaOnboarding
+import com.fixcode.intellij.lua.onboarding.LuaOnboardingPrompt
 import java.nio.file.Path
 
 /**
@@ -34,6 +36,8 @@ import java.nio.file.Path
  *   或者还留着旧版的 emmylua-debug 时提示更新；
  * - IDE 的 MCP 服务器没开：没装时一个按钮「打开 MCP 服务器并安装」，先开设置页让用户打开服务器，回来后开了就接着安装；
  *   已经装好时只提示去打开服务器。
+ * - UE 项目打开时不单独弹：MCP 是「EmmyLua 上手检查」里的一项，由 [LuaOnboardingPrompt] 合在一个气泡里；
+ *   上手检查的气泡弹过后，本次 IDE 会话里第一次开调试会话也不再弹这个。
  */
 object LuaMcpInstallPrompt {
     private val LOG = logger<LuaMcpInstallPrompt>()
@@ -44,6 +48,8 @@ object LuaMcpInstallPrompt {
 
     fun maybeShow(project: Project, trigger: Trigger) {
         if (project.isDisposed || project.getUserData(SHOWN) == true) return
+        // UE 项目由上手检查统一提示（它列出 MCP 这一项），打开项目时不再多弹一个气泡
+        if (trigger == Trigger.PROJECT_OPEN && LuaOnboarding.isUnrealProject(project)) return
         val service = LuaMcpService.getInstance() ?: return
         if (LuaDebugProjectState.getInstance(project).mcpPromptDismissed) return
         project.putUserData(SHOWN, true)
@@ -75,7 +81,12 @@ object LuaMcpInstallPrompt {
         }
     }
 
-    private fun hasLuaFiles(project: Project): Boolean {
+    /** 上手检查已经弹过气泡（里面含 MCP 这一项）：本次 IDE 会话不再单独弹 MCP 提示。 */
+    fun markShown(project: Project) {
+        project.putUserData(SHOWN, true)
+    }
+
+    fun hasLuaFiles(project: Project): Boolean {
         DumbService.getInstance(project).waitForSmartMode()
         return ReadAction.compute<Boolean, RuntimeException> {
             !project.isDisposed && FileTypeIndex.containsFileOfType(LuaFileType, GlobalSearchScope.projectScope(project))
@@ -155,6 +166,14 @@ object LuaMcpInstallPrompt {
         }
 
     private fun group() = NotificationGroupManager.getInstance().getNotificationGroup(GROUP_ID)
+
+    /**
+     * 上手检查的「一键安装」：和气泡里的「安装到 <根目录>」一样，服务器没开时先引导打开。在 EDT 上调。
+     */
+    fun installRecommended(project: Project, root: Path) {
+        val service = LuaMcpService.getInstance() ?: return
+        withServer(project, service, service.serverState().running) { installDefault(project, root) }
+    }
 
     /** 「安装到 <根目录>」：装已检测到目录的客户端；一个都没检测到时装 Claude Code（.mcp.json 是最通用的）。 */
     private fun installDefault(project: Project, root: Path) {

@@ -3,6 +3,7 @@ package com.fixcode.intellij.lua.debug.xdebugger
 import com.intellij.openapi.util.SystemInfo
 import com.intellij.xdebugger.XDebugProcess
 import com.intellij.xdebugger.XDebugSession
+import com.intellij.xdebugger.XDebugSessionListener
 import com.fixcode.intellij.lua.debug.api.LuaDebugProcessFactory
 import com.fixcode.intellij.lua.debug.api.LuaDebugTarget
 import com.fixcode.intellij.lua.debug.engine.transport.Connector
@@ -23,7 +24,15 @@ class LocalProcessDebugProcessFactory : LuaDebugProcessFactory {
     override fun createDebugProcess(session: XDebugSession, target: LuaDebugTarget): XDebugProcess {
         val local = target as? LuaDebugTarget.LocalProcess
             ?: throw IllegalArgumentException("不支持的调试目标：${target.displayName}")
-        val connector = InjectingConnector(local.pid, LocalAttachTool.newToken())
+        val connector = InjectingConnector(local.pid, local.authToken ?: LocalAttachTool.newToken())
+        if (local.terminateOnStop) {
+            // 「启动并附加」启动的程序跟着调试会话走：点停止就结束它（进程已经自己退出时什么也不做）
+            session.addSessionListener(object : XDebugSessionListener {
+                override fun sessionStopped() {
+                    ProcessHandle.of(local.pid.toLong()).ifPresent { it.destroy() }
+                }
+            })
+        }
         val process = LuaV3DebugProcessFactory.createProcess(session, target, connector) { config ->
             config.copy(options = config.options.copy(captureOutput = local.captureOutput))
         }
@@ -70,7 +79,10 @@ class LocalProcessDebugProcessFactory : LuaDebugProcessFactory {
             return waitForLua(result)
         }
 
-        /** 组件在等 Lua 加载：每秒连一次端口，直到 runtime 开始监听；进程退出就结束，期间不重新注入。 */
+        /**
+         * 组件在等 Lua 加载：每 200 毫秒连一次端口，直到 runtime 开始监听；进程退出就结束，期间不重新注入。
+         * 连得快很重要：Lua 加载后第一个 VM 会在 Lua 线程上等 IDE 下完断点（最多 5 秒）再跑，等得越短游戏卡得越短。
+         */
         private fun waitForLua(result: LocalAttachTool.Result): MessageConnection {
             val connector = TcpConnector(result.host, result.port, connectTimeoutMillis = 1000, token = token)
             var lastLog = System.nanoTime()
@@ -86,7 +98,7 @@ class LocalProcessDebugProcessFactory : LuaDebugProcessFactory {
                     notice("仍在等待目标进程加载 Lua …")
                 }
                 try {
-                    Thread.sleep(1000)
+                    Thread.sleep(200)
                 } catch (e: InterruptedException) {
                     Thread.currentThread().interrupt()
                     throw IOException("已取消等待 Lua 加载", e)

@@ -93,8 +93,9 @@ internal object ResultJson {
 
     fun breakpoint(b: BreakpointInfo): Map<String, Any?> = obj(
         "id" to b.breakpointId,
+        "function" to b.function,
         "file" to b.file,
-        "line" to b.line,
+        "line" to b.line.takeIf { it > 0 },
         // 默认启用，只在禁用时写 disabled=true（省略默认值）
         "disabled" to !b.enabled,
         "condition" to b.condition,

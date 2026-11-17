@@ -13,7 +13,10 @@ import com.fixcode.intellij.lua.debug.engine.SessionConfig
 import com.fixcode.intellij.lua.debug.engine.SourceMapper
 import com.fixcode.intellij.lua.debug.engine.transport.Connector
 import com.fixcode.intellij.lua.debug.engine.transport.TcpConnector
+import com.fixcode.intellij.lua.debug.protocol.ExceptionModes
 import com.fixcode.intellij.lua.debug.protocol.HelperScript
+import com.fixcode.intellij.lua.debug.protocol.SetOptionsArgs
+import com.fixcode.intellij.lua.debug.ui.settings.LuaDebugSettings
 
 /**
  * 新引擎的 [LuaDebugProcessFactory]，处理「手动地址」。其他目标各有一个 factory，只负责「怎么连上」，
@@ -56,7 +59,10 @@ class LuaV3DebugProcessFactory : LuaDebugProcessFactory {
                 autoLearn = mapping.autoLearn,
                 caseSensitive = SystemInfo.isFileSystemCaseSensitive
             )
-            val base = SessionConfig(name = target.displayName, token = token, helpers = helpers(), helperMain = HELPER_MAIN)
+            // 错误聚合（「Lua 错误」页、MCP errors）：老 runtime 没有 errorReport 能力时引擎不下发
+            val collect = if (LuaDebugSettings.getInstance().collectCaughtLuaErrors) ExceptionModes.ALL else ExceptionModes.UNCAUGHT
+            val base = SessionConfig(name = target.displayName, token = token, helpers = helpers(), helperMain = HELPER_MAIN,
+                options = SetOptionsArgs(captureOutput = true, collectErrors = collect))
             val config = configure(LuaVariableViewSync.configure(session.project, base))
             val engine = DebugSession(config, connector, mapper)
             return LuaV3DebugProcess(session, engine, target, onClosed)

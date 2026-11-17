@@ -26,6 +26,7 @@
 18. [实现要求](#18-实现要求)
 19. [变更记录](#19-变更记录)
 20. [采样性能分析（profile）](#20-采样性能分析profile)
+21. [错误聚合（errorReport）](#21-错误聚合errorreport)
 
 ---
 
@@ -275,10 +276,10 @@
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
 | `id` | 是 | IDE 分配的不透明字符串，连接内唯一。runtime 在事件里原样带回 |
-| `source.path` | 是 | IDE 本机文件路径，统一用 `/` 分隔 |
+| `source.path` | 是 | IDE 本机文件路径，统一用 `/` 分隔（函数断点可省，见 7.7） |
 | `source.chunkName` | 否 | IDE 已知（学习过或用户配置了映射）的 chunkName。给了就**只**按它精确匹配 |
 | `source.sha256` | 否 | 本地文件内容的 SHA-256（小写 hex）。runtime 有宿主登记的哈希且不一致时，断点状态为 `mismatch`（仍然生效，只是提示） |
-| `line` | 是 | 1 起的行号 |
+| `line` | 是 | 1 起的行号（函数断点不给，见 7.7） |
 | `condition` | 否 | Lua 表达式，在**断点所在帧**里求值，结果为真才算命中。runtime 侧执行，不往返 IDE。语法错误时断点状态为 `invalid` |
 | `hitCondition` | 否 | 命中次数条件，见 7.3。先判断 `condition`，满足后才计数 |
 | `logMessage` | 否 | 日志断点：命中时输出一条 `output`（`category = "logpoint"`），`{expr}` 会被替换成求值结果（`{{` / `}}` 转义），**不暂停** |
@@ -362,6 +363,36 @@ response 的 `breakpoints` 列出本次 upsert 的每个断点的**初始**状�
 
 - `captures` 的每项是**一层**快照（不带 `ref`，不能再展开），大 table 只给 `value` 摘要。
 - 高频命中时 runtime 可以合并或丢弃：每个断点每秒最多发 100 条，超出部分计数后在下一条里给 `dropped: <n>`。
+
+### 7.7 函数断点（能力 `functionBreakpoints`）
+
+用户不知道代码在哪个文件时按函数名下断点；函数被调用时停在**函数第一行**（这时参数已经就位，条件、日志、`capture` 都在函数帧里求值）。
+
+和行断点在同一张表里，用同一个 `setBreakpoints` 下发，只是 `Breakpoint` 换成：
+
+```json
+{ "id": "bp-30", "function": "UI.BagPanel:OnItemClick", "condition": "index > 5", "hitCondition": ">= 2" }
+{ "id": "bp-31", "function": "M.add", "source": { "path": "D:/Game/Content/Script/Util/M.lua" } }
+{ "id": "bp-32", "function": "OnGameStart" }
+```
+
+| 字段 | 说明 |
+| --- | --- |
+| `function` | 有它就是函数断点。写法：`Module.func`、`A.B:Method`（`:` 只能在最后一段前）、全局函数名 `func`；每段是 Lua 标识符。写法不对时 response 里该断点为 `invalid` |
+| `line` | 不给（或 0） |
+| `source` | 可选：给了就只认这个文件里的函数（匹配规则同 7.2） |
+| 其余 | `condition` / `hitCondition` / `logMessage` / `capture` / `autoContinue` / `vmId` 和行断点完全一样 |
+
+runtime 的匹配（两条路，任一命中即可）：
+
+1. **按函数值**：在 VM 里按名字找到函数值，记下它的原型（source + 定义行），调用到这个原型就命中。宿主从 C 调进来、调用处没有名字的（UnLua 的 `ReceiveBeginPlay` 等）也能停。限定部分依次查：全局表按点分路径（`rawget`，沿元表 `__index` 是 table 时往上找，不调元方法）→ `package.loaded[限定名]` → `package.loaded` 里模块名以它结尾的（`UI.BagPanel`、`UI/BagPanel` 都算）。函数值每秒重新解析一次，热重载换了函数也跟得上。
+2. **按调用处的名字兜底**：还找不到函数值时（local 模块表、还没 require 的模块），用 `lua_getinfo` 的 `n` 取调用处的名字比函数名：全局函数名要求 `namewhat` 是 `global` / `local` / `upvalue`；带限定名的要求 `namewhat` 是 `field` / `method`，并且函数所在文件名（去掉目录和扩展名，模块名式的 chunk 取最后一段）等于限定名的最后一段（`BagPanel:OnItemClick` 认 `.../BagPanel.lua`）。
+
+- 只认 Lua 函数；C 函数没有「第一行」，不支持。
+- 停下时 `paused { reason: "breakpoint", breakpointIds: [...] }`，`top` 是函数第一行。和行断点落在同一行时只停一次。
+- `breakpointStatus`：找到函数值或第一次按名字命中时发 `verified`，`chunkName` 是函数所在 chunk，`line` 是函数的**定义行**（`function` 关键字那一行）。一直没找到时保持 `pending`。7.2 末尾的「断点下发 5 秒后没匹配上」诊断只管行断点。
+- 性能：没有函数断点时不多任何开销（CALL 钩子本来就只在有断点时挂）；有函数断点时每次调用多一次哈希查找，按名字兜底的断点还要 `lua_getinfo "n"`（带限定名的先比文件名，对不上不取）。
+- 没有这个能力的 runtime（旧版）：IDE 不下发函数断点，在界面上标「runtime 不支持」，行断点照常。
 
 ---
 
@@ -643,6 +674,7 @@ v3 的懒加载：helper 生成的子项由 runtime 缓存在本次暂停里，`
 | --- | --- | --- |
 | `stopOnEntry` | `false` | `configurationDone` 后第一次执行 Lua 时暂停（`reason: "entry"`） |
 | `exceptions` | `none` | 能力 `exceptions`（runtime 没声明这个能力时，传 `none` 以外的值返回 `UNSUPPORTED`；`emmy_debugger_core` 已声明；「没被接住」要宿主在自己的错误处理函数里通知核心，见原生核心 README「出错即停」）。`none` / `uncaught`（错误没有被 `pcall`/`xpcall` 接住时暂停）/ `all`（任何错误都暂停，包括被 `pcall` 接住的） |
+| `collectErrors` | `none` | 能力 `errorReport`：错误聚合（第 21 节），只计数、不暂停。`none` / `uncaught` / `all`（含被 `pcall`/`xpcall` 接住的） |
 | `captureOutput` | `false` | 转发 `print`（11.1） |
 | `allowLuaEval` | `true` | `false` 时 `mode: "lua"` 的求值和 `setVariable` 回 `EVAL_FORBIDDEN`（MCP 未授权任意求值时由 IDE 设为 `false`） |
 | `valuePathInvokeIndex` | `false` | valuePath 是否触发 `__index` |
@@ -728,6 +760,8 @@ IDE 收到不认识的错误码按 `INTERNAL` 处理并展示 `message`。
 | `hookMux` | runtime 用 HookMux 与宿主其他钩子共存（诊断信息，IDE 不依赖） |
 | `terminate` | `disconnect { terminate: true }` |
 | `profiler` | `profile`（第 20 节）。没协商到时 IDE 不发 `profile`、不显示采样按钮 |
+| `functionBreakpoints` | 断点的 `function` 字段（7.7）。没协商到时 IDE 不下发函数断点 |
+| `errorReport` | `setOptions.collectErrors`、`errors` 命令、`luaError` 事件（第 21 节） |
 
 能力位只增不改义；新功能加新能力位，旧 IDE 看不到就不会用。
 
@@ -752,6 +786,10 @@ IDE 收到不认识的错误码按 `INTERNAL` 处理并展示 `message`。
 4. 重复附加（含 IDE 重连）：进程里已有 `emmy_attach.dll` 时不再注入，只换 token，返回 `reinjected:true`。进程里有旧版 `emmy_hook.dll` 时直接失败，提示重启目标进程。
 5. 目标进程里：`emmy_attach.dll` 在已加载模块里找导出 `lua_*` 的模块，按导出判断 Lua 版本（`lua_newuserdatauv` → 5.4，`lua_rotate` → 5.3，`lua_callk` → 5.2，否则 5.1；有 `luaJIT_setmode` 时报不支持），加载同目录的 `lua5X/emmy_debugger_core.dll`（dynamic 模式，用目标进程自己的 Lua），挂 `lua_pcall` / `lua_pcallk` / `lua_resume` / `lua_close` 在 Lua 线程上登记 VM，然后监听端口。附加时 Lua 必须已加载。
 6. 文件布局（每个位数目录）：`emmy_tool.exe`、`emmy_attach.dll`、`EasyHook.dll`、`lua51/` … `lua54/emmy_debugger_core.dll`。
+7. 启动并附加：`emmy_tool.exe launch -dir <位数目录> -auth-token <token> -protocol 3`。程序路径、工作目录、命令行参数（原样拼在程序路径后面）放在环境变量 `EMMY_LAUNCH_EXE` / `EMMY_LAUNCH_WORK` / `EMMY_LAUNCH_ARGS`（UTF-16 传递，路径里的中文、空格和参数里的引号都不会被改；也可以用 `-exe` / `-work` 传 ANSI 路径），位数由 IDE 读 exe 的 PE 头决定。
+   - 过程：以调试方式启动程序（不继承句柄），在 exe 入口点下软断点；停在入口点时（静态依赖的 DLL 都已加载，程序自己的代码一行没跑）恢复指令、挂起主线程、摘掉调试器，按第 2 步注入 `emmy_attach.dll`，成功后恢复主线程。不用 `CREATE_SUSPENDED` 直接注入：那时进程加载器还没初始化，远程线程里 `LoadLibrary` 不可靠。
+   - 结果和 `attach` 相同，多一个 `"launched":true`，`pid` 是新进程；Lua 通常是之后才加载的，所以常见 `waiting:true`。第一个 VM 照第 5 步等 IDE 的 `configurationDone`，启动阶段的顶层代码也能断住。
+   - 失败（程序没跑到入口点就退出、90 秒没到入口点、注入失败）时程序被结束，返回 `ok:false`。之后的重连照常用 `attach -p <pid>`（`reinjected:true`）。
 
 局域网发现（可选，内嵌模式）：runtime 每 2 秒向 UDP `255.255.255.255:9967` 广播一个 UTF-8 JSON 名片 `{"emmy":3,"name":"MyGame","pid":123,"port":9966,"platform":"android","arch":"arm64","needToken":true}`，不含 token。
 
@@ -824,6 +862,9 @@ IDE                                           runtime
 | v3.0（revision 0） | 2026-11-16 | 首个定稿。采用 IDE 引擎线程提出的消息字段命名（`command`/`args`、`ok`/`body`/`error`、`seq`/`event`/`body`）与命令名 |
 | v3.0（revision 0） | 2026-11-16 | 按 `emmy_debugger_core` 实现补充说明（不改字段语义）：`loadHelpers` 立即返回 `{}`、失败走 `output`；helper 读写宿主 `_G`；父协程帧为可选；`exceptions` 能力未声明时 `setOptions.exceptions` 只接受 `none`。变量视图的字段扩展见 [variable-view.md](variable-view.md)，后续合进第 9 节 |
 | v3.0（revision 0） | 2026-11-16 | 新增能力 `profiler` 和命令 `profile`（第 20 节），向后兼容：老 runtime 不声明这个能力，IDE 就不发 |
+| v3.0（revision 0） | 2026-11-17 | 新增 `emmy_tool launch`（第 16.1 节第 7 步）：启动程序、停在入口点注入，结果多 `launched:true`；不涉及线上协议 |
+| v3.0（revision 0） | 2026-11-17 | 新增能力 `functionBreakpoints` 和断点字段 `function`（7.7 函数断点），向后兼容：老 runtime 不声明这个能力，IDE 就不发函数断点 |
+| v3.0（revision 0） | 2026-11-17 | 新增能力 `errorReport`：`setOptions.collectErrors`、命令 `errors`、事件 `luaError`（第 21 节）。宿主 `lua_pcall` 自带错误处理函数（如 UnLua）时，核心把自己的处理函数串在它前面，`exceptions` 和 `collectErrors` 都能收到这类错误 |
 
 ---
 
@@ -879,3 +920,34 @@ IDE                                           runtime
 - 采样不改变游戏状态（不暂停、不改变量）。IDE 断开时 runtime 停掉所有 VM 的采样。
 - 样本按执行的 Lua 指令数分布，不按墙钟时间：COUNT 钩子只在执行 Lua 指令时计数，花在 C 函数（引擎接口、`string` 库等）里的时间不计入任何样本。看「哪段 Lua 逻辑执行得最多」很准，看「Lua 调了哪个慢的引擎接口」要配合引擎自己的分析器。
 - 错误：`action` / 范围不对回 `INVALID_ARGS`，`vmId` 不存在或进程里还没有 VM 回 `VM_NOT_FOUND`。
+
+---
+
+## 21. 错误聚合（errorReport）
+
+能力 `errorReport`。被 `pcall` 接住的错误常常每帧一次，逐条转发会刷屏、拖慢游戏，所以 runtime 先按「VM + 第一个 Lua 帧的位置 + 消息 + 是否被接住」去重计数，IDE 的「Lua 错误」页和 MCP `lua_debug_inspect action=errors` 用它。
+
+- 打开：`setOptions { "collectErrors": "all" }`（`uncaught` 只收没被 Lua 代码接住的）。和 `exceptions` 独立：可以只计数不停，也可以两个都开。`all` 时 runtime 包装 VM 的 `pcall` / `xpcall`（和 `exceptions: "all"` 同一套包装）。
+- 新会话（`hello`）清空聚合；最多 500 条，之后的新错误只计入 `dropped`。消息超过 1024 字节截断。
+
+### 21.1 事件 `luaError`
+
+```json
+{ "event": "luaError", "body": { "id": 3, "vmId": 1, "message": "main.lua:12: attempt to index a nil value",
+  "chunkName": "@main.lua", "line": 12, "uncaught": true, "count": 1, "firstMs": 1763390000000, "lastMs": 1763390000000,
+  "traceback": "\tmain.lua:12: in function 'tick'\n" } }
+```
+
+- 某条错误第一次出现时马上推一条，带 `traceback`（最多 32 帧）；之后同一条（同一个 `id`）每秒最多推一次，只带新的 `count` / `lastMs`，不带 `traceback`。
+- 推送是限流的，计数以 `errors` 命令为准。`uncaught`、`chunkName`、`line` 为默认值（`false` / 空 / 0）时省略。
+
+### 21.2 `errors`
+
+```json
+{ "command": "errors", "args": { "action": "list" } }
+→ { "items": [ { "id": 3, "vmId": 1, "message": "...", "chunkName": "@main.lua", "line": 12, "count": 120,
+                 "firstMs": 1763390000000, "lastMs": 1763390004000, "traceback": "..." } ], "dropped": 0 }
+```
+
+- `action`：`list`（默认，按 `lastMs` 倒序的全部条目，都带 `traceback`）/ `clear`（清空，回 `{}`）。`dropped` 为 0 时省略。
+

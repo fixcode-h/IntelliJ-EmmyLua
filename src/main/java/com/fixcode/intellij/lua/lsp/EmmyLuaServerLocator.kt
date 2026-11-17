@@ -49,6 +49,17 @@ object EmmyLuaServerLocator {
         return null
     }
 
+    /** 「路径（来源）」，设置页和上手检查共用；找不到时返回 null。 */
+    fun describe(): String? {
+        val located = locate() ?: return null
+        val source = when (located.source) {
+            Source.SETTINGS -> "设置"
+            Source.BUNDLED -> "插件自带"
+            Source.PATH -> "PATH"
+        }
+        return "${located.path}（$source）"
+    }
+
     fun bundled(): Path? {
         val dir = platformDir ?: return null
         val pluginPath = PluginManagerCore.getPlugin(PluginId.getId(PLUGIN_ID))?.pluginPath ?: return null

@@ -88,7 +88,7 @@ class FakeBackend : LuaDebugBackend {
     override fun setBreakpoint(spec: BreakpointSpec): CompletableFuture<BreakpointInfo> {
         val bp = BreakpointInfo(
             (bpIds.incrementAndGet()).toString(), BreakpointOrigin.AGENT, spec.file, spec.line, verified = sessions.isNotEmpty(),
-            condition = spec.condition, capture = spec.capture, autoContinue = spec.autoContinue,
+            condition = spec.condition, capture = spec.capture, autoContinue = spec.autoContinue, function = spec.function,
         )
         breakpoints += bp
         return CompletableFuture.completedFuture(bp)
@@ -99,7 +99,8 @@ class FakeBackend : LuaDebugBackend {
         breakpoints.removeIf { b ->
             (filter.all && (filter.includeIde || b.origin == BreakpointOrigin.AGENT)) ||
                 b.breakpointId == filter.breakpointId || b.breakpointId in filter.breakpointIds ||
-                (filter.file == b.file && (filter.line == null || filter.line == b.line))
+                (filter.file == b.file && (filter.line == null || filter.line == b.line)) ||
+                (filter.function != null && filter.function == b.function)
         }
         return CompletableFuture.completedFuture(before - breakpoints.size)
     }
@@ -168,6 +169,11 @@ class FakeBackend : LuaDebugBackend {
         return CompletableFuture.completedFuture(VariableInfo(request.expression, "number", "42"))
     }
 
+    override fun setVariable(request: SetVariableRequest): CompletableFuture<VariableInfo> {
+        commands += "set ${request.mode} ${request.path}=${request.value}" + (request.scope?.let { " ${it.name}" } ?: "")
+        return CompletableFuture.completedFuture(VariableInfo(request.path, "number", request.value))
+    }
+
     override fun getOutput(sessionId: String?, sinceSeq: Long, limit: Int) = OutputPage(
         listOf(OutputEntry(1, 0, "s1", OutputCategory.STDOUT, "hello")).filter { it.seq > sinceSeq }, 1,
     )
@@ -212,6 +218,18 @@ class FakeBackend : LuaDebugBackend {
         return CompletableFuture.completedFuture(
             ProfileReport(profileSamples, profileStartedMs?.toLong() ?: 0, sorted.take(limit), sorted.size, 1000, 0.4)
         )
+    }
+
+    /** 错误聚合：预置的全量。 */
+    var errorItems: List<LuaErrorInfo> = listOf(
+        LuaErrorInfo(2, "vm-1", "Bag.lua:20: attempt to index a nil value (field 'item')", "/proj/Bag.lua", 20, 300, 1000, 9000,
+            traceback = "\t/proj/Bag.lua:20: in function 'Refresh'\n\t/proj/Main.lua:5: in function 'tick'\n"),
+        LuaErrorInfo(1, "vm-1", "Main.lua:9: boom", "/proj/Main.lua", 9, 1, 500, 500, uncaught = true),
+    )
+
+    override fun getErrors(sessionId: String): CompletableFuture<ErrorReport> {
+        commands += "errors"
+        return CompletableFuture.completedFuture(ErrorReport(errorItems))
     }
 
     override fun sourceSnippet(file: String, line: Int, radius: Int) =

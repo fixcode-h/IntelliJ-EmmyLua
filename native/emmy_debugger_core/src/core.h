@@ -2,6 +2,7 @@
 #pragma once
 
 #include "breakpoints.h"
+#include "error_stats.h"
 #include "nlohmann/json.hpp"
 
 #include <atomic>
@@ -43,9 +44,14 @@ struct Options {
 	std::atomic<int> viewMaxSortKeys{10000};
 	std::atomic<int> viewToString{0}; // 0 tables / 1 all / 2 never
 	std::atomic<int> exceptions{0}; // 0 none / 1 uncaught / 2 all
+	std::atomic<int> collectErrors{0}; // 能力 errorReport：0 none / 1 uncaught / 2 all（只计数，不停）
 	std::atomic<int> viewHelperBudgetMs{20}; // 11.2：每次调用 helper v2 formatter 的时间预算
 
 	bool CaseSensitive() const;
+	// 要不要包装 Lua 的 pcall / xpcall 来接收被接住的错误（出错即停 all 或错误聚合 all）
+	bool WantCaughtErrors() const { return exceptions.load() == 2 || collectErrors.load() == 2; }
+	// 宿主 lua_pcall 要不要插错误处理函数
+	bool WantHostErrors() const { return exceptions.load() != 0 || collectErrors.load() != 0; }
 	void Reset();
 };
 
@@ -59,6 +65,7 @@ public:
 	static Core& Get();
 
 	Options& options() { return options_; }
+	ErrorStats& errors() { return errors_; }
 
 	// ---- VM ----
 	uint64_t RegisterVm(lua_State* L, const std::string& discovery);
@@ -127,6 +134,7 @@ private:
 	Core() = default;
 
 	Options options_;
+	ErrorStats errors_;
 
 	std::mutex vmMutex_;
 	std::map<uint64_t, std::shared_ptr<Vm>> vms_;

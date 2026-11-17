@@ -18,6 +18,10 @@ sealed class LuaDebugTarget {
         val executablePath: String? = null,
         /** 把游戏的 print / 错误输出转到调试控制台。 */
         val captureOutput: Boolean = true,
+        /** 「启动并附加」时启动用的 token：之后每次建连沿用它，不换新的。为空时会话自己生成。 */
+        val authToken: String? = null,
+        /** 进程是这次调试启动的：结束调试时一起结束它。 */
+        val terminateOnStop: Boolean = false,
     ) : LuaDebugTarget() {
         override val displayName: String get() = "$processName ($pid)"
     }

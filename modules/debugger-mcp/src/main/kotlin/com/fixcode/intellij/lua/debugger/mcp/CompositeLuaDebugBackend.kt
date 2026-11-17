@@ -83,7 +83,11 @@ class CompositeLuaDebugBackend(private val members: () -> List<Member>) : LuaDeb
 
     override fun capabilities(sessionId: String) = bySession(sessionId).capabilities(sessionId)
 
-    override fun setBreakpoint(spec: BreakpointSpec) = byFile(spec.file).setBreakpoint(spec)
+    // 函数断点不一定给文件：交给有调试会话的项目，都没有时交给第一个
+    override fun setBreakpoint(spec: BreakpointSpec) = when {
+        spec.file.isNotBlank() -> byFile(spec.file)
+        else -> all().firstOrNull { m -> m.backend.listSessions().isNotEmpty() }?.backend ?: primary()
+    }.setBreakpoint(spec)
 
     override fun removeBreakpoints(filter: BreakpointFilter): CompletableFuture<Int> =
         fanOut(filter.file) { it.removeBreakpoints(filter) }
@@ -126,6 +130,9 @@ class CompositeLuaDebugBackend(private val members: () -> List<Member>) : LuaDeb
     override fun evaluate(request: EvaluateRequest): CompletableFuture<VariableInfo> =
         firstSucceeding { it.evaluate(request) }
 
+    override fun setVariable(request: SetVariableRequest): CompletableFuture<VariableInfo> =
+        firstSucceeding { it.setVariable(request) }
+
     /**
      * frameId / ref 不带项目信息：只有一个项目时直接发；多个时依次试，跳过报 STALE_REFERENCE / NO_SESSION 的。
      * 多项目同时调试很少见，这点开销可以接受，换来引擎不用在 id 里编码项目。
@@ -163,6 +170,8 @@ class CompositeLuaDebugBackend(private val members: () -> List<Member>) : LuaDeb
 
     override fun stopProfile(sessionId: String, vmId: String?, sort: ProfileSort, limit: Int) =
         bySession(sessionId).stopProfile(sessionId, vmId, sort, limit)
+
+    override fun getErrors(sessionId: String) = bySession(sessionId).getErrors(sessionId)
 
     override fun getProbeHits(breakpointId: String?, sinceSeq: Long, limit: Int): ProbeHitPage {
         val members = all()

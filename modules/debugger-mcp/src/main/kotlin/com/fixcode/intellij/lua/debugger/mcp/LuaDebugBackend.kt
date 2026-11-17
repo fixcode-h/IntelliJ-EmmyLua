@@ -97,6 +97,13 @@ interface LuaDebugBackend {
 
     fun evaluate(request: EvaluateRequest): CompletableFuture<VariableInfo>
 
+    /**
+     * 改一个变量（协议 v3 setVariable）。[SetVariableRequest.path] 是值路径：只有名字时改局部变量 / 上值（或按 scope 指定），
+     * 带 `.x` / `[3]` 时改它前面那个 table 的字段。返回改后的值。默认不支持。
+     */
+    fun setVariable(request: SetVariableRequest): CompletableFuture<VariableInfo> =
+        CompletableFuture.failedFuture(LuaDebugBackendException(ErrorCode.NOT_SUPPORTED, "这个调试引擎不支持修改变量。"))
+
     /** 调试器日志、print 输出、Lua 错误；seq 单调递增，sessionId 为空表示所有会话。 */
     fun getOutput(sessionId: String?, sinceSeq: Long, limit: Int): OutputPage
 
@@ -127,7 +134,29 @@ interface LuaDebugBackend {
     /** 停止采样（已经到点自动停了也可以调）并取函数表，按 [sort] 排序取前 [limit] 个。 */
     fun stopProfile(sessionId: String, vmId: String?, sort: ProfileSort, limit: Int): CompletableFuture<ProfileReport> =
         CompletableFuture.failedFuture(LuaDebugBackendException(ErrorCode.NOT_SUPPORTED, "这个调试引擎不支持采样性能分析。"))
+
+    // ---- 错误聚合（协议 v3 第 21 节，能力 errorReport） ----
+
+    /** 本次会话里聚合过的 Lua 错误（按最近出现时间倒序，计数以 runtime 为准）。runtime 没有 errorReport 能力时抛 [ErrorCode.NOT_SUPPORTED]。 */
+    fun getErrors(sessionId: String): CompletableFuture<ErrorReport> =
+        CompletableFuture.failedFuture(LuaDebugBackendException(ErrorCode.NOT_SUPPORTED, "这个调试引擎不支持错误聚合。"))
 }
+
+data class LuaErrorInfo(
+    val id: Long,
+    val vmId: String,
+    val message: String,
+    /** 映射到的本地文件；没映射上时是 chunkName。 */
+    val file: String?,
+    val line: Int?,
+    val count: Long,
+    val firstMs: Long,
+    val lastMs: Long,
+    val uncaught: Boolean = false,
+    val traceback: String? = null,
+)
+
+data class ErrorReport(val items: List<LuaErrorInfo>, val dropped: Long = 0)
 
 enum class ProfileSort { SELF, TOTAL }
 
@@ -259,8 +288,9 @@ data class VmInfo(
 enum class BreakpointOrigin { IDE, AGENT }
 
 data class BreakpointSpec(
-    /** 本地文件路径（绝对或相对项目根），引擎负责映射到 chunkName。 */
+    /** 本地文件路径（绝对或相对项目根），引擎负责映射到 chunkName。函数断点可为空串（给了就只认这个文件里的函数）。 */
     val file: String,
+    /** 行号；函数断点为 0。 */
     val line: Int,
     val condition: String? = null,
     /** 命中次数条件，例如 "5"、">=3"、"%2"。 */
@@ -272,6 +302,8 @@ data class BreakpointSpec(
     /** 命中后自动继续（Probe）。 */
     val autoContinue: Boolean = false,
     val vmId: String? = null,
+    /** 函数断点：`Module.func`、`Class:Method` 或全局函数名，停在函数第一行（和 file + line 二选一）。 */
+    val function: String? = null,
 )
 
 data class BreakpointFilter(
@@ -279,6 +311,8 @@ data class BreakpointFilter(
     val breakpointIds: List<String> = emptyList(),
     val file: String? = null,
     val line: Int? = null,
+    /** 按函数断点的函数名匹配。 */
+    val function: String? = null,
     /** 匹配所有断点（默认只 Agent 下的，includeIde 时连用户的一起）。 */
     val all: Boolean = false,
     /** 也作用于用户在 IDE 里下的断点（对应 clear scope=all）。 */
@@ -300,6 +334,8 @@ data class BreakpointInfo(
     val enabled: Boolean = true,
     /** 没验证的原因，例如"chunk 未加载"、"行上没有代码"。 */
     val message: String? = null,
+    /** 函数断点的函数名（此时 line 为 0，file 是限定的文件或空串）。 */
+    val function: String? = null,
 )
 
 enum class StepKind { OVER, INTO, OUT }
@@ -373,6 +409,58 @@ data class EvaluateRequest(
     val expression: String,
     val mode: EvalMode,
 )
+
+data class SetVariableRequest(
+    val frameId: String,
+    /** 要改的变量，值路径：hp、self.hp、items[3]、cfg["key"]。 */
+    val path: String,
+    /** 新值：value_path 模式下是字面量（1、"a"、true、nil）或另一个值路径；lua 模式下是任意 Lua 表达式。 */
+    val value: String,
+    val mode: EvalMode,
+    /** 只有名字时在哪个作用域找；null 表示先局部变量后上值。 */
+    val scope: VariableScope? = null,
+)
+
+/** 值路径拆成「父路径 + 最后一段」，最后一段写成 runtime setVariable 认的名字（`x`、`[3]`、`[key]`）。 */
+object ValuePaths {
+    /** 拆不开（空、括号或引号不配对）时返回 null。父路径为 null 表示整个路径就是一个名字。 */
+    fun splitLast(path: String): Pair<String?, String>? {
+        val p = path.trim()
+        if (p.isEmpty()) return null
+        var depth = 0
+        var quote: Char? = null
+        var lastSep = -1
+        var i = 0
+        while (i < p.length) {
+            val c = p[i]
+            if (quote != null) {
+                if (c == '\\') i++ else if (c == quote) quote = null
+            } else when (c) {
+                '"', '\'' -> quote = c
+                '[' -> { if (depth == 0) lastSep = i; depth++ }
+                ']' -> { depth--; if (depth < 0) return null }
+                '.' -> if (depth == 0) lastSep = i
+            }
+            i++
+        }
+        if (depth != 0 || quote != null) return null
+        if (lastSep < 0) return if (isName(p)) null to p else null
+        val parent = p.substring(0, lastSep).trim().takeIf { it.isNotEmpty() } ?: return null
+        val tail = p.substring(lastSep)
+        val leaf = if (tail.startsWith(".")) {
+            tail.substring(1).trim().takeIf(::isName) ?: return null
+        } else {
+            val inner = tail.removePrefix("[").removeSuffix("]").trim()
+            if (!tail.endsWith("]") || inner.isEmpty()) return null
+            val key = if (inner.length >= 2 && (inner[0] == '"' || inner[0] == '\'') && inner.last() == inner[0]) inner.substring(1, inner.length - 1)
+            else inner.takeIf { it.toDoubleOrNull() != null } ?: return null
+            "[$key]"
+        }
+        return parent to leaf
+    }
+
+    private fun isName(s: String) = s.isNotEmpty() && (s[0].isLetter() || s[0] == '_') && s.all { it.isLetterOrDigit() || it == '_' }
+}
 
 enum class OutputCategory { STDOUT, STDERR, ERROR, DEBUGGER }
 

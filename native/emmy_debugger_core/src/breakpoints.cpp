@@ -34,6 +34,56 @@ uint64_t NextBreakpointSerial() {
 	return ++g_serial;
 }
 
+bool ParseFunctionSpec(std::string_view text, Breakpoint& bp, std::string& err) {
+	text = Trim(text);
+	bp.funcQualifier.clear();
+	bp.funcName.clear();
+	bp.funcMethod = false;
+	auto bad = [&](const std::string& why) {
+		err = "函数断点写法不对（" + why + "），支持：Module.func、Class:Method、全局函数名 func";
+		return false;
+	};
+	if (text.empty()) return bad("函数名为空");
+	if (text.size() > 256) return bad("太长");
+	auto isIdent = [](std::string_view seg) {
+		if (seg.empty() || std::isdigit(static_cast<unsigned char>(seg[0]))) return false;
+		for (char c : seg) {
+			if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '_')) return false;
+		}
+		return true;
+	};
+	size_t colon = text.find(':');
+	std::string_view qual;
+	std::string_view name;
+	if (colon != std::string_view::npos) {
+		if (text.find(':', colon + 1) != std::string_view::npos) return bad("只能有一个 ':'");
+		qual = text.substr(0, colon);
+		name = text.substr(colon + 1);
+		if (qual.empty()) return bad("':' 前面要写类名");
+		bp.funcMethod = true;
+	} else {
+		size_t dot = text.rfind('.');
+		if (dot != std::string_view::npos) {
+			qual = text.substr(0, dot);
+			name = text.substr(dot + 1);
+		} else {
+			name = text;
+		}
+	}
+	if (!isIdent(name)) return bad("函数名「" + std::string(name) + "」不是标识符");
+	size_t start = 0;
+	while (!qual.empty() && start <= qual.size()) {
+		size_t end = qual.find('.', start);
+		std::string_view seg = qual.substr(start, end == std::string_view::npos ? std::string_view::npos : end - start);
+		if (!isIdent(seg)) return bad("「" + std::string(seg) + "」不是标识符");
+		if (end == std::string_view::npos) break;
+		start = end + 1;
+	}
+	bp.funcQualifier = std::string(qual);
+	bp.funcName = std::string(name);
+	return true;
+}
+
 bool HitCondition::Check(int64_t count) const {
 	switch (op) {
 	case Op::None: return true;
@@ -75,6 +125,10 @@ BreakpointIndex::BreakpointIndex(uint64_t revision, std::vector<BreakpointPtr> b
 	: revision_(revision), caseSensitive_(caseSensitive), bps_(std::move(bps)) {
 	// 相同 key（规范化后的 chunkName 或路径）的断点放进同一组，匹配时按组算
 	for (const BreakpointPtr& bp : bps_) {
+		if (bp->IsFunction()) {
+			funcs_.push_back(bp);
+			continue;
+		}
 		bool byChunk = bp->HasChunkName();
 		const NormalizedPath* key = byChunk ? &bp->normChunk : &bp->normPath;
 		Group* found = nullptr;
@@ -95,6 +149,13 @@ BreakpointIndex::BreakpointIndex(uint64_t revision, std::vector<BreakpointPtr> b
 bool BreakpointIndex::AnyFor(uint64_t vmId) const {
 	for (const BreakpointPtr& bp : bps_) {
 		if (bp->vmId == 0 || bp->vmId == vmId) return true;
+	}
+	return false;
+}
+
+bool BreakpointIndex::AnyLineFor(uint64_t vmId) const {
+	for (const BreakpointPtr& bp : bps_) {
+		if (!bp->IsFunction() && (bp->vmId == 0 || bp->vmId == vmId)) return true;
 	}
 	return false;
 }

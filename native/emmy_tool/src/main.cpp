@@ -7,6 +7,8 @@
 int main(int argc, char **argv) {
 	CommandLine commandLine;
 	commandLine.AddTarget("attach");
+	// 启动程序并在它跑到入口点前注入（协议 v3）
+	commandLine.AddTarget("launch");
 	commandLine.AddTarget("list_processes");
 	commandLine.AddTarget("arch_file", false);
 	commandLine.AddTarget("arch_pid", false);
@@ -44,6 +46,11 @@ int main(int argc, char **argv) {
 	if (target == "attach") {
 		//emmy_tool.exe attach -p 100 -dir c:/xx -auth-token xxx（注入 emmy_attach.dll，协议 v3）
 		return tool.Attach();
+	}
+	if (target == "launch") {
+		//emmy_tool.exe launch -dir c:/xx -auth-token xxx [-exe 程序] [-work 工作目录] [-create-new-window]
+		// 程序、工作目录、命令行参数优先取环境变量 EMMY_LAUNCH_EXE / EMMY_LAUNCH_WORK / EMMY_LAUNCH_ARGS（UTF-16，路径里有中文和空格也不会错）
+		return tool.Launch();
 	}
 	if (target == "list_processes") {
 		//emmy_tool.exe list_processes

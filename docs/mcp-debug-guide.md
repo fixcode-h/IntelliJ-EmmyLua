@@ -42,7 +42,7 @@ MCP Server 插件被禁用时，Lua 调试本身照常可用，只是 Agent 用�
 | 工具 | 动作 |
 | --- | --- |
 | `lua_debug_session` | `help` 完整用法 · `status` 会话状态 · `configs` 运行配置 · `launch` 按运行配置以 Debug 启动（`config` 名字，`debug=false` 改成 Run）· `targets` 可附加的进程/设备 · `attach` 附加 · `stop` 结束 · `restart` 重启（按配置重跑或重新附加）· `pause` / `continue` / `step` · `wait` 等下一次暂停 · `reload` 把改过的 Lua 热重载到开着的 UE 编辑器 / 游戏（`files` / `modules` / `changed=true`，经 UELink，不需要调试会话） |
-| `lua_debug_breakpoints` | `list` · `add`（条件、命中次数、日志点、capture + auto_continue 的 Probe）· `remove` · `enable` · `clear`（默认只删 Agent 下的） |
+| `lua_debug_breakpoints` | `list` · `add`（`file` + `line` 或 `function` 按函数名；条件、命中次数、日志点、capture + auto_continue 的 Probe）· `remove` · `enable` · `clear`（默认只删 Agent 下的） |
 | `lua_debug_inspect` | `stack` · `vms` · `locals` · `eval` · `output`（print 和 Lua 错误）· `probes` · `profile`（采样 `duration_ms`，默认 3 秒、最多 60 秒，返回最耗时的 Lua 函数，`sort` = self / total，`limit` 默认 30） |
 
 ### IDE 自带的工具和插件补上的

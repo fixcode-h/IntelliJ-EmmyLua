@@ -11,6 +11,7 @@ import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.vfs.VirtualFileManager
 import com.intellij.util.concurrency.AppExecutorUtil
 import com.intellij.xdebugger.XDebuggerManager
+import com.intellij.xdebugger.breakpoints.XBreakpoint
 import com.intellij.xdebugger.breakpoints.XLineBreakpoint
 import com.fixcode.intellij.lua.debug.api.LuaDebugTarget
 import com.fixcode.intellij.lua.debug.api.LuaDeviceService
@@ -32,6 +33,7 @@ import com.fixcode.intellij.lua.debug.protocol.EvalModes
 import com.fixcode.intellij.lua.debug.protocol.OutputCategories
 import com.fixcode.intellij.lua.debug.protocol.PauseReasons
 import com.fixcode.intellij.lua.debug.protocol.ScopeNames
+import com.fixcode.intellij.lua.debug.protocol.ValueResult
 import com.fixcode.intellij.lua.debug.ui.session.LuaDebugSessionStarter
 import com.fixcode.intellij.lua.debugger.LuaLineBreakpointType
 import com.fixcode.intellij.lua.debugger.mcp.AttachDeviceRequest
@@ -42,8 +44,12 @@ import com.fixcode.intellij.lua.debugger.mcp.BreakpointOrigin
 import com.fixcode.intellij.lua.debugger.mcp.BreakpointSpec
 import com.fixcode.intellij.lua.debugger.mcp.DebugEvent
 import com.fixcode.intellij.lua.debugger.mcp.ErrorCode
+import com.fixcode.intellij.lua.debugger.mcp.ErrorReport
+import com.fixcode.intellij.lua.debugger.mcp.LuaErrorInfo
 import com.fixcode.intellij.lua.debugger.mcp.EvalMode
 import com.fixcode.intellij.lua.debugger.mcp.EvaluateRequest
+import com.fixcode.intellij.lua.debugger.mcp.SetVariableRequest
+import com.fixcode.intellij.lua.debugger.mcp.ValuePaths
 import com.fixcode.intellij.lua.debugger.mcp.FrameInfo
 import com.fixcode.intellij.lua.debugger.mcp.LuaDebugBackend
 import com.fixcode.intellij.lua.debugger.mcp.LuaDebugBackendException
@@ -342,17 +348,23 @@ class LuaEngineMcpBackend(private val project: Project) : LuaDebugBackend, Dispo
     // =====================================================================
 
     override fun setBreakpoint(spec: BreakpointSpec): CompletableFuture<BreakpointInfo> {
-        val path = resolveFile(spec.file)
-        if (spec.line < 1) throw LuaDebugBackendException(ErrorCode.INVALID_ARGUMENT, "行号从 1 开始。")
+        val function = spec.function?.trim()?.takeIf { it.isNotEmpty() }
+        // 函数断点：文件可选（只限定文件），行号为 0
+        val path = if (function != null && spec.file.isBlank()) "" else resolveFile(spec.file)
+        if (function == null && spec.line < 1) throw LuaDebugBackendException(ErrorCode.INVALID_ARGUMENT, "行号从 1 开始。")
         val request = BreakpointRequest(
-            file = path, line = spec.line,
+            file = path, line = if (function != null) 0 else spec.line,
             condition = spec.condition, hitCondition = spec.hitCondition, logMessage = spec.logMessage,
             capture = spec.capture, autoContinue = spec.autoContinue,
             vmId = spec.vmId?.let(::parseVm) ?: 0,
-            origin = EngineOrigin.AGENT
+            origin = EngineOrigin.AGENT,
+            function = function
         )
         val breakpoint = synchronized(lock) {
-            val existing = agentBreakpoints.values.firstOrNull { SourcePaths.normalize(it.request.file) == path && it.request.line == spec.line }
+            val existing = agentBreakpoints.values.firstOrNull {
+                if (function != null) it.request.function == function && SourcePaths.normalize(it.request.file) == SourcePaths.normalize(path)
+                else !it.request.isFunction && SourcePaths.normalize(it.request.file) == path && it.request.line == spec.line
+            }
             if (existing != null) {
                 existing.request = request
                 existing
@@ -423,13 +435,14 @@ class LuaEngineMcpBackend(private val project: Project) : LuaDebugBackend, Dispo
         return synchronized(lock) { agentBreakpoints.values.toList() }.filter { bp ->
             when {
                 ids.isNotEmpty() -> bp.id in ids
+                filter.function != null -> bp.request.function == filter.function
                 file != null -> SourcePaths.normalize(bp.request.file) == file && (filter.line == null || filter.line == bp.request.line)
                 else -> filter.all
             }
         }
     }
 
-    private fun matchIde(filter: BreakpointFilter): List<XLineBreakpoint<*>> {
+    private fun matchIde(filter: BreakpointFilter): List<XBreakpoint<*>> {
         val ids = (filter.breakpointIds + listOfNotNull(filter.breakpointId)).toSet()
         val file = filter.file?.let(::resolveFile)
         return ideBreakpoints().filter { bp ->
@@ -437,24 +450,45 @@ class LuaEngineMcpBackend(private val project: Project) : LuaDebugBackend, Dispo
                 ids.isNotEmpty() -> ideId(bp) in ids
                 // 按文件 / 全部批量操作时，只有明确要求才动用户的断点
                 !filter.includeIde -> false
-                file != null -> pathOf(bp) == file && (filter.line == null || filter.line == bp.line + 1)
+                filter.function != null -> functionOf(bp) == filter.function
+                file != null -> bp is XLineBreakpoint<*> && pathOf(bp) == file && (filter.line == null || filter.line == bp.line + 1)
                 else -> filter.all
             }
         }
     }
 
-    private fun ideBreakpoints(): List<XLineBreakpoint<*>> = ReadAction.compute<List<XLineBreakpoint<*>>, RuntimeException> {
-        XDebuggerManager.getInstance(project).breakpointManager.allBreakpoints
-            .filterIsInstance<XLineBreakpoint<*>>()
-            .filter { it.type is LuaLineBreakpointType }
+    /** 用户的 Lua 行断点和函数断点。 */
+    private fun ideBreakpoints(): List<XBreakpoint<*>> = ReadAction.compute<List<XBreakpoint<*>>, RuntimeException> {
+        XDebuggerManager.getInstance(project).breakpointManager.allBreakpoints.filter {
+            (it is XLineBreakpoint<*> && it.type is LuaLineBreakpointType) || it.type is LuaFunctionBreakpointType
+        }
     }
+
+    private fun functionOf(bp: XBreakpoint<*>): String? =
+        (bp.properties as? LuaFunctionBreakpointProperties)?.function?.trim()?.takeIf { it.isNotEmpty() }
 
     private fun pathOf(bp: XLineBreakpoint<*>): String =
         SourcePaths.normalize(VirtualFileManager.getInstance().findFileByUrl(bp.fileUrl)?.path ?: bp.fileUrl.removePrefix("file://"))
 
-    private fun ideId(bp: XLineBreakpoint<*>) = "ide:${pathOf(bp)}:${bp.line + 1}"
+    private fun ideId(bp: XBreakpoint<*>) =
+        if (bp is XLineBreakpoint<*>) "ide:${pathOf(bp)}:${bp.line + 1}" else "ide:fn:${functionOf(bp)}"
 
-    private fun ideInfo(bp: XLineBreakpoint<*>): BreakpointInfo {
+    private fun ideInfo(bp: XBreakpoint<*>): BreakpointInfo {
+        if (bp !is XLineBreakpoint<*>) {
+            val function = functionOf(bp)
+            val views = entries().flatMap { it.engine.breakpoints() }
+                .filter { it.request.origin == EngineOrigin.IDE && it.request.function == function }
+            return BreakpointInfo(
+                breakpointId = ideId(bp), origin = BreakpointOrigin.IDE,
+                file = (bp.properties as? LuaFunctionBreakpointProperties)?.file?.trim().orEmpty(), line = 0,
+                verified = views.any { it.verification == BreakpointVerification.VERIFIED },
+                condition = bp.conditionExpression?.expression?.takeIf { it.isNotBlank() },
+                logMessage = bp.logExpressionObject?.expression?.takeIf { it.isNotBlank() },
+                enabled = bp.isEnabled,
+                message = statusMessage(views),
+                function = function
+            )
+        }
         val path = pathOf(bp)
         val views = entries().flatMap { it.engine.breakpoints() }
             .filter { it.request.origin == EngineOrigin.IDE && SourcePaths.normalize(it.request.file) == path && it.request.line == bp.line + 1 }
@@ -479,14 +513,16 @@ class LuaEngineMcpBackend(private val project: Project) : LuaDebugBackend, Dispo
             verified = views.any { it.verification == BreakpointVerification.VERIFIED },
             condition = request.condition, hitCondition = request.hitCondition, logMessage = request.logMessage,
             capture = request.capture, autoContinue = request.autoContinue, enabled = request.enabled,
-            message = if (views.isEmpty() && request.enabled) "还没有调试会话，开始调试后自动下发" else statusMessage(views)
+            message = if (views.isEmpty() && request.enabled) "还没有调试会话，开始调试后自动下发" else statusMessage(views),
+            function = request.function
         )
     }
 
     private fun statusMessage(views: List<BreakpointView>): String? {
         if (views.isEmpty() || views.any { it.verification == BreakpointVerification.VERIFIED }) return null
         return views.firstNotNullOfOrNull { it.message } ?: when (views.first().verification) {
-            BreakpointVerification.PENDING -> "chunk 还没加载，加载后自动生效"
+            BreakpointVerification.PENDING ->
+                if (views.first().request.isFunction) "还没找到这个函数（模块没加载或还没被调用），被调用时按名字匹配" else "chunk 还没加载，加载后自动生效"
             else -> null
         }
     }
@@ -548,7 +584,11 @@ class LuaEngineMcpBackend(private val project: Project) : LuaDebugBackend, Dispo
             engineIds[sessionId]?.entries?.firstOrNull { it.value.getNow(null) == engineId }?.let { return it.key }
         }
         val view = engine.breakpoints().firstOrNull { it.id == engineId } ?: return engineId
-        return if (view.request.origin == EngineOrigin.IDE) "ide:${SourcePaths.normalize(view.request.file)}:${view.request.line}" else engineId
+        return when {
+            view.request.origin != EngineOrigin.IDE -> engineId
+            view.request.isFunction -> "ide:fn:${view.request.function}"
+            else -> "ide:${SourcePaths.normalize(view.request.file)}:${view.request.line}"
+        }
     }
 
     override fun addListener(listener: (DebugEvent) -> Unit): AutoCloseable {
@@ -664,6 +704,55 @@ class LuaEngineMcpBackend(private val project: Project) : LuaDebugBackend, Dispo
         })
     }
 
+    override fun setVariable(request: SetVariableRequest): CompletableFuture<VariableInfo> {
+        val (parent, leaf) = ValuePaths.splitLast(request.path)
+            ?: return CompletableFuture.failedFuture(LuaDebugBackendException(ErrorCode.INVALID_ARGUMENT, "'${request.path}' 不是能改的值路径。"))
+        val (sessionId, engine, framePromise) = parseFrame(request.frameId)
+        val mode = if (request.mode == EvalMode.LUA) EvalModes.LUA else EvalModes.VALUE_PATH
+        fun result(container: VariableContainer, r: ValueResult) =
+            VariableInfo(request.path, r.typeName ?: r.type, r.value, r.ref.takeIf { it > 0 }?.let { refOf(sessionId, VariableContainer(container.pause, it, request.path)) })
+        return mapErrors(framePromise.thenCompose { handle ->
+            if (parent != null) {
+                // 先按值路径取到父对象（table / UE 对象 / 函数的上值），再改它的字段
+                engine.evaluate(handle.pause, parent, handle, EvalModes.VALUE_PATH, "agent").thenCompose { owner ->
+                    val container = owner.children()
+                        ?: throw LuaDebugBackendException(ErrorCode.INVALID_ARGUMENT, "'$parent' 是 ${owner.type}，不能改它的字段。")
+                    engine.setVariable(container, leaf, request.value, mode).thenApply { result(container, it) }
+                }
+            } else {
+                val wanted = when (request.scope) {
+                    VariableScope.LOCALS -> listOf(ScopeNames.LOCALS)
+                    VariableScope.UPVALUES -> listOf(ScopeNames.UPVALUES)
+                    VariableScope.GLOBALS -> listOf(ScopeNames.GLOBALS)
+                    // 不写 scope 时只改局部变量和上值：名字拼错时不该悄悄新建一个全局变量
+                    null -> listOf(ScopeNames.LOCALS, ScopeNames.UPVALUES)
+                }
+                engine.scopes(handle).thenCompose { scopes ->
+                    val candidates = wanted.mapNotNull { name -> scopes.firstOrNull { it.name == name } }
+                    fun attempt(i: Int): CompletableFuture<VariableInfo> {
+                        if (i >= candidates.size) {
+                            return CompletableFuture.failedFuture(LuaDebugBackendException(ErrorCode.INVALID_ARGUMENT,
+                                "这一帧没有叫 $leaf 的" + (if (request.scope == null) "局部变量或上值；要改全局变量加 scope=globals。" else "变量。")))
+                        }
+                        val container = candidates[i]
+                        return engine.setVariable(container, leaf, request.value, mode).handle { r, e ->
+                            if (e == null) CompletableFuture.completedFuture(result(container, r))
+                            else if (i + 1 < candidates.size && isNotFound(e)) attempt(i + 1)
+                            else CompletableFuture.failedFuture(e)
+                        }.thenCompose { it }
+                    }
+                    attempt(0)
+                }
+            }
+        })
+    }
+
+    /** runtime 回「找不到要修改的变量」（INVALID_ARGS）：换下一个作用域再试。 */
+    private fun isNotFound(e: Throwable): Boolean {
+        val cause = generateSequence(e) { it.cause }.firstOrNull { it is DebugEngineException } as? DebugEngineException ?: return false
+        return cause.code == ErrorCodes.INVALID_ARGS
+    }
+
     override fun getOutput(sessionId: String?, sinceSeq: Long, limit: Int): OutputPage {
         val sessions = if (sessionId != null) listOf(entry(sessionId)) else entries()
         val entries = sessions.flatMap { entry ->
@@ -735,6 +824,23 @@ class LuaEngineMcpBackend(private val project: Project) : LuaDebugBackend, Dispo
                 overheadMs = r.overheadMs,
                 pausedSkipped = r.pausedSkipped,
             )
+        }
+    }
+
+    override fun getErrors(sessionId: String): CompletableFuture<ErrorReport> {
+        val engine = engine(sessionId)
+        if (!engine.supportsErrorReport) {
+            return CompletableFuture.failedFuture(LuaDebugBackendException(ErrorCode.NOT_SUPPORTED,
+                "游戏里的调试 runtime 不支持错误聚合（缺少能力 errorReport），请升级插件后重新附加；先用 lua_debug_inspect action=output 看错误输出。"))
+        }
+        return mapErrors(engine.errors()).thenApply { r ->
+            ErrorReport(r.items.map { e ->
+                LuaErrorInfo(
+                    id = e.id, vmId = e.vmId.toString(), message = e.message,
+                    file = e.chunkName?.let { engine.localPathOfChunk(it) ?: LuaProfileNames.chunkDisplay(it) },
+                    line = e.line, count = e.count, firstMs = e.firstMs, lastMs = e.lastMs, uncaught = e.uncaught, traceback = e.traceback,
+                )
+            }, r.dropped)
         }
     }
 

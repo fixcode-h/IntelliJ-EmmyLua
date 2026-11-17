@@ -30,20 +30,24 @@ EmmyLua 是一个功能强大的 Lua 语言支持插件，专为 IntelliJ IDEA �
 - **新版注解语法**：泛型、`---@enum`、`---@overload` 等，和 VS Code / Neovim 上的 EmmyLua 行为一致
 - **标准库**：emmylua_ls 内置，按配置的 Lua 版本（5.1–5.4、LuaJIT）选择
 - **Unreal Engine / UnLua**：IDE 只打开 UE 项目里的 `Content/Script` 时，插件自动往上找 `.uproject`，把 UnLua「Generate IntelliSense」生成的目录（如 `Plugins/UnLua/Intermediate/IntelliSense`）加进库目录，蓝图类型和 `UE.xxx` 都能补全和跳转
+- **上手检查**：打开 UE 项目时，如果还有没准备好的（语言服务没起来、没有 UE 声明、没开 UELink 后台生成、MCP 没装到项目），只弹一个「EmmyLua 上手检查」气泡；点开后一页列出每项状态和一键处理按钮，处理完自动刷新。随时可从「工具 → EmmyLua 上手检查…」打开，「不再提示」按项目记住
 
 以前的 PSI 实现里这些功能**已去掉**：彩虹变量、内联变量等重构、Lua SDK 和 Lua 模块类型、LuaCheck 外部工具（诊断改由 emmylua_ls 做）。
 
 ### 🐛 调试功能
-- **Lua 附加** - 附加到本机正在运行的进程（Windows），不用改游戏代码
+- **Lua 附加** - 附加到本机正在运行的进程（Windows），不用改游戏代码；也可以「启动并附加」，从 IDE 启动 UE 编辑器 / 游戏，启动阶段的 Lua 也能断住
 - **Lua 真机附加** - 通过 adb 附加 Android 设备上的游戏进程，包内不需要加任何插件
 - **断点** - 条件断点、命中次数、日志断点、Probe（不停下只记录值）、Lua 出错时暂停
+- **函数断点** - 不知道代码在哪个文件时，在「断点」对话框里 + 新建「Lua 函数断点」，填 `Module.func`、`Class:Method` 或全局函数名，函数被调用时停在它的第一行（宿主从 C++ 调进来的也能停）；Agent 用 `lua_debug_breakpoints action=add function=...`
 - **变量和协程** - 变量分组展示、修改变量值、查看其他协程的调用栈
 - **MCP 调试工具** - 让 Claude Code、Cursor 等 Agent 直接下断点、看栈和变量
 - **MCP 代码查找** - Agent 用 `lua_code` 按名字找 Lua 函数 / 方法 / 类、按 require 路径找文件、看文件大纲、查引用（经 emmylua_ls，替代 UEToVS 的 Lua 工具）
 - **UE 一键热重载** - 编辑器右键「重载到 UE」（Ctrl+Alt+R）或设置里打开「保存后自动重载」，经 UELink 让开着的 UE 编辑器 / 游戏重新加载 Lua 模块，不用附加
+- **从变量跳到 UE 编辑器** - 暂停时变量树里的 UE 对象右键「在 UE 中选中」（关卡里选中并对焦它所属的 Actor，资源、蓝图在内容浏览器里定位）、「在 UE 中打开资产」（打开资源，Actor、UMG 控件打开它的蓝图）；经 UELink 2.10.0 以上，Lua 停在编辑器里时等继续运行后执行
 - **断点诊断** - 一直没对上代码的断点变灰并在悬停里说明原因；调试工具栏「诊断断点」列出加载过的 chunk 和建议的路径映射
 - **调试控制台** - 交互式调试控制台，支持表达式求值
 - **Lua 采样性能分析** - 调试窗口的「Lua 采样」页开始 / 停止采样，按函数看自身和总计占比、双击跳到源码，可导出折叠栈用 speedscope / flamegraph.pl 看火焰图；Android 真机附加也能用，Agent 用 `lua_debug_inspect action=profile`
+- **Lua 错误聚合** - 调试窗口的「Lua 错误」页按出错位置去重计数，包括被 pcall 接住、每帧刷屏的错误，显示首次 / 最近时间和第一次出现时的栈，双击跳到出错行；Agent 用 `lua_debug_inspect action=errors`
 
 ## 🚀 安装方式
 
@@ -116,6 +120,7 @@ end
 
 1. **附加本机进程（Windows）**
    - `Run` → `Attach to Process…`，在列表里选「Lua 附加」下的游戏进程；或新建运行配置「Lua 附加」
+   - 要断启动阶段的 Lua：新建运行配置「Lua → 启动并附加」，填程序和参数，IDE 启动它并在它跑任何代码前装好调试器
    - 不需要在游戏里加任何代码，插件自动选择 32 / 64 位和 Lua 版本
    - UE 项目装了 UELink（UEKit）时，带名片的编辑器 / 游戏排在列表最前，并标出项目名和类型
 

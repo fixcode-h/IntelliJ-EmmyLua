@@ -103,7 +103,12 @@ enum class BreakpointOrigin {
     TEMPORARY
 }
 
-/** 客户端要下的断点。文件是本地路径。 */
+/**
+ * 客户端要下的断点。文件是本地路径。
+ *
+ * 函数断点：[function] 写 `Module.func`、`Class:Method` 或全局函数名，[line] 为 0；[file] 可空串，
+ * 给了就只认这个文件里的函数。runtime 没有 functionBreakpoints 能力时不下发，状态为 INVALID。
+ */
 data class BreakpointRequest(
     val file: String,
     val line: Int,
@@ -114,8 +119,17 @@ data class BreakpointRequest(
     val autoContinue: Boolean = false,
     val vmId: Long = 0,
     val origin: BreakpointOrigin = BreakpointOrigin.IDE,
-    val enabled: Boolean = true
-)
+    val enabled: Boolean = true,
+    val function: String? = null
+) {
+    val isFunction: Boolean get() = !function.isNullOrBlank()
+
+    companion object {
+        fun function(name: String, file: String = "", condition: String? = null, hitCondition: String? = null,
+                     logMessage: String? = null, origin: BreakpointOrigin = BreakpointOrigin.IDE) =
+            BreakpointRequest(file, 0, condition, hitCondition, logMessage, origin = origin, function = name.trim())
+    }
+}
 
 /** 一个断点的汇总状态：多个 VM 时，任一 VM 验证通过就算 verified。 */
 enum class BreakpointVerification { PENDING, VERIFIED, MISMATCH, AMBIGUOUS, INVALID }
@@ -125,8 +139,10 @@ data class BreakpointView(
     val request: BreakpointRequest,
     val verification: BreakpointVerification,
     val message: String? = null,
-    /** runtime 调整后的实际行；没调整或未验证时为空。 */
-    val actualLine: Int? = null
+    /** runtime 调整后的实际行；没调整或未验证时为空。函数断点是函数的定义行。 */
+    val actualLine: Int? = null,
+    /** 函数断点验证后：函数所在的 chunk。 */
+    val chunkName: String? = null
 )
 
 /** VM 在引擎里的视图。 */

@@ -33,6 +33,8 @@
     </extensions>
     <extensions defaultExtensionNs="com.intellij">
         <xdebugger.breakpointType implementation="com.fixcode.intellij.lua.debug.xdebugger.LuaExceptionBreakpointType"/>
+        <!-- 按函数名下断点（「断点」对话框里 + 新建） -->
+        <xdebugger.breakpointType implementation="com.fixcode.intellij.lua.debug.xdebugger.LuaFunctionBreakpointType"/>
         <!-- 暂停时在编辑器行尾显示变量值 -->
         <editor.linePainter implementation="com.fixcode.intellij.lua.debug.xdebugger.LuaInlineValuePainter"/>
     </extensions>
@@ -64,6 +66,9 @@
                                  instance="com.fixcode.intellij.lua.debug.ui.settings.LuaDebugConfigurable"/>
 
         <postStartupActivity implementation="com.fixcode.intellij.lua.debug.ui.mcp.LuaMcpInstallPromptActivity"/>
+        <!-- 打开 UE 项目时的「EmmyLua 上手检查」气泡：语言服务、UE 声明、MCP 合在一个里，UE 项目不再单独弹 MCP 气泡 -->
+        <postStartupActivity implementation="com.fixcode.intellij.lua.onboarding.LuaOnboardingPromptActivity"/>
+        <notificationGroup id="EmmyLua Onboarding" displayType="BALLOON"/>
         <notificationGroup id="EmmyLua Debug" displayType="BALLOON" bundle="messages.LuaDebugBundle" key="notification.group"/>
     </extensions>
 
@@ -93,6 +98,10 @@
     </actions>
 
     <actions>
+        <!-- 工具 → EmmyLua 上手检查…：随时打开 -->
+        <action id="EmmyLua.Onboarding" class="com.fixcode.intellij.lua.onboarding.OpenLuaOnboardingAction">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
         <group id="EmmyLua.Debug.Tools" popup="true" text="EmmyLua 调试">
             <action id="EmmyLua.Debug.InstallMcp"
                     class="com.fixcode.intellij.lua.debug.ui.mcp.InstallMcpAction"/>
@@ -109,6 +118,13 @@
             <separator/>
             <action id="EmmyLua.Debug.PinField" class="com.fixcode.intellij.lua.debug.xdebugger.LuaPinFieldAction" text="固定到顶部"/>
             <action id="EmmyLua.Debug.HideField" class="com.fixcode.intellij.lua.debug.xdebugger.LuaHideFieldAction" text="隐藏此字段"/>
+            <add-to-group group-id="XDebugger.ValueGroup" anchor="last"/>
+        </group>
+        <!-- 变量树右键：UE 对象经 UELink 的 object.reveal 在编辑器里选中 / 打开（UnrealObjectReveal） -->
+        <group id="EmmyLua.Debug.RevealInUnreal">
+            <separator/>
+            <action id="EmmyLua.Debug.SelectInUnreal" class="com.fixcode.intellij.lua.debug.xdebugger.LuaSelectInUnrealAction" text="在 UE 中选中"/>
+            <action id="EmmyLua.Debug.OpenInUnreal" class="com.fixcode.intellij.lua.debug.xdebugger.LuaOpenInUnrealAction" text="在 UE 中打开资产"/>
             <add-to-group group-id="XDebugger.ValueGroup" anchor="last"/>
         </group>
     </actions>

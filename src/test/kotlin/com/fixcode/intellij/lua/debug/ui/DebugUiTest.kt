@@ -179,12 +179,15 @@ class DebugUiSmokeTest : BasePlatformTestCase() {
         val c = cfg.createComponent()
         assertNotNull(c)
         cfg.reset(); cfg.apply(); cfg.disposeUIResources()
-        // 「添加新配置」里只有一个「Lua」，下面两个工厂；旧的真机类型隐藏但还在，旧配置能加载
+        // 「添加新配置」里只有一个「Lua」，下面三个工厂（附加、启动并附加、真机）；旧的真机类型隐藏但还在，旧配置能加载
         val luaType = com.intellij.execution.configurations.ConfigurationTypeUtil.findConfigurationType("EmmyLua.Attach")!!
-        assertEquals(listOf("EmmyLua.Attach", "EmmyLua.Device"), luaType.configurationFactories.map { it.id })
+        assertEquals(listOf("EmmyLua.Attach", "EmmyLua.Launch", "EmmyLua.Device"), luaType.configurationFactories.map { it.id })
         assertTrue(com.intellij.execution.configurations.ConfigurationTypeUtil.findConfigurationType("EmmyLua.Device")
             is com.intellij.execution.configurations.VirtualConfigurationType)
-        val conf = luaType.configurationFactories[1].createTemplateConfiguration(project) as com.fixcode.intellij.lua.debug.ui.device.LuaDeviceConfiguration
+        val launch = luaType.configurationFactories.first { it.id == "EmmyLua.Launch" }.createTemplateConfiguration(project)
+            as com.fixcode.intellij.lua.debug.ui.attach.LuaLaunchConfiguration
+        launch.configurationEditor.component
+        val conf = luaType.configurationFactories.first { it.id == "EmmyLua.Device" }.createTemplateConfiguration(project) as com.fixcode.intellij.lua.debug.ui.device.LuaDeviceConfiguration
         val editor = conf.configurationEditor
         editor.component
         conf.options.packageName = "com.x.y"

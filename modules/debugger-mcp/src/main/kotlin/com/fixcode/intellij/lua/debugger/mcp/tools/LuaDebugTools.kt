@@ -19,7 +19,7 @@ import java.util.concurrent.TimeoutException
  *
  * - `lua_debug_session`：status / targets / attach / stop / pause / continue / step / wait / reload
  * - `lua_debug_breakpoints`：list / add / remove / enable / clear
- * - `lua_debug_inspect`：stack / vms / locals / eval / output / probes / profile
+ * - `lua_debug_inspect`：stack / vms / locals / eval / set / output / probes / profile
  *
  * [backend] 每次调用时取：IDE 没有打开项目、新引擎没装好时返回 null，工具报 engine_unavailable。
  */
@@ -435,20 +435,23 @@ class LuaDebugTools(
         titleZh = "Lua 断点",
         description = ToolGuide(
             what = "Lists, adds, removes, enables and clears Lua breakpoints in the IDE (they show in the editor, marked as set by the agent): " +
-                "file+line, condition, hit count, logpoints (print a message and keep running) and probes (capture values and keep running).",
-            useWhen = "you want the game to stop where a suspect Lua line runs, only under a condition (hp <= 0), log values without stopping " +
+                "file+line or a function name, condition, hit count, logpoints (print a message and keep running) and probes (capture values and keep running).",
+            useWhen = "you want the game to stop where a suspect Lua line runs, or in a function whose file you don't know " +
+                "(function='Bag:OnClick' / 'M.add'), only under a condition (hp <= 0), log values without stopping " +
                 "(message 'hp={self.hp}'), or record values on every hit without freezing the game (capture=['self.hp'] + auto_continue=true, " +
                 "read with $INSPECT action=probes or $SESSION action=wait).",
             insteadOf = "editing scripts to add print() or asserts and reloading them.",
             notFor = "C++ / Blueprint. clear removes only breakpoints set by these tools unless scope=all; the user's own breakpoints are " +
                 "listed too (no byAgent), leave them alone. The first change asks the user in the IDE.",
-            results = "items with id (for remove/enable), file, line, condition, hitCount, message, capture, byAgent, verified (false = script " +
+            results = "items with id (for remove/enable), file, line or function, condition, hitCount, message, capture, byAgent, verified (false = script " +
                 "not loaded yet or no code on that line; it binds when the script loads).",
         ).render(),
         inputSchema = schema {
             string("action", "What to do.", required = true, enum = bpActions.toList())
-            string("file", "Lua file (absolute or relative to the project).")
-            integer("line", "1-based line.", minimum = 1)
+            string("file", "Lua file (absolute or relative to the project). add with function: optional, only that file's function.")
+            integer("line", "1-based line (not with function).", minimum = 1)
+            string("function", "add: function breakpoint instead of file+line: 'Module.func', 'Class:Method' or a global function name; " +
+                "stops at the function's first line when it is called. remove/enable: match by this name.")
             string("condition", "add: Lua condition, e.g. hp <= 0.")
             integerOrString("hit_count", "add: stop on the Nth hit (5), or '>=3', '%2' (every 2nd hit).")
             string("message", "add: logpoint, prints e.g. 'hp={self.hp}' to the debug output and keeps running.")
@@ -488,8 +491,21 @@ class LuaDebugTools(
 
     private fun addBreakpoint(b: LuaDebugBackend, call: ToolCall): Map<String, Any?> {
         val a = call.args
-        val file = a.requireString("file")
-        val line = a.requireInt("line", 1, Int.MAX_VALUE)
+        val function = a.string("function")?.trim()?.takeIf { it.isNotEmpty() }
+        val file: String
+        val line: Int
+        if (function != null) {
+            if (a.has("line")) throw ToolArgumentException("'function' 和 'line' 二选一：函数断点停在函数第一行，不要给行号")
+            if (!FUNCTION_NAME.matches(function)) {
+                throw ToolArgumentException("'function' 写法不对：用 Module.func、Class:Method 或全局函数名（段名是 Lua 标识符），收到 '$function'")
+            }
+            file = a.string("file")?.trim().orEmpty()
+            line = 0
+        } else {
+            if (!a.has("file")) throw ToolArgumentException("add 要给 'file' + 'line'，或者给 'function'（按函数名下断点）")
+            file = a.requireString("file")
+            line = a.requireInt("line", 1, Int.MAX_VALUE)
+        }
         val hit = when (val v = a.raw["hit_count"]) {
             null -> null
             is Number -> v.toInt().also { if (it < 1) throw ToolArgumentException("'hit_count' 从 1 开始") }.toString()
@@ -506,10 +522,15 @@ class LuaDebugTools(
             capture = a.stringList("capture", 16),
             autoContinue = a.bool("auto_continue", false),
             vmId = a.string("vm")?.takeIf { it.isNotBlank() },
+            function = function,
         )), timeouts.requestMillis)
         val m = LinkedHashMap(ResultJson.breakpoint(bp))
         if (!bp.verified) {
-            m["hint"] = bp.message ?: if (b.listSessions().isEmpty()) "还没有调试会话，附加后自动下发。" else "脚本还没加载，加载后自动生效。"
+            m["hint"] = bp.message ?: when {
+                b.listSessions().isEmpty() -> "还没有调试会话，附加后自动下发。"
+                function != null -> "还没找到这个函数（模块没加载或名字不对），函数被调用时按名字匹配并停在第一行。"
+                else -> "脚本还没加载，加载后自动生效。"
+            }
         }
         return m
     }
@@ -519,9 +540,12 @@ class LuaDebugTools(
         val ids = a.stringList("ids", 64)
         val file = a.string("file")?.takeIf { it.isNotBlank() }
         val line = a.int("line", 1, Int.MAX_VALUE)
-        if (id == null && ids.isEmpty() && file == null) throw ToolArgumentException("$action 要给 'id'、'ids' 或 'file'（+ 'line'）")
+        val function = a.string("function")?.trim()?.takeIf { it.isNotEmpty() }
+        if (id == null && ids.isEmpty() && file == null && function == null) {
+            throw ToolArgumentException("$action 要给 'id'、'ids'、'file'（+ 'line'）或 'function'")
+        }
         if (line != null && file == null) throw ToolArgumentException("'line' 要和 'file' 一起用")
-        return BreakpointFilter(breakpointId = id, breakpointIds = ids, file = file, line = line)
+        return BreakpointFilter(breakpointId = id, breakpointIds = ids, file = file, line = line, function = function)
     }
 
     private fun removeBreakpoints(b: LuaDebugBackend, call: ToolCall): Map<String, Any?> {
@@ -557,7 +581,7 @@ class LuaDebugTools(
 
     // ======================================================================= lua_debug_inspect
 
-    private val inspectActions = arrayOf("stack", "vms", "locals", "eval", "output", "probes", "profile")
+    private val inspectActions = arrayOf("stack", "vms", "locals", "eval", "set", "output", "probes", "profile", "errors")
 
     private fun inspectTool() = McpTool(
         name = INSPECT,
@@ -565,29 +589,32 @@ class LuaDebugTools(
         titleZh = "Lua 调试：栈和变量",
         description = ToolGuide(
             what = "Reads a stopped Lua VM in the IDE debugger: call stack with source lines, locals / upvalues / globals as a bounded tree, " +
-                "value paths (self.items[3].id, #list) and, if allowed, any Lua expression; also debug output (print, Lua errors, " +
-                "logpoints), probe records and a sampling profile, which work while the game runs.",
+                "value paths (self.items[3].id, #list) or, if allowed, Lua; also debug output (print, Lua errors, " +
+                "logpoints), probe records, a sampling profile and grouped Lua errors, which work while the game runs.",
             useWhen = "$SESSION reports event=break: see where and why, read variables and table fields (depth 1-3, ref to expand), " +
-                "evaluate value paths, switch frames with frame=N; output / probes any time; profile while a slow scene runs to find hot Lua functions.",
-            insteadOf = "guessing values or adding print / os.clock() timers: reads the live state without changing scripts.",
+                "evaluate value paths, set a value to try a fix (set), switch frames with frame=N; output / probes any time; profile while a slow scene runs; " +
+                "errors: failures pcall hid.",
+            insteadOf = "guessing values or adding print / os.clock() timers: reads live state without editing scripts.",
             notFor = "a running VM (stack / locals / eval need event=break). mode=lua needs a one-time user confirmation per session (the user may have turned it off): prefer value " +
-                "paths. Refs die when the VM continues. profile counts Lua instructions, not time in C/engine calls; Lua runs ~2x slower meanwhile.",
-            results = "stack: frames[{i,function,file,line}]; locals/eval: value nodes {n,t,v,c,more,ref,err}; output/probes: items + next; " +
-                "profile: samples + items[{fn,file,line,selfPct,totalPct}].",
+                "paths. Refs die when the VM continues. profile counts Lua instructions, not C/engine time.",
+            results = "stack: frames[{i,function,file,line}]; locals/eval: nodes {n,t,v,c,more,ref,err}; output/probes: items + next; " +
+                "profile: items[{fn,file,line,selfPct}]; errors: items[{message,file,line,count}].",
         ).render(),
         inputSchema = schema {
             string("action", "What to read.", required = true, enum = inspectActions.toList())
             string("session_id", "Session (optional when there is only one, or only one is stopped).")
             string("vm", "Lua VM id (default: the stopped VM).")
             integer("frame", "Stack frame, 0 = top (default 0).", minimum = 0)
-            string("scope", "locals: locals (default) / upvalues / globals.", enum = listOf("locals", "upvalues", "globals"))
+            string("scope", "locals: locals (default) / upvalues / globals. set: where a bare name lives (default: local, then upvalue).",
+                enum = listOf("locals", "upvalues", "globals"))
             string("ref", "locals: expand this value (ref from a previous result) instead of a scope.")
-            string("path", "locals: start from this value path inside the scope, e.g. self.items[3].")
-            string("filter", "locals: keep variables whose name contains it; output: keep lines containing it.")
+            string("path", "locals: start from this value path inside the scope, e.g. self.items[3]. set: the variable to change (hp, self.hp, items[3]).")
+            string("value", "set: new value; value_path mode: a literal (100, \"a\", true, nil) or another value path; mode=lua: any Lua expression.")
+            string("filter", "locals: keep variables whose name contains it; output: keep lines containing it; errors: keep errors whose message or file contains it.")
             integer("depth", "locals/eval: table levels to expand (0-3, default 1).", minimum = 0, maximum = 3)
             string("expr", "eval: value path (self.hp, items[3].id, #list) or, with mode=lua, a Lua expression.")
             stringArray("exprs", "eval: several expressions (watch list).", 10)
-            string("mode", "eval: value_path (default, read-only) or lua (arbitrary Lua; needs the user's permission).",
+            string("mode", "eval/set: value_path (default) or lua (arbitrary Lua; needs the user's permission).",
                 enum = listOf("value_path", "lua"))
             integer("cursor", "output/probes: 'next' of the previous call, returns only newer items.", minimum = 0)
             integer("max_chars", "output: max characters (default 3000, newest kept).", minimum = 200, maximum = 10000)
@@ -595,8 +622,8 @@ class LuaDebugTools(
             integer("duration_ms", "profile: how long to sample while the game keeps running (default 3000).", minimum = 100, maximum = 60000)
             string("sort", "profile: self (default, time in the function itself) / total (including callees).", enum = listOf("self", "total"))
             integer("limit", "stack: frames (default 20); locals: items per level (default 50); probes: records (default 50); " +
-                "profile: functions (default 30).", minimum = 1, maximum = 200)
-            integer("offset", "stack: frames to skip (use nextOffset).", minimum = 0)
+                "profile: functions (default 30); errors: errors (default 30).", minimum = 1, maximum = 200)
+            integer("offset", "stack / errors: items to skip (use nextOffset).", minimum = 0)
         },
         level = PermissionLevel.READ,
     ) { call ->
@@ -607,9 +634,11 @@ class LuaDebugTools(
             "vms" -> vms(b, call.args)
             "locals" -> locals(b, call.args)
             "eval" -> eval(b, call)
+            "set" -> set(b, call)
             "output" -> output(b, call.args)
             "probes" -> probes(b, call.args)
             "profile" -> profile(b, call.args)
+            "errors" -> errors(b, call.args)
             else -> throw ToolArgumentException("缺少参数 'action'")
         }
         }
@@ -713,6 +742,34 @@ class LuaDebugTools(
         return m
     }
 
+    /** 改变量：会改游戏状态，按控制处理（每个会话第一次弹确认）；mode=lua 还要设置里允许执行任意 Lua。 */
+    private fun set(b: LuaDebugBackend, call: ToolCall): Map<String, Any?> {
+        val a = call.args
+        val path = a.string("path")?.trim()?.takeIf { it.isNotEmpty() } ?: throw ToolArgumentException("set 要给 'path'（要改的变量，例如 self.hp）")
+        val value = a.string("value")?.takeIf { it.isNotBlank() } ?: throw ToolArgumentException("set 要给 'value'（新值，例如 100、\"text\"、nil）")
+        ValuePaths.splitLast(path) ?: throw ToolArgumentException("'$path' 不是能改的值路径：写成 hp、self.hp、items[3] 或 cfg[\"key\"]")
+        val mode = if (a.choice("mode", "value_path", "value_path", "lua") == "lua") EvalMode.LUA else EvalMode.VALUE_PATH
+        val scope = when (a.string("scope")?.takeIf { it.isNotBlank() }?.let { a.choice("scope", null, "locals", "upvalues", "globals") }) {
+            "locals" -> VariableScope.LOCALS
+            "upvalues" -> VariableScope.UPVALUES
+            "globals" -> VariableScope.GLOBALS
+            else -> null
+        }
+        val p = requirePause(b, a)
+        if (mode == EvalMode.LUA && !policy.luaEvalAllowed()) {
+            throw ToolException(
+                "eval_forbidden",
+                "用户在设置里关掉了执行任意 Lua。新值改用字面量或值路径（不带 mode=lua），或请用户在 设置 > 工具 > EmmyLua 调试 里打开「允许 Agent 执行任意 Lua」。",
+            )
+        }
+        requireControl(b.listSessions().first { it.sessionId == p.sessionId }, call)
+        val frameId = frameId(b, p, a)
+        val v = await(b.setVariable(SetVariableRequest(frameId, path, value, mode, scope)), timeouts.requestMillis)
+        val m = obj("ok" to true)
+        m["value"] = ResultJson.value(v.copy(name = path))
+        return m
+    }
+
     private fun output(b: LuaDebugBackend, args: JsonArgs): Map<String, Any?> {
         val sessionId = args.string("session_id")?.takeIf { it.isNotBlank() }
         val cursor = args.int("cursor", 0, 0, Int.MAX_VALUE).toLong()
@@ -742,6 +799,35 @@ class LuaDebugTools(
         m["next"] = if (truncated) (page.hits[items.size - 1].seq) else page.nextSeq
         m["items"] = items
         return m
+    }
+
+    /**
+     * 错误聚合：按位置和消息去重后的 Lua 错误，最近出现的在前。runtime 侧计数，被 pcall 接住、每帧刷屏的错误也只占一条。
+     * 栈只给前 8 行（够定位），要更多就去调试窗口「Lua 错误」页看。
+     */
+    private fun errors(b: LuaDebugBackend, args: JsonArgs): Map<String, Any?> {
+        val s = resolveSession(b, args)
+        val filter = args.string("filter")?.takeIf { it.isNotBlank() }
+        val limit = args.int("limit", 30, 1, 200)
+        val offset = args.int("offset", 0, 0, Int.MAX_VALUE)
+        val report = await(b.getErrors(s.sessionId), timeouts.requestMillis)
+        val all = report.items.filter {
+            filter == null || it.message.contains(filter, ignoreCase = true) || it.file?.contains(filter, ignoreCase = true) == true
+        }
+        val slice = all.drop(offset).take(limit)
+        val result = obj("sessionId" to s.sessionId)
+        result.putAll(page(slice, offset, offset + slice.size < all.size, all.size) { e ->
+            val m = obj("id" to e.id, "message" to e.message, "file" to e.file, "line" to e.line, "count" to e.count, "vm" to e.vmId)
+            m["firstMs"] = e.firstMs
+            m["lastMs"] = e.lastMs
+            if (e.uncaught) m["uncaught"] = true
+            e.traceback?.lineSequence()?.filter { it.isNotBlank() }?.take(8)?.map { it.trim() }?.toList()?.takeIf { it.isNotEmpty() }
+                ?.let { m["traceback"] = it }
+            m
+        })
+        if (report.dropped > 0) result["dropped"] = report.dropped
+        if (report.items.isEmpty()) result["note"] = "本次会话还没有 Lua 错误（包括被 pcall 接住的）。"
+        return result
     }
 
     /**
@@ -897,6 +983,9 @@ class LuaDebugTools(
         const val INSPECT = "lua_debug_inspect"
 
         private val MODULE_NAME = Regex("[A-Za-z0-9_\\-]+(\\.[A-Za-z0-9_\\-]+)*")
+
+        /** 函数断点的写法（和 runtime 的 ParseFunctionSpec 一致）：a.b.c、A.B:Method、func。 */
+        private val FUNCTION_NAME = Regex("[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*(:[A-Za-z_][A-Za-z0-9_]*)?")
 
         const val ENGINE_UNAVAILABLE = "IDE 里的 Lua 调试引擎还没准备好（没有打开的项目或插件版本过旧）。请用户打开 Lua 项目后重试。"
     }

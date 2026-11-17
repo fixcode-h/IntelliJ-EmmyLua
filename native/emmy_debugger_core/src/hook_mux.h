@@ -50,6 +50,9 @@ public:
 	void Kick();
 	// 在 L 所在的线程上调用：L 没有任何钩子而调试器需要时挂上（新协程、遍历时漏掉的协程）
 	void EnsureHook(lua_State* L);
+	// 在 L 所在的线程上调用：下一条指令就进一次钩子，把刚收到的断点、会话状态马上用上。
+	// 新 VM 跑第一段代码前用：Kick 的 COUNT 间隔是 1000 条，模块顶层几行早就跑完了
+	void KickNow(lua_State* L);
 
 	// 只在 VM 线程调用
 	void Dispatch(lua_State* L, lua_Debug* ar);

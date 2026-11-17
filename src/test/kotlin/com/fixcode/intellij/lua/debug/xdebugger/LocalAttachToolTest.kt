@@ -48,4 +48,30 @@ class LocalAttachToolTest {
         org.junit.Assert.assertEquals("目标进程还没有加载 Lua", r.message)
         org.junit.Assert.assertEquals(9966, r.port)
     }
+
+    private fun fakeExe(machine: Int): java.io.File {
+        val bytes = ByteArray(0x100)
+        bytes[0] = 'M'.code.toByte(); bytes[1] = 'Z'.code.toByte()
+        bytes[0x3C] = 0x80.toByte()
+        bytes[0x80] = 'P'.code.toByte(); bytes[0x81] = 'E'.code.toByte()
+        bytes[0x84] = (machine and 0xFF).toByte(); bytes[0x85] = (machine shr 8).toByte()
+        return java.io.File.createTempFile("fake", ".exe").apply { deleteOnExit(); writeBytes(bytes) }
+    }
+
+    @Test
+    fun `启动并附加按 PE 头选位数`() {
+        assertEquals("x64", LocalAttachTool.exeArch(fakeExe(0x8664)))
+        assertEquals("x86", LocalAttachTool.exeArch(fakeExe(0x014C)))
+        val arm = runCatching { LocalAttachTool.exeArch(fakeExe(0xAA64)) }.exceptionOrNull()
+        assertTrue(arm is IOException && arm.message!!.contains("不支持"))
+        val text = java.io.File.createTempFile("notexe", ".exe").apply { deleteOnExit(); writeText("hello") }
+        assertTrue(runCatching { LocalAttachTool.exeArch(text) }.exceptionOrNull() is IOException)
+    }
+
+    @Test
+    fun `启动结果带 launched 和新进程号`() {
+        val r = LocalAttachTool.parseResult("{\"ok\":true,\"protocol\":3,\"host\":\"127.0.0.1\",\"port\":9001,\"pid\":4321,\"reinjected\":false,\"waiting\":true,\"message\":\"等 Lua\",\"launched\":true}", 0)
+        assertEquals(4321, r.pid)
+        assertTrue(r.waiting)
+    }
 }

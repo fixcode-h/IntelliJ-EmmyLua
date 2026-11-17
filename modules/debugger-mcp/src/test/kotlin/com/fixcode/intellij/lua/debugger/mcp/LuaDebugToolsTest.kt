@@ -90,6 +90,29 @@ class LuaDebugToolsTest {
     }
 
     @Test
+    fun `按函数名下断点 和 file+line 二选一`() {
+        backend.addSession()
+        val r = client.call(B, mapOf("action" to "add", "function" to "UI.BagPanel:OnItemClick", "condition" to "index > 1"))
+        assertFalse(r.raw, r.isError)
+        assertEquals("UI.BagPanel:OnItemClick", r["function"])
+        assertFalse(r.raw, "line" in r.json)
+        val spec = backend.breakpoints.single()
+        assertEquals("UI.BagPanel:OnItemClick", spec.function)
+        assertEquals(0, spec.line)
+        assertEquals("", spec.file)
+
+        assertEquals("invalid_argument", client.call(B, mapOf("action" to "add", "function" to "M.add", "line" to 3)).code)
+        assertEquals("invalid_argument", client.call(B, mapOf("action" to "add", "function" to "M.add(1)")).code)
+        assertEquals("invalid_argument", client.call(B, mapOf("action" to "add")).code)
+        // 函数断点可以限定文件
+        val scoped = client.call(B, mapOf("action" to "add", "function" to "M.add", "file" to "/proj/M.lua"))
+        assertEquals("/proj/M.lua", scoped["file"])
+
+        val removed = client.call(B, mapOf("action" to "remove", "function" to "UI.BagPanel:OnItemClick"))
+        assertEquals(1L, removed["removed"])
+    }
+
+    @Test
     fun `用户拒绝时返回 permission_denied 且不执行`() {
         backend.addSession()
         confirmer.control = ControlDecision.DENY
@@ -215,6 +238,35 @@ class LuaDebugToolsTest {
         assertEquals("permission_denied", client.call(I, mapOf("action" to "eval", "expr" to "x()", "mode" to "lua")).code)
         confirmer.control = ControlDecision.ALLOW_ONCE
         assertFalse(client.call(I, mapOf("action" to "eval", "expr" to "x()", "mode" to "lua")).isError)
+    }
+
+    @Test
+    fun `set 改变量按控制确认，参数不对直接报错`() {
+        backend.addSession()
+        backend.firePause()
+        assertEquals("invalid_argument", client.call(I, mapOf("action" to "set", "value" to "1")).code)
+        assertEquals("invalid_argument", client.call(I, mapOf("action" to "set", "path" to "self.", "value" to "1")).code)
+        confirmer.control = ControlDecision.DENY
+        assertEquals("permission_denied", client.call(I, mapOf("action" to "set", "path" to "self.hp", "value" to "100")).code)
+        confirmer.control = ControlDecision.ALLOW_ONCE
+        val ok = client.call(I, mapOf("action" to "set", "path" to "self.hp", "value" to "100"))
+        assertFalse(ok.isError)
+        assertEquals("100", (ok["value"] as Map<*, *>)["v"])
+        assertTrue(backend.commands.contains("set VALUE_PATH self.hp=100"))
+        client.call(I, mapOf("action" to "set", "path" to "Debug", "value" to "true", "scope" to "globals"))
+        assertTrue(backend.commands.contains("set VALUE_PATH Debug=true GLOBALS"))
+    }
+
+    @Test
+    fun `值路径拆成父路径和最后一段`() {
+        assertEquals(null to "hp", ValuePaths.splitLast("hp"))
+        assertEquals("self" to "hp", ValuePaths.splitLast("self.hp"))
+        assertEquals("self.items" to "[3]", ValuePaths.splitLast("self.items[3]"))
+        assertEquals("cfg" to "[a.b]", ValuePaths.splitLast("cfg[\"a.b\"]"))
+        assertEquals("a[\"x]\"]" to "y", ValuePaths.splitLast("a[\"x]\"].y"))
+        assertEquals(null, ValuePaths.splitLast("self."))
+        assertEquals(null, ValuePaths.splitLast("a[f()]"))
+        assertEquals(null, ValuePaths.splitLast("#list"))
     }
 
     @Test
@@ -387,6 +439,29 @@ class LuaDebugToolsTest {
         val c = items[1] as Map<*, *>
         assertEquals("pairs", c["fn"])
         assertFalse("C 函数不给 file / line", c.containsKey("file") || c.containsKey("line"))
+    }
+
+    @Test
+    fun `errors 不用确认 按位置聚合的错误 带计数和截短的栈 可按文件过滤`() {
+        backend.addSession()
+        val r = client.call(I, mapOf("action" to "errors"))
+        assertFalse(r.raw, r.isError)
+        assertTrue(confirmer.asked.isEmpty())
+        assertEquals(2L, r["total"])
+        val items = r["items"] as List<*>
+        val first = items[0] as Map<*, *>
+        assertEquals(300L, first["count"])
+        assertEquals("/proj/Bag.lua", first["file"])
+        assertEquals(2, (first["traceback"] as List<*>).size)
+        assertFalse(first.containsKey("uncaught"))
+        assertEquals(true, (items[1] as Map<*, *>)["uncaught"])
+        val filtered = client.call(I, mapOf("action" to "errors", "filter" to "main.lua"))
+        assertEquals(1L, filtered["count"])
+        val paged = client.call(I, mapOf("action" to "errors", "limit" to 1))
+        assertEquals(true, paged["hasMore"])
+        assertEquals(1L, paged["nextOffset"])
+        backend.errorItems = emptyList()
+        assertTrue((client.call(I, mapOf("action" to "errors"))["note"] as String).contains("还没有"))
     }
 
     @Test

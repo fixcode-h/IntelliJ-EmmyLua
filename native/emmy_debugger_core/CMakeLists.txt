@@ -107,10 +107,12 @@ set(EMMY_CORE_SOURCES
     src/frame.cpp
     src/path_match.cpp
     src/breakpoints.cpp
+    src/func_breakpoints.cpp
     src/value_path.cpp
     src/lua_internal.cpp
     src/hook_mux.cpp
     src/profiler.cpp
+    src/error_stats.cpp
     src/inspector.cpp
     src/host_value.cpp
     src/rich_view.cpp

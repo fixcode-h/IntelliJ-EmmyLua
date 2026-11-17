@@ -129,6 +129,28 @@ private:
 	bool AnyHotFrame(lua_State* L, lua_Debug* ar);
 	void ReportMatch(const SourceEntry& entry);
 	void OnBreakLine(lua_State* L, lua_Debug* ar, SourceEntry* entry);
+	// 一个断点在当前行命中后的共同处理（条件、命中次数、日志、采集、breakpointHit）；返回是否要暂停
+	bool HandleBreakpointHit(lua_State* L, const Breakpoint* bp, int line, const std::string& chunk);
+
+	// ---- 函数断点（func_breakpoints.cpp，协议 7.7） ----
+	struct FuncKey {
+		const char* source = nullptr; // Proto 的 source 字符串指针：Proto 被引用着就不会被复用
+		int lineDefined = 0;
+		bool operator==(const FuncKey& o) const { return source == o.source && lineDefined == o.lineDefined; }
+	};
+	struct FuncKeyHash {
+		size_t operator()(const FuncKey& k) const {
+			return std::hash<const void*>()(k.source) ^ (static_cast<size_t>(k.lineDefined) * 0x9E3779B97F4A7C15ull);
+		}
+	};
+	// 在 CALL 事件里调用（只有本 VM 有函数断点时）：命中就记下来、返回 true（调用方给这个函数开 LINE，第一行时停）
+	bool OnFunctionCall(lua_State* L, lua_Debug* ar, const lua::FuncInfo& f);
+	// 在 LINE 事件里调用：是 OnFunctionCall 记下的那个函数的第一行就处理断点。返回是否暂停过
+	bool OnFunctionEntry(lua_State* L, lua_Debug* ar, const lua::FuncInfo& f);
+	void ResolveFunctionBreakpoints(lua_State* L);
+	void ReleaseFunctionTargets(lua_State* L);
+	bool FuncSourceOk(const Breakpoint& bp, const char* source);
+	const std::string& FuncBaseName(const char* source);
 	bool StepShouldStop(lua_State* L);
 	void EnterPause(lua_State* L, const char* reason, std::vector<std::string> bpIds, const char* description,
 		json exception = nullptr, int skipLevels = 0);
@@ -161,6 +183,8 @@ private:
 	std::atomic<int> pauseReason_{0}; // 0 pause 1 entry
 	std::atomic<bool> active_{false};
 	std::atomic<bool> anyBreakpoints_{false};
+	std::atomic<bool> anyLineBreakpoints_{false};
+	std::atomic<bool> anyFuncBreakpoints_{false};
 
 	// 断点诊断：VM 线程写（只在 Lookup 慢路径和 RefreshIndex），诊断时别的线程读
 	std::mutex diagMutex_;
@@ -208,6 +232,21 @@ private:
 	std::unordered_map<uint64_t, int64_t> hitWindowStart_;
 	std::unordered_map<uint64_t, int> hitWindowCount_;
 	std::unordered_map<uint64_t, int> hitDropped_;
+
+	// 函数断点（只在 VM 线程）
+	bool funcDirty_ = true;              // 断点表 / 上下文变了，下一次 CALL 先重新解析
+	uint32_t funcCallTick_ = 0;          // 每 1024 次 CALL 看一次时间，超过 1 秒重新解析（热重载换了函数）
+	std::chrono::steady_clock::time_point funcResolvedAt_{};
+	std::vector<BreakpointPtr> funcBps_; // 本 VM 的函数断点
+	std::unordered_map<FuncKey, std::vector<BreakpointPtr>, FuncKeyHash> funcTargets_; // 解析出的函数 → 断点
+	std::vector<BreakpointPtr> funcUnresolved_; // 还没解析到函数值的：按调用处的名字（lua_getinfo "n"）兜底
+	std::vector<int> funcRefs_;          // 解析到的函数在 registry 里的引用（钉住 Proto，FuncKey 才唯一）
+	std::unordered_map<const char*, std::string> funcBaseNames_;
+	struct FuncPending {
+		lua_State* L = nullptr;
+		FuncKey key;
+		std::vector<BreakpointPtr> bps;
+	} funcPending_;
 };
 
 } // namespace emmy

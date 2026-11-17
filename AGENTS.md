@@ -21,8 +21,8 @@
 - 工具名 `lua_debug_<领域>`，snake_case。按领域合并成少数几个工具，用 `action` 区分动作（对应 UEToVS 的 `debug_session` / `debug_breakpoints` / `debug_inspect`），不为每个动作单开一个工具：工具多了 Agent 选不准，延迟加载工具说明时也更贵。
 - 现有三个：
   - `lua_debug_session`：`status` / `configs`（运行配置）/ `launch`（按运行配置以 Debug 启动；IDE 自带的 `execute_run_configuration` 只能 Run）/ `targets` / `attach` / `stop` / `restart` / `pause` / `continue` / `step` / `wait` / `reload`（经 UELink 热重载 UE 里的 Lua，不需要会话）/ `help`（完整用法）
-  - `lua_debug_breakpoints`：`list` / `add` / `remove` / `enable` / `clear`
-  - `lua_debug_inspect`：`stack` / `vms` / `locals` / `eval` / `output` / `probes` / `profile`
+  - `lua_debug_breakpoints`：`list` / `add`（`file` + `line`，或 `function` 按函数名下断点，二选一）/ `remove` / `enable` / `clear`
+  - `lua_debug_inspect`：`stack` / `vms` / `locals` / `eval` / `set`（改变量，按控制处理）/ `output` / `probes` / `profile` / `errors`（按位置聚合的 Lua 错误，含被 pcall 接住的）
 - 代码查找类的工具不是调试工具，不叫 `lua_debug_*`，叫 `lua_code`：`search`（按名字找声明）/ `files`（按文件名或 require 路径找 .lua）/ `outline`（文件大纲）/ `references`（查引用）。它替代 UEToVS 删掉的 `search_lua` / `search_lua_files` / `get_lua_outline`，参数和返回照它们的形状（字段名按本规范）。逻辑在 `modules/debugger-mcp` 的 `code/` 包（`LuaCodeTools`，经 `LuaCodeBackend` 取数据），IDE 侧 `lsp/EmmyLuaCodeBackend` 只调 emmylua_ls（documentSymbol、workspace/symbol、references）和 IDE 的文件名索引，**不做语义分析**；只读，不弹确认。
 - `lua_` 前缀是为了和 UEToVS 的 `debug_*`、面板的 `ue_*` 不撞名。工具名一旦发布就不改：Agent 和用户的提示词里写死了它。改名或删掉时，旧名字保留一版，调用时返回「改用哪个」的错误。
 - IDE 的 MCP 服务器里所有插件的工具在同一个列表，所以前缀必须带 `lua_`；设置页里我们的类别是 `LuaDebug`，工具全名 `com.fixcode.intellij.lua.debug.mcp.LuaDebugToolset.<工具名>`（用户在「公开的工具」里的开关按全名记，不改）。
@@ -77,7 +77,7 @@
   - 条目名照 IDE「自动配置」写的：2025.x `jetbrains`，2026.1 起按产品名（`McpClient.Companion.productSpecificServerKey()`，如 `idea`、`rider`），这样用户再点 IDE 的自动配置也只是更新同一项，客户端里不会出现两份工具。安装时删掉旧版插件服务（127.0.0.1:9330/mcp）的 `emmylua-debug` 项，以及指向同一端口的 `jetbrains` 旧项。
   - 安装位置：项目目录往上找版本管理根（`.git` 目录或文件、`.hg`、`.svn` 取连续最外层、`.plastic`、P4CONFIG 文件；都没有时问 `p4 info` 的 client root，包含项目才用）；找不到就往上找含 `.uproject` 的 UE 项目根，再没有用项目目录。版本管理根在 UE 项目里面（脚本目录单独成库）时以 UE 项目为准（`VcsRoot.installRoot`）。
   - 写入规则：只合并我们这一项（用户在这一项里加的其他字段保留），其余原样保留；不是严格 JSON（注释、尾逗号）不写，给手动片段；跟随原文件的缩进和换行；临时文件原子替换。每个客户端一个 `McpClientConfigWriter`：Claude Code `.mcp.json`（`type` http/sse + `url`）、Cursor `.cursor/mcp.json`（`url`）、VS Code / Copilot `.vscode/mcp.json`（`servers`，`type` + `url`）、Gemini CLI `.gemini/settings.json`（Streamable HTTP 用 `httpUrl`，SSE 用 `url`）、Codex 用户级 `~/.codex/config.toml`（`[mcp_servers.<名>]` 的 `url`；Codex 不支持 SSE，IDE 只有 SSE 时不写、让用户用 IDE 的自动配置）。
-  - 提示：项目打开后（项目里有 .lua 文件）和第一次启动 Lua 调试会话时检查，一个 IDE 会话每个项目最多弹一次，「不再提示」按项目记住（`LuaDebugProjectState.mcpPromptDismissed`）。IDE 的 MCP 服务器没开时合在同一个气泡里：按钮先打开「设置 → 工具 → MCP 服务器」，回来后开了就接着安装，没开不写；已经装好只差服务器时只提示去打开。MCP Server 插件被禁用时不提示，只是没有这些工具，调试照常。入口还有「工具 → EmmyLua 调试 → 安装 MCP 到项目」和设置页「EmmyLua 调试」（显示本项目安装状态）。
+  - 提示：项目打开后（项目里有 .lua 文件）和第一次启动 Lua 调试会话时检查；UE 项目打开时不单独弹，合进「EmmyLua 上手检查」的气泡（`onboarding/LuaOnboardingPrompt`，弹过后本次会话的 MCP 提示也不再弹），一个 IDE 会话每个项目最多弹一次，「不再提示」按项目记住（`LuaDebugProjectState.mcpPromptDismissed`）。IDE 的 MCP 服务器没开时合在同一个气泡里：按钮先打开「设置 → 工具 → MCP 服务器」，回来后开了就接着安装，没开不写；已经装好只差服务器时只提示去打开。MCP Server 插件被禁用时不提示，只是没有这些工具，调试照常。入口还有「工具 → EmmyLua 调试 → 安装 MCP 到项目」和设置页「EmmyLua 调试」（显示本项目安装状态）。
 - **仅路由器模式**（2026.2 起）：IDE 默认把插件工具设成 Router-only（只能经 `execute_tool` 调，没有 schema 校验）。我们的类别 `alwaysIncluded = true`（`IdeMcpCompat.category`），2026.2 在路由器模式下仍直接列出，2026.3 默认不勾 Router-only；用户仍可改。文档和安装弹窗提示别给常用工具勾 Router-only。
 - **中文名**：IDE 的 tools/list 不带 `_meta`（2026.2 前也没有 `title`），中文名由 `IdeMcpCompat.describe` 附在 description 最后一行 `Title (zh): <中文名>`，面板按这个前缀读；改格式要同步面板。
 - **Lua 附加配置也接 Run 执行器**：`LuaDebugRunner` 收到 Run 时换成 Debug 执行器重新启动，所以 IDE 自带的 `execute_run_configuration` 和运行按钮也能开始 Lua 调试。

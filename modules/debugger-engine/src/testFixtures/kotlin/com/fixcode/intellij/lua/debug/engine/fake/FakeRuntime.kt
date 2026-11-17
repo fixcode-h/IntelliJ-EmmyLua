@@ -240,9 +240,44 @@ class FakeRuntime(
             vm.pausePending = false
             return pause(vm, frameStack, PauseReasons.PAUSE)
         }
-        val matching = breakpoints.values.filter { (it.vmId == 0L || it.vmId == vm.vmId) && it.line == line && matches(it.source, chunkName) }
+        val matching = breakpoints.values.filter {
+            it.function == null && (it.vmId == 0L || it.vmId == vm.vmId) && it.line == line && it.source != null && matches(it.source!!, chunkName)
+        }
         matching.forEach { sendStatus(it, vm, chunkName, BreakpointStateNames.VERIFIED) }
+        val pausing = processHits(vm, matching, frameStack, chunkName, line)
+        if (pausing.isNotEmpty()) return pause(vm, frameStack, PauseReasons.BREAKPOINT, pausing)
+        vm.runToLine?.let { (source, targetLine) ->
+            if (targetLine == line && matches(source, chunkName)) return pause(vm, frameStack, PauseReasons.RUN_TO_LINE)
+        }
         // 单步：下一行就停（假 runtime 不模拟栈深，足够覆盖 IDE 侧行为）；遇到断点按断点停
+        if (vm.stepping != null) return pause(vm, frameStack, PauseReasons.STEP)
+        HitResult.CONTINUED
+    }
+
+    /**
+     * 模拟 [vm] 调用了名为 [function]（`Module.func` / `Class:Method` / 全局名，和断点原文比较）的函数，
+     * 函数在 [chunkName]，第一行是 [firstLine]、定义行是 [lineDefined]。函数断点按协议 7.7 停在第一行。
+     */
+    fun call(vm: FakeVm, function: String, chunkName: String, firstLine: Int, lineDefined: Int = firstLine - 1,
+             stack: List<FakeFrame> = emptyList()): HitResult = synchronized(lock) {
+        check(!vm.paused) { "VM ${vm.vmId} 正在暂停，测试应先等 IDE 继续" }
+        if (!configured) return HitResult.CONTINUED
+        val frameStack = stack.ifEmpty { listOf(FakeFrame(function, chunkName, firstLine)) }
+        val matching = breakpoints.values.filter {
+            it.function == function && (it.vmId == 0L || it.vmId == vm.vmId) && (it.source == null || matches(it.source!!, chunkName))
+        }
+        matching.forEach {
+            if (statusSent.add(Triple(it.id, vm.vmId, BreakpointStateNames.VERIFIED))) {
+                event(Events.BREAKPOINT_STATUS, BreakpointStatusEvent(it.id, vm.vmId, BreakpointStateNames.VERIFIED, chunkName, lineDefined))
+            }
+        }
+        val pausing = processHits(vm, matching, frameStack, chunkName, firstLine)
+        if (pausing.isNotEmpty()) return pause(vm, frameStack, PauseReasons.BREAKPOINT, pausing)
+        HitResult.CONTINUED
+    }
+
+    /** 断点命中后的共同处理（条件、命中次数、日志、采集）；返回要暂停的断点。 */
+    private fun processHits(vm: FakeVm, matching: List<BreakpointSpec>, frameStack: List<FakeFrame>, chunkName: String, line: Int): List<String> {
         val pausing = ArrayList<String>()
         for (bp in matching) {
             if (!conditionHolds(bp, frameStack.first())) continue
@@ -261,12 +296,7 @@ class FakeRuntime(
                 pausing += bp.id
             }
         }
-        if (pausing.isNotEmpty()) return pause(vm, frameStack, PauseReasons.BREAKPOINT, pausing)
-        vm.runToLine?.let { (source, targetLine) ->
-            if (targetLine == line && matches(source, chunkName)) return pause(vm, frameStack, PauseReasons.RUN_TO_LINE)
-        }
-        if (vm.stepping != null) return pause(vm, frameStack, PauseReasons.STEP)
-        HitResult.CONTINUED
+        return pausing
     }
 
     /** 模拟出错即停（setOptions.exceptions 不为 none 时）。 */
@@ -370,6 +400,17 @@ class FakeRuntime(
                 }
             }
         }
+    }
+
+    // ---------- 错误聚合（第 21 节）：测试直接推 luaError，errors 返回预置的全量 ----------
+
+    /** errors list 返回的全量（测试预置；推送不会自动改它，和真 runtime 一样推送是限流过的） */
+    @Volatile var errorList: List<com.fixcode.intellij.lua.debug.protocol.LuaErrorDto> = emptyList()
+    @Volatile var errorsCleared = 0
+
+    /** 推一条 luaError 事件（runtime 的推送）。 */
+    fun pushLuaError(error: com.fixcode.intellij.lua.debug.protocol.LuaErrorDto) = synchronized(lock) {
+        event(com.fixcode.intellij.lua.debug.protocol.Events.LUA_ERROR, error)
     }
 
     // ---------- 采样分析（第 20 节）：测试预置结果，假 runtime 不真的采样 ----------
@@ -510,6 +551,13 @@ class FakeRuntime(
                     Commands.CANCEL -> ok()
                     Commands.PROFILE -> if (Capabilities.PROFILER in caps) profile(request) else
                         error(ErrorCodes.UNKNOWN_COMMAND, "runtime 不支持命令 ${request.command}，请升级 runtime。")
+                    Commands.ERRORS -> if (Capabilities.ERROR_REPORT !in caps) {
+                        error(ErrorCodes.UNKNOWN_COMMAND, "runtime 不支持命令 ${request.command}，请升级 runtime。")
+                    } else if (request.args.get("action")?.asString == "clear") {
+                        errorList = emptyList(); errorsCleared++; ok()
+                    } else {
+                        ok(com.fixcode.intellij.lua.debug.protocol.ErrorsResult(errorList).toJson())
+                    }
                     Commands.DISCONNECT -> {
                         DisconnectArgs.fromJson(request.args)
                         reply(request, ok())
@@ -859,11 +907,13 @@ class FakeRuntime(
             Capabilities.VALUE_PATH, Capabilities.LUA_EVAL, Capabilities.SET_VARIABLE, Capabilities.CONDITION,
             Capabilities.HIT_CONDITION, Capabilities.LOGPOINT, Capabilities.CAPTURE, Capabilities.RUN_TO_LINE,
             Capabilities.EXCEPTIONS, Capabilities.OUTPUT, Capabilities.HELPERS, Capabilities.TERMINATE,
-            Capabilities.RICH_VARIABLES, Capabilities.VIEW_RULES, Capabilities.COROUTINES, Capabilities.PROFILER
+            Capabilities.RICH_VARIABLES, Capabilities.VIEW_RULES, Capabilities.COROUTINES, Capabilities.PROFILER,
+            Capabilities.ERROR_REPORT, Capabilities.FUNCTION_BREAKPOINTS
         )
 
-        /** v3.0 原文的 runtime：没有变量视图增量，也没有采样分析。 */
-        val CAPS_V30: List<String> = ALL_CAPS - Capabilities.RICH_VARIABLES - Capabilities.VIEW_RULES - Capabilities.PROFILER
+        /** v3.0 原文的 runtime：没有变量视图增量，也没有采样分析、错误聚合、函数断点。 */
+        val CAPS_V30: List<String> = ALL_CAPS - Capabilities.RICH_VARIABLES - Capabilities.VIEW_RULES - Capabilities.PROFILER -
+            Capabilities.ERROR_REPORT - Capabilities.FUNCTION_BREAKPOINTS
 
         /** 没有 runToLine 的 runtime：IDE 要走「临时断点 + 确认后继续」的兜底。 */
         val CAPS_WITHOUT_RUN_TO_LINE: List<String> = ALL_CAPS - Capabilities.RUN_TO_LINE

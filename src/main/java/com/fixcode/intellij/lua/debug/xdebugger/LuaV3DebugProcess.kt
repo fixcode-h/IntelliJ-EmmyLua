@@ -21,6 +21,8 @@ import com.fixcode.intellij.lua.debug.api.LuaDebugTarget
 import com.fixcode.intellij.lua.debug.api.LuaMappingStatus
 import com.fixcode.intellij.lua.debug.api.LuaProfileRow
 import com.fixcode.intellij.lua.debug.api.LuaProfileSnapshot
+import com.fixcode.intellij.lua.debug.api.LuaErrorRow
+import com.fixcode.intellij.lua.debug.api.LuaErrorsModel
 import com.fixcode.intellij.lua.debug.api.LuaProfilerModel
 import com.fixcode.intellij.lua.debug.api.LuaSourceMappingEntry
 import com.fixcode.intellij.lua.debug.api.LuaVmInfo
@@ -35,6 +37,7 @@ import com.fixcode.intellij.lua.debug.engine.DebugSession
 import com.fixcode.intellij.lua.debug.engine.Initiator
 import com.fixcode.intellij.lua.debug.engine.PauseInfo
 import com.fixcode.intellij.lua.debug.engine.SourceResolution
+import com.fixcode.intellij.lua.debug.protocol.LuaErrorDto
 import com.fixcode.intellij.lua.debug.protocol.Capabilities
 import com.fixcode.intellij.lua.debug.protocol.ExceptionModes
 import com.fixcode.intellij.lua.debug.protocol.OutputCategories
@@ -65,13 +68,15 @@ class LuaV3DebugProcess(
     val target: LuaDebugTarget,
     /** 会话结束后要清理的建连资源（例如 adb 转发），在后台线程调用。 */
     private val onClosed: () -> Unit = {}
-) : XDebugProcess(session), LuaDebugSessionModel, LuaProfilerModel {
+) : XDebugProcess(session), LuaDebugSessionModel, LuaProfilerModel, LuaErrorsModel {
     private val editorsProvider = LuaDebuggerEditorsProvider()
-    private val breakpointIds = ConcurrentHashMap<XLineBreakpoint<*>, CompletableFuture<String>>()
+    /** 行断点和函数断点 → 引擎断点 id。 */
+    private val breakpointIds = ConcurrentHashMap<XBreakpoint<*>, CompletableFuture<String>>()
     private val subscription: AutoCloseable
     @Volatile
     private var stopping = false
     private val modelListeners = CopyOnWriteArrayList<LuaDebugSessionModel.Listener>()
+    private val errorListeners = CopyOnWriteArrayList<() -> Unit>()
     /** runtime 报过内容不一致的 chunk（热更新、没同步），「映射」页标成 HASH_MISMATCH。 */
     private val mismatchedChunks = ConcurrentHashMap.newKeySet<String>()
     /** 用户在 VM 页选的 VM；没有暂停时栈和变量为空，选择只是记下来。 */
@@ -108,7 +113,8 @@ class LuaV3DebugProcess(
 
     override fun getEditorsProvider(): XDebuggerEditorsProvider = editorsProvider
 
-    override fun getBreakpointHandlers(): Array<XBreakpointHandler<*>> = arrayOf(BreakpointHandler(), ExceptionBreakpointHandler())
+    override fun getBreakpointHandlers(): Array<XBreakpointHandler<*>> =
+        arrayOf(BreakpointHandler(), FunctionBreakpointHandler(), ExceptionBreakpointHandler())
 
     override fun sessionInitialized() {
         super.sessionInitialized()
@@ -269,11 +275,14 @@ class LuaV3DebugProcess(
     private fun logBreakpointState(view: BreakpointView) {
         if (view.request.origin == BreakpointOrigin.TEMPORARY) return
         if (loggedStates.put(view.id, view.verification) == view.verification) return
-        val where = "${view.request.file.substringAfterLast('/')}:${view.request.line}"
+        val where = if (view.request.isFunction) "函数 ${view.request.function}" else "${view.request.file.substringAfterLast('/')}:${view.request.line}"
         val (text, type) = when (view.verification) {
             BreakpointVerification.PENDING -> "断点 $where 已下发，等这段代码执行时生效" to ConsoleViewContentType.LOG_DEBUG_OUTPUT
             BreakpointVerification.VERIFIED -> {
-                val moved = view.actualLine?.takeIf { it != view.request.line }?.let { "（实际在第 $it 行）" } ?: ""
+                val moved = when {
+                    view.request.isFunction -> view.chunkName?.let { chunk -> "（定义在 $chunk 第 ${view.actualLine ?: "?"} 行）" } ?: ""
+                    else -> view.actualLine?.takeIf { it != view.request.line }?.let { "（实际在第 $it 行）" } ?: ""
+                }
                 "断点 $where 已生效$moved" to ConsoleViewContentType.LOG_INFO_OUTPUT
             }
             BreakpointVerification.MISMATCH -> "断点 $where 已生效，但设备上的代码和本地文件不一致" to ConsoleViewContentType.LOG_WARNING_OUTPUT
@@ -323,7 +332,7 @@ class LuaV3DebugProcess(
         engine.sourceMapper.entries().forEach { diagnostics.recordChunk(it.chunkName) }
         val now = System.currentTimeMillis()
         val chunks = diagnostics.chunks()
-        val lines = engine.breakpoints().filter { it.request.origin != BreakpointOrigin.TEMPORARY }.map {
+        val lines = engine.breakpoints().filter { it.request.origin != BreakpointOrigin.TEMPORARY && !it.request.isFunction }.map {
             BreakpointDiagnostics.Companion.BreakpointLine(it, diagnostics.unmatchedReason(it, now), BreakpointDiagnostics.suggestChunks(it.request.file, chunks))
         }
         val (body, suggested) = BreakpointDiagnostics.report(lines, chunks) { engine.localPathOfChunk(it) }
@@ -343,7 +352,7 @@ class LuaV3DebugProcess(
         print("[EmmyLua] 暂停在 chunkName=\"${top.chunkName}\" 第 ${top.line} 行（$mapped）\n", ConsoleViewContentType.LOG_INFO_OUTPUT, LuaDebugLogLevel.VERBOSE)
     }
 
-    private fun breakpointFor(ids: List<String>): XLineBreakpoint<*>? {
+    private fun breakpointFor(ids: List<String>): XBreakpoint<*>? {
         if (ids.isEmpty()) return null
         return breakpointIds.entries.firstOrNull { (_, future) -> future.getNow(null) in ids }?.key
     }
@@ -407,8 +416,20 @@ class LuaV3DebugProcess(
 
     // ---------- 断点 ----------
 
+    /** 已经提示过「无效」的函数断点（函数断点没有编辑器图标，只能在控制台说一次）。 */
+    private val warnedFunctionBreakpoints = ConcurrentHashMap.newKeySet<String>()
+
     private fun updateBreakpointState(view: BreakpointView) {
-        val breakpoint = breakpointIds.entries.firstOrNull { (_, future) -> future.getNow(null) == view.id }?.key ?: return
+        val found = breakpointIds.entries.firstOrNull { (_, future) -> future.getNow(null) == view.id }?.key ?: return
+        val breakpoint = found as? XLineBreakpoint<*>
+        if (breakpoint == null) {
+            if (view.verification == BreakpointVerification.INVALID && warnedFunctionBreakpoints.add(view.id)) {
+                print("[EmmyLua] 函数断点 ${view.request.function} 无效：${view.message ?: "未知原因"}\n", ConsoleViewContentType.LOG_WARNING_OUTPUT)
+            } else if (view.verification != BreakpointVerification.INVALID) {
+                warnedFunctionBreakpoints.remove(view.id)
+            }
+            return
+        }
         when (view.verification) {
             BreakpointVerification.VERIFIED -> session.setBreakpointVerified(breakpoint)
             BreakpointVerification.INVALID -> session.setBreakpointInvalid(breakpoint, view.message)
@@ -433,6 +454,30 @@ class LuaV3DebugProcess(
         override fun unregisterBreakpoint(breakpoint: XLineBreakpoint<XBreakpointProperties<*>>, temporary: Boolean) {
             breakpointIds.remove(breakpoint)?.thenAccept { id -> engine.removeBreakpoint(id) }
         }
+    }
+
+    private inner class FunctionBreakpointHandler :
+        XBreakpointHandler<XBreakpoint<LuaFunctionBreakpointProperties>>(LuaFunctionBreakpointType::class.java) {
+        override fun registerBreakpoint(breakpoint: XBreakpoint<LuaFunctionBreakpointProperties>) {
+            val request = functionRequestOf(breakpoint) ?: return
+            breakpointIds[breakpoint] = engine.addBreakpoint(request)
+        }
+
+        override fun unregisterBreakpoint(breakpoint: XBreakpoint<LuaFunctionBreakpointProperties>, temporary: Boolean) {
+            breakpointIds.remove(breakpoint)?.thenAccept { id -> engine.removeBreakpoint(id) }
+        }
+    }
+
+    private fun functionRequestOf(breakpoint: XBreakpoint<LuaFunctionBreakpointProperties>): BreakpointRequest? {
+        val props = breakpoint.properties ?: return null
+        val name = props.function.trim().takeIf { it.isNotEmpty() } ?: return null
+        return BreakpointRequest.function(
+            name,
+            file = props.file.trim(),
+            condition = breakpoint.conditionExpression?.expression?.takeIf { it.isNotBlank() },
+            logMessage = breakpoint.logExpressionObject?.expression?.takeIf { it.isNotBlank() },
+            origin = BreakpointOrigin.IDE
+        ).copy(autoContinue = breakpoint.suspendPolicy == SuspendPolicy.NONE)
     }
 
     /** 启用中的「Lua 错误」断点；全部关掉时 runtime 回到不停（exceptions = none）。 */
@@ -536,6 +581,11 @@ class LuaV3DebugProcess(
     }
 
     private fun notifyModel(event: DebugEvent) {
+        if (errorListeners.isNotEmpty() && (event is DebugEvent.LuaError || event is DebugEvent.ErrorsCleared || event is DebugEvent.Connected)) {
+            ApplicationManager.getApplication().invokeLater {
+                if (!session.project.isDisposed) errorListeners.forEach { it() }
+            }
+        }
         if (modelListeners.isEmpty()) return
         when (event) {
             is DebugEvent.VmAdded, is DebugEvent.VmChanged, is DebugEvent.VmClosed,
@@ -550,6 +600,26 @@ class LuaV3DebugProcess(
             else -> Unit
         }
     }
+
+    // ---------- 调试窗口的「Lua 错误」页（LuaErrorsModel） ----------
+
+    override fun errorsSupported(): Boolean = engine.state.isConnected && engine.supportsErrorReport
+
+    override fun cachedErrors(): List<LuaErrorRow> = engine.cachedErrors().map(::toErrorRow)
+
+    override fun refreshErrors(): CompletableFuture<List<LuaErrorRow>> = engine.errors().thenApply { r -> r.items.map(::toErrorRow) }
+
+    override fun clearErrors(): CompletableFuture<Unit> = engine.clearErrors()
+
+    override fun addErrorsListener(listener: () -> Unit, parent: Disposable) {
+        errorListeners += listener
+        Disposer.register(parent) { errorListeners -= listener }
+    }
+
+    private fun toErrorRow(e: LuaErrorDto) = LuaErrorRow(
+        e.id, e.vmId, e.message, e.chunkName, e.line, e.chunkName?.let { engine.localPathOfChunk(it) },
+        e.count, e.firstMs, e.lastMs, e.uncaught, e.traceback,
+    )
 
     // ---------- 调试窗口的「Lua 采样」页（LuaProfilerModel） ----------
 

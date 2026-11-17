@@ -38,6 +38,8 @@ class LuaDebugSettings : SimplePersistentStateComponent<LuaDebugSettings.State>(
         var consoleLogLevel by enum(LuaDebugLogLevel.COMPACT)
         /** 保存 Lua 文件后经 UELink 自动重载到开着的 UE 编辑器 / 游戏（默认关）。 */
         var reloadToUnrealOnSave by property(false)
+        /** 调试时统计 Lua 错误（含被 pcall 接住的），给「Lua 错误」页和 MCP errors。默认开；关掉后只统计没被接住的。 */
+        var collectCaughtLuaErrors by property(true)
 
         // 变量视图（docs/design/variable-view.md 13.5、15.3）。平铺存储，读写走 [variableView]。
         var viewSort by enum(LuaVariableSort.SMART)
@@ -84,6 +86,10 @@ class LuaDebugSettings : SimplePersistentStateComponent<LuaDebugSettings.State>(
     var reloadToUnrealOnSave: Boolean
         get() = state.reloadToUnrealOnSave
         set(value) { state.reloadToUnrealOnSave = value }
+
+    var collectCaughtLuaErrors: Boolean
+        get() = state.collectCaughtLuaErrors
+        set(value) { state.collectCaughtLuaErrors = value }
 
     /**
      * 变量视图设置的快照。引擎在握手后和设置变化时用 [VariableViewSettings.toProtocolOptions]
@@ -201,13 +207,15 @@ data class VariableViewSettings(
     }
 }
 
-/** 按项目记住的东西：「IDE 的 MCP 服务器没开」提示是否不再弹、最近附加过的进程。 */
+/** 按项目记住的东西：「IDE 的 MCP 服务器没开」和「上手检查」提示是否不再弹、最近附加过的进程。 */
 @Service(Service.Level.PROJECT)
 @State(name = "EmmyLuaDebugProjectState", storages = [Storage("emmylua-debug.xml")])
 class LuaDebugProjectState : SimplePersistentStateComponent<LuaDebugProjectState.State>(State()) {
 
     class State : BaseState() {
         var mcpPromptDismissed by property(false)
+        /** 「EmmyLua 上手检查」气泡不再主动弹（点过「不再提示」或已经打开看过）。 */
+        var onboardingDismissed by property(false)
         /** 最近附加过的可执行文件路径（或进程名），新的在前。 */
         var recentAttachTargets by list<String>()
     }
@@ -215,6 +223,10 @@ class LuaDebugProjectState : SimplePersistentStateComponent<LuaDebugProjectState
     var mcpPromptDismissed: Boolean
         get() = state.mcpPromptDismissed
         set(value) { state.mcpPromptDismissed = value }
+
+    var onboardingDismissed: Boolean
+        get() = state.onboardingDismissed
+        set(value) { state.onboardingDismissed = value }
 
     val recentAttachTargets: List<String> get() = state.recentAttachTargets.toList()
 

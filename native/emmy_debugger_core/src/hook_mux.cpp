@@ -269,6 +269,13 @@ void HookMux::Kick() {
 	lua_sethook(mainL_, &HookMux::LuaHookEntry, mask | LUA_MASKCOUNT, 1000);
 }
 
+void HookMux::KickNow(lua_State* L) {
+	if (faulted() || !L) return;
+	spreadPending_.store(true, std::memory_order_release);
+	const int mask = staticMask_.load(std::memory_order_relaxed) | DebuggerBaseMask();
+	lua_sethook(L, &HookMux::LuaHookEntry, mask | LUA_MASKCOUNT, 1);
+}
+
 void HookMux::EnsureHook(lua_State* L) {
 	if (faulted()) return;
 	if (lua_gethook(L) != nullptr) return; // 已经是我们的，或者宿主自己的钩子：不动
