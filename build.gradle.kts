@@ -40,6 +40,16 @@ val buildVersionData = buildDataList.find { it.ideaSDKShortVersion == buildVersi
 
 val resDir = "src/main/resources"
 
+// 提交列表 → 插件市场更新说明的 HTML：去掉发版跟踪和内部提交，转义后放进列表
+fun changeNotesHtml(lines: List<String>): String {
+    fun esc(t: String) = t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    val items = lines.map { it.trim().removePrefix("*").trim() }
+        .filter { it.isNotEmpty() && !it.startsWith("chore(release)") && !it.startsWith("内部：") }
+        .joinToString("\n") { "<li>${esc(it)}</li>" }
+    val releases = "<p>Full history: <a href=\"https://github.com/fixcode-h/IntelliJ-EmmyLua/releases\">GitHub Releases</a></p>"
+    return if (items.isEmpty()) releases else "<ul>\n$items\n</ul>\n$releases"
+}
+
 val isCI = System.getenv("CI") != null
 
 // 处理版本号：优先使用 pluginVersion 参数，然后是 CI_BUILD_VERSION，最后是默认版本
@@ -116,6 +126,14 @@ project(":") {
         sandboxContainer = file("${layout.buildDirectory.get().asFile}/${buildVersionData.ideaSDKShortVersion}/idea-sandbox")
         
         pluginConfiguration {
+            // 出包时 CI 把本次的提交列表写进 -PchangeNotesFile 指的文件（每行「* 标题 (提交号)」），
+            // 换成 HTML 覆盖 plugin.xml 的 change-notes，插件市场的「What's New」就是这次的更新内容
+            providers.gradleProperty("changeNotesFile").orNull?.let { path ->
+                val f = file(path)
+                if (f.isFile) {
+                    changeNotes = provider { changeNotesHtml(f.readLines(Charsets.UTF_8)) }
+                }
+            }
             ideaVersion {
                 sinceBuild = buildVersionData.sinceBuild
                 // 不设上限：2025.2 之后的版本都能装（CI 的 verifyPlugin 逐个版本校验 API 兼容）
@@ -148,7 +166,8 @@ project(":") {
         // instrumentCode configuration is now handled by instrumentationTools() dependency
 
         publishPlugin {
-            token.set(System.getenv("IDEA_PUBLISH_TOKEN"))
+            // CI 直接用 curl 上传 Release 里的 zip（auto-release.yml 的 marketplace 任务）；本地手动发布时用同一个环境变量
+            token.set(providers.environmentVariable("JETBRAINS_MARKETPLACE_TOKEN").orElse(providers.environmentVariable("IDEA_PUBLISH_TOKEN")))
         }
 
         // emmylua_ls 各平台可执行文件放进插件目录的 server/<平台>/（出包时由 CI 下载到 build/emmylua-ls）

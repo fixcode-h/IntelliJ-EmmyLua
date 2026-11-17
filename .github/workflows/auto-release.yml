@@ -183,6 +183,9 @@ jobs:
             echo "$LOG_MD"
             echo 'EOF'
           } >> "$GITHUB_OUTPUT"
+          # 同一份提交列表也作为插件市场的更新说明（build.gradle.kts 读 -PchangeNotesFile）
+          mkdir -p build
+          echo "$LOG_MD" > build/change-notes.md
 
       # 把现编的原生二进制放进插件资源（覆盖仓库里旧的 Windows 二进制）
       - name: Download native binaries
@@ -224,7 +227,7 @@ jobs:
       # 第六步：执行 Gradle 打包命令
       # --- 核心修正点：在这里通过 -P 参数将版本号传递给 Gradle ----
       - name: Build with Gradle
-        run: ./gradlew buildPlugin -x buildSearchableOptions -PpluginVersion=${{ env.NEW_VERSION }}
+        run: ./gradlew buildPlugin -x buildSearchableOptions -PpluginVersion=${{ env.NEW_VERSION }} -PchangeNotesFile=build/change-notes.md
 
       # 没带上语言服务器的包不发布
       - name: Check emmylua_ls in plugin zip
@@ -307,4 +310,45 @@ jobs:
           else
             git merge --abort || true
             echo "::warning::版本跟踪提交没能自动合回 dev，请手动 git merge origin/main"
+          fi
+
+  # 发布到 JetBrains 插件市场：上传和 GitHub Release 同一个 zip。
+  # 单独一个任务：市场上传失败（审核中、令牌过期）只标红这一项，不影响 GitHub Release 和版本跟踪提交。
+  # 没配 Secret JETBRAINS_MARKETPLACE_TOKEN 时跳过（插件第一次要在网站上手动上传并通过审核，之后才能用令牌发布）。
+  marketplace:
+    needs: [package, release]
+    runs-on: ubuntu-latest
+    env:
+      MARKETPLACE_TOKEN: ${{ secrets.JETBRAINS_MARKETPLACE_TOKEN }}
+      PLUGIN_XML_ID: com.fixcode.emmylua.enhanced
+    steps:
+      - name: Check token
+        id: token
+        run: |
+          if [ -z "$MARKETPLACE_TOKEN" ]; then
+            echo "::notice::没有配置 Secret JETBRAINS_MARKETPLACE_TOKEN，跳过发布到 JetBrains 插件市场"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Download package
+        if: steps.token.outputs.skip != 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: release-package
+          path: build
+      - name: Upload to JetBrains Marketplace
+        if: steps.token.outputs.skip != 'true'
+        run: |
+          set -e
+          zips=(build/distributions/*.zip)
+          [ "${#zips[@]}" -eq 1 ] && [ -f "${zips[0]}" ] || { echo "::error::应该正好有一个插件 zip：${zips[*]}"; exit 1; }
+          echo "上传 ${zips[0]}（v${{ needs.package.outputs.version }}）"
+          code=$(curl -sS --retry 3 -o response.txt -w '%{http_code}' \
+            -H "Authorization: Bearer $MARKETPLACE_TOKEN" \
+            -F "xmlId=$PLUGIN_XML_ID" \
+            -F "file=@${zips[0]}" \
+            https://plugins.jetbrains.com/plugin/uploadPlugin)
+          cat response.txt; echo
+          if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then
+            echo "::error::插件市场返回 HTTP $code（见上面的返回内容）。401/403 多半是令牌失效或没有这个插件的权限，400 看返回里的原因"
+            exit 1
           fi

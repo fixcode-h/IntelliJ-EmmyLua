@@ -49,9 +49,11 @@ EmmyLua 是一个功能强大的 Lua 语言支持插件，专为 IntelliJ IDEA �
 
 本插件依赖 **LSP4IJ** 插件。从磁盘安装本插件时，IDE 会提示同时安装 LSP4IJ，确认即可。emmylua_ls 已随插件打包（Windows x64 / arm64、macOS x64 / arm64、Linux x64 / arm64），不用另外安装。
 
-### 从 GitHub Releases 安装
+### 从插件市场安装
 
-本插件**还没有上架 JetBrains 插件市场**。插件市场里搜「EmmyLua」搜到的是上游 EmmyLua，和本插件用同一个语言 ID，不能同时启用（装本插件时 IDE 会提示停用上游 EmmyLua）。
+插件市场里搜 **EmmyLua Enhanced**（正在准备上架，见 [发布到插件市场](docs/marketplace.md)）。注意市场里叫「EmmyLua」的是上游插件，和本插件用同一个语言 ID，不能同时启用（装本插件时 IDE 会提示停用上游 EmmyLua）。
+
+### 从 GitHub Releases 安装
 
 1. 从 [Releases](https://github.com/fixcode-h/IntelliJ-EmmyLua/releases) 页面下载最新版本
 2. 进入 `File` → `Settings` → `Plugins`
