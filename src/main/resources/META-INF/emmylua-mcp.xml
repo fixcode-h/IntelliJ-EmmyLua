@@ -1,0 +1,9 @@
+<!--
+  Lua 调试工具注册到 IDE 自带的 MCP 服务器（设置 → 工具 → MCP 服务器）。
+  plugin.xml 里 optional depends com.intellij.mcpServer 时才加载。
+-->
+<idea-plugin>
+    <extensions defaultExtensionNs="com.intellij">
+        <mcpServer.mcpToolsProvider implementation="com.fixcode.intellij.lua.debug.mcp.ide.LuaMcpToolsProvider"/>
+    </extensions>
+</idea-plugin>

@@ -3,7 +3,7 @@ package com.fixcode.intellij.lua.debugger.mcp
 import com.fixcode.intellij.lua.debugger.mcp.protocol.ControlDecision
 import com.fixcode.intellij.lua.debugger.mcp.protocol.McpCallLog
 import com.fixcode.intellij.lua.debugger.mcp.protocol.McpPermissionPolicy
-import com.fixcode.intellij.lua.debugger.mcp.protocol.McpServer
+import com.fixcode.intellij.lua.debugger.mcp.protocol.McpToolDispatcher
 import com.fixcode.intellij.lua.debugger.mcp.tools.LuaDebugTools
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -28,14 +28,12 @@ class LuaDebugToolsTest {
         confirmer = FakeConfirmer()
         val policy = McpPermissionPolicy(confirmer)
         val tools = LuaDebugTools({ if (backendAvailable) backend else null }, policy).all()
-        client = McpTestClient(McpServer("emmylua-debug", "test", tools, McpCallLog()))
-        client.initialize()
+        client = McpTestClient(McpToolDispatcher(tools, McpCallLog()))
     }
 
     @Test
     fun `三个工具，名字和 UEToVS 风格一致`() {
-        @Suppress("UNCHECKED_CAST")
-        val tools = (client.rpc("tools/list")["result"] as Map<String, Any?>)["tools"] as List<Map<String, Any?>>
+        val tools = client.tools()
         assertEquals(listOf(S, B, I), tools.map { it["name"] })
         for (t in tools) {
             val desc = t["description"] as String

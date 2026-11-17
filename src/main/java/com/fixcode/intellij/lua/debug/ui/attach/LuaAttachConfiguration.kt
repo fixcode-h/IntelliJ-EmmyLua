@@ -3,7 +3,7 @@ package com.fixcode.intellij.lua.debug.ui.attach
 import com.intellij.execution.ExecutionException
 import com.intellij.execution.Executor
 import com.intellij.execution.configurations.ConfigurationFactory
-import com.intellij.execution.configurations.ConfigurationTypeBase
+import com.intellij.execution.configurations.ConfigurationType
 import com.intellij.execution.configurations.RunConfiguration
 import com.intellij.execution.configurations.RunConfigurationBase
 import com.intellij.execution.configurations.RunConfigurationOptions
@@ -13,7 +13,7 @@ import com.intellij.openapi.options.SettingsEditor
 import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.util.NotNullLazyValue
+import javax.swing.Icon
 import com.fixcode.intellij.lua.debug.api.LuaDebugTarget
 import com.fixcode.intellij.lua.debug.api.LuaLocalProcess
 import com.fixcode.intellij.lua.debug.ui.LuaDebugBundle
@@ -24,24 +24,13 @@ import com.fixcode.intellij.lua.debug.ui.session.LuaDebugTargetConfiguration
 import com.fixcode.intellij.lua.debug.ui.session.NoProcessState
 import com.fixcode.intellij.lua.debug.ui.settings.LuaDebugProjectState
 
-/**
- * 「Lua 附加」运行配置：给需要固定进程名、等进程起来自动附加的场景用（设计文档 10.2）。
- * 临时附加直接用 Run > Attach to Process…，不需要建配置。
- */
-class LuaAttachConfigurationType : ConfigurationTypeBase(
-    ID,
-    LuaDebugBundle.message("attach.config.name"),
-    LuaDebugBundle.message("attach.config.description"),
-    NotNullLazyValue.createValue { LuaDebugIcons.ATTACH },
-) {
-    init {
-        addFactory(object : ConfigurationFactory(this) {
-            override fun getId(): String = ID
-            override fun createTemplateConfiguration(project: Project): RunConfiguration =
-                LuaAttachConfiguration(project, this)
-            override fun getOptionsClass(): Class<LuaAttachOptions> = LuaAttachOptions::class.java
-        })
-    }
+/** 「附加到进程」工厂，挂在 [LuaRunConfigurationType] 下。ID 沿用旧的 EmmyLua.Attach，已有配置照常加载。 */
+class LuaAttachConfigurationFactory(type: ConfigurationType) : ConfigurationFactory(type) {
+    override fun getId(): String = ID
+    override fun getName(): String = LuaDebugBundle.message("attach.factory.name")
+    override fun getIcon(): Icon = LuaDebugIcons.ATTACH
+    override fun createTemplateConfiguration(project: Project): RunConfiguration = LuaAttachConfiguration(project, this)
+    override fun getOptionsClass(): Class<LuaAttachOptions> = LuaAttachOptions::class.java
 
     companion object {
         const val ID = "EmmyLua.Attach"

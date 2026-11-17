@@ -390,6 +390,8 @@ FindBreakPoint(ar)       → manager->GetLineSet()：breakpointsMtx 加锁 + 复
 
 ## 6. MCP Server 设计（替换 CLI）
 
+> **2026-11-17 更新**：不再自己开 MCP 服务。工具改为注册到 IDE 自带的 MCP 服务器（2025.2 起内置，扩展点 `com.intellij.mcpServer.mcpToolsProvider`），6.1 的独立 HTTP 承载和 6.5 的「安装到项目」已删除；工具清单、权限、返回格式（6.2–6.4）不变，`instructions` / 资源改成 `lua_debug_session action=help`。现行约定以仓库根 `AGENTS.md`「MCP 工具规范」为准，用户说明见 `docs/mcp-debug-guide.md`。
+
 ### 6.1 承载方式
 
 | 方案 | 说明 | 结论 |

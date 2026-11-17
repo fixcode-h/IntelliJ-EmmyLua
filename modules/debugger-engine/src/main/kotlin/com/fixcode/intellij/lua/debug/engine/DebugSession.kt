@@ -115,6 +115,8 @@ class DebugSession(
     var maxValueLength: Int? = config.maxValueLength
     private var reconnecting = false
     private var reconnectAttempt = 0
+    /** 握手回 BUSY 后已经重试的次数。 */
+    private var busyRetries = 0
     private var runtimeTerminatedReason: String? = null
     private var heartbeat: ScheduledFuture<*>? = null
     private var heartbeatMisses = 0
@@ -336,6 +338,7 @@ class DebugSession(
     }
 
     private fun onConfigured() {
+        busyRetries = 0
         val wasReconnect = reconnecting
         reconnecting = false
         reconnectAttempt = 0
@@ -350,6 +353,12 @@ class DebugSession(
         connection?.close()
         connection = null
         failPending(error)
+        if (error is DebugEngineException && error.code == ErrorCodes.BUSY && busyRetries < config.busyRetries) {
+            // 刚停止的上一个调试会话还没断干净（或上次 IDE 被强杀、runtime 要等心跳超时才释放）：等一会儿再连
+            if (busyRetries++ == 0) logEngine("进程里上一次的调试连接还没释放，稍后自动重试…")
+            schedule(config.busyRetryDelayMillis) { if (!state.isTerminal && state != SessionState.STOPPING) connectAttempt() }
+            return
+        }
         if (reconnecting) {
             scheduleReconnect(error.message ?: "握手失败")
         } else {

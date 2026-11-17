@@ -3,8 +3,6 @@ package com.fixcode.intellij.lua.debug.ui.settings
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnActionEvent
-import com.intellij.openapi.application.ApplicationManager
-import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
 import com.intellij.openapi.options.BoundConfigurable
 import com.intellij.openapi.options.ShowSettingsUtil
@@ -22,48 +20,34 @@ import com.intellij.ui.dsl.builder.bindText
 import com.intellij.ui.dsl.builder.columns
 import com.intellij.ui.dsl.builder.panel
 import com.intellij.ui.dsl.builder.toNullableProperty
-import com.intellij.ui.layout.selected
 import com.fixcode.intellij.lua.debug.api.LuaMcpService
 import com.fixcode.intellij.lua.debug.ui.LuaDebugBundle
-import com.fixcode.intellij.lua.debug.ui.mcp.LuaMcpInstallDialog
-import javax.swing.JCheckBox
+import com.fixcode.intellij.lua.debug.ui.mcp.LuaMcpStatusText
 
 /**
  * `Settings > Tools > EmmyLua 调试`（设计文档 10.5）：MCP、UE、设备、变量视图、日志。
- * 用 Kotlin UI DSL v2 绑定到 [LuaDebugSettings]，应用时通知 MCP 服务按新端口重启。
+ * 用 Kotlin UI DSL v2 绑定到 [LuaDebugSettings]。MCP 的开关和端口归 IDE 自带的 MCP 服务器，这里只显示状态、给入口。
  */
 class LuaDebugConfigurable : BoundConfigurable(LuaDebugBundle.message("settings.title")) {
     private val settings get() = LuaDebugSettings.getInstance()
     private val mcpState = JBLabel()
-    private val installState = JBLabel()
 
     override fun createPanel(): DialogPanel = panel {
-        val mcp = LuaMcpService.getInstance()
         group(LuaDebugBundle.message("settings.mcp")) {
-            lateinit var enabled: JCheckBox
+            row { comment(LuaDebugBundle.message("settings.mcp.comment")) }
             row {
-                enabled = checkBox(LuaDebugBundle.message("settings.mcp.enabled"))
-                    .bindSelected(settings::mcpEnabled).component
-                label(LuaDebugBundle.message("settings.mcp.port"))
-                intTextField(1024..65535).columns(6).bindIntText(settings::mcpPort)
-                    .enabledIf(enabled.selected)
                 cell(mcpState)
+            }
+            row {
+                button(LuaDebugBundle.message("settings.mcp.open")) {
+                    LuaMcpService.getInstance()?.openServerSettings(ProjectUtil.getActiveProject())
+                    refreshMcpState()
+                }.enabled(LuaMcpService.getInstance()?.serverState()?.available == true)
             }
             row {
                 checkBox(LuaDebugBundle.message("settings.mcp.allowLua"))
                     .bindSelected(settings::allowAgentLuaEval)
                     .comment(LuaDebugBundle.message("settings.mcp.allowLua.comment"))
-            }
-            row(LuaDebugBundle.message("settings.mcp.installState")) {
-                cell(installState)
-                button(LuaDebugBundle.message("settings.mcp.install")) {
-                    val project = ProjectUtil.getActiveProject() ?: return@button
-                    LuaMcpInstallDialog.show(project)
-                    refreshInstallState()
-                }.enabled(mcp != null)
-            }
-            if (mcp == null) {
-                row { comment(LuaDebugBundle.message("mcp.error.noService")) }
             }
         }
         group(LuaDebugBundle.message("settings.ue")) {
@@ -148,54 +132,20 @@ class LuaDebugConfigurable : BoundConfigurable(LuaDebugBundle.message("settings.
             }
         }
         onApply {
-            LuaMcpService.getInstance()?.applySettings()
-            refreshMcpState()
             // 变量视图设置推给正在调试的会话（variable-view.md 15.3）
             com.fixcode.intellij.lua.debug.xdebugger.LuaVariableViewSync.applyToAllSessions()
         }
         refreshMcpState()
-        refreshInstallState()
     }
 
     private fun refreshMcpState() {
         val state = LuaMcpService.getInstance()?.serverState()
         mcpState.icon = when {
-            state == null -> null
-            state.error != null -> AllIcons.General.Error
+            state == null || !state.available -> AllIcons.General.Warning
             state.running -> AllIcons.General.InspectionsOK
             else -> AllIcons.General.InspectionsPause
         }
-        mcpState.text = when {
-            state == null -> ""
-            state.error != null -> state.error
-            state.running -> LuaDebugBundle.message("settings.mcp.state.running", state.port, state.connectedClients)
-            state.enabled -> LuaDebugBundle.message("settings.mcp.state.stopped")
-            else -> LuaDebugBundle.message("settings.mcp.state.disabled")
-        }
-    }
-
-    /** "本项目安装状态: Claude Code ✓  Cursor ✗ …"，读文件放后台。 */
-    private fun refreshInstallState() {
-        val service = LuaMcpService.getInstance() ?: return
-        val project = ProjectUtil.getActiveProject() ?: run {
-            installState.text = LuaDebugBundle.message("settings.mcp.noProject")
-            return
-        }
-        installState.text = LuaDebugBundle.message("mcp.dialog.loading")
-        val modality = ModalityState.stateForComponent(installState)
-        ApplicationManager.getApplication().executeOnPooledThread {
-            val text = runCatching {
-                val root = service.installRoots(project).firstOrNull() ?: return@runCatching ""
-                service.installStatus(project, root).joinToString("  ") { s ->
-                    s.client.displayName + " " + when {
-                        s.installed && s.outdated -> "⚠"
-                        s.installed -> "✓"
-                        else -> "✗"
-                    }
-                }
-            }.getOrElse { it.message.orEmpty() }
-            ApplicationManager.getApplication().invokeLater({ installState.text = text }, modality)
-        }
+        mcpState.text = "<html>" + LuaMcpStatusText.describe() + "</html>"
     }
 }
 
