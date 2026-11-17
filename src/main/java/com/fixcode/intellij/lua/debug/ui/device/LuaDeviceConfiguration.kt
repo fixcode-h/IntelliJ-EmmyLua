@@ -3,7 +3,9 @@ package com.fixcode.intellij.lua.debug.ui.device
 import com.intellij.execution.ExecutionException
 import com.intellij.execution.Executor
 import com.intellij.execution.configurations.ConfigurationFactory
+import com.intellij.execution.configurations.ConfigurationType
 import com.intellij.execution.configurations.ConfigurationTypeBase
+import com.intellij.execution.configurations.VirtualConfigurationType
 import com.intellij.execution.configurations.RunConfiguration
 import com.intellij.execution.configurations.RunConfigurationBase
 import com.intellij.execution.configurations.RunConfigurationOptions
@@ -15,6 +17,7 @@ import com.intellij.openapi.options.SettingsEditor
 import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.project.Project
+import javax.swing.Icon
 import com.intellij.openapi.util.NotNullLazyValue
 import com.fixcode.intellij.lua.debug.api.LuaDebugTarget
 import com.fixcode.intellij.lua.debug.api.LuaDeviceException
@@ -27,24 +30,31 @@ import com.fixcode.intellij.lua.debug.ui.LuaDebugIcons
 import com.fixcode.intellij.lua.debug.ui.session.LuaDebugTargetConfiguration
 import com.fixcode.intellij.lua.debug.ui.session.NoProcessState
 
-/** 「Lua 真机附加」运行配置（设计文档 10.3）。 */
-class LuaDeviceConfigurationType : ConfigurationTypeBase(
-    ID,
-    LuaDebugBundle.message("device.config.name"),
-    LuaDebugBundle.message("device.config.description"),
-    NotNullLazyValue.createValue { LuaDebugIcons.DEVICE },
-) {
-    init {
-        addFactory(object : ConfigurationFactory(this) {
-            override fun getId(): String = ID
-            override fun createTemplateConfiguration(project: Project): RunConfiguration =
-                LuaDeviceConfiguration(project, this)
-            override fun getOptionsClass(): Class<LuaDeviceOptions> = LuaDeviceOptions::class.java
-        })
-    }
+/** 「Android 真机附加」工厂，挂在 [LuaRunConfigurationType] 下。ID 沿用旧的 EmmyLua.Device。 */
+class LuaDeviceConfigurationFactory(type: ConfigurationType) : ConfigurationFactory(type) {
+    override fun getId(): String = ID
+    override fun getName(): String = LuaDebugBundle.message("device.factory.name")
+    override fun getIcon(): Icon = LuaDebugIcons.DEVICE
+    override fun createTemplateConfiguration(project: Project): RunConfiguration = LuaDeviceConfiguration(project, this)
+    override fun getOptionsClass(): Class<LuaDeviceOptions> = LuaDeviceOptions::class.java
 
     companion object {
         const val ID = "EmmyLua.Device"
+    }
+}
+
+/**
+ * 2.3.x 单独的「Lua 真机附加」类型，只为让当时建的配置（type="EmmyLua.Device"）还能加载和运行；
+ * VirtualConfigurationType 不出现在「添加新配置」里，新建的都在「Lua」下面。
+ */
+class LuaLegacyDeviceConfigurationType : ConfigurationTypeBase(
+    LuaDeviceConfigurationFactory.ID,
+    LuaDebugBundle.message("device.config.name"),
+    LuaDebugBundle.message("device.config.description"),
+    NotNullLazyValue.createValue { LuaDebugIcons.DEVICE },
+), VirtualConfigurationType {
+    init {
+        addFactory(LuaDeviceConfigurationFactory(this))
     }
 }
 

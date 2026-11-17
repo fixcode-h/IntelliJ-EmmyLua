@@ -99,8 +99,12 @@ class DebugUiSmokeTest : BasePlatformTestCase() {
         val c = cfg.createComponent()
         assertNotNull(c)
         cfg.reset(); cfg.apply(); cfg.disposeUIResources()
-        val deviceType = com.intellij.execution.configurations.ConfigurationTypeUtil.findConfigurationType("EmmyLua.Device")!!
-        val conf = deviceType.configurationFactories[0].createTemplateConfiguration(project) as com.fixcode.intellij.lua.debug.ui.device.LuaDeviceConfiguration
+        // 「添加新配置」里只有一个「Lua」，下面两个工厂；旧的真机类型隐藏但还在，旧配置能加载
+        val luaType = com.intellij.execution.configurations.ConfigurationTypeUtil.findConfigurationType("EmmyLua.Attach")!!
+        assertEquals(listOf("EmmyLua.Attach", "EmmyLua.Device"), luaType.configurationFactories.map { it.id })
+        assertTrue(com.intellij.execution.configurations.ConfigurationTypeUtil.findConfigurationType("EmmyLua.Device")
+            is com.intellij.execution.configurations.VirtualConfigurationType)
+        val conf = luaType.configurationFactories[1].createTemplateConfiguration(project) as com.fixcode.intellij.lua.debug.ui.device.LuaDeviceConfiguration
         val editor = conf.configurationEditor as com.intellij.openapi.options.SettingsEditor<com.fixcode.intellij.lua.debug.ui.device.LuaDeviceConfiguration>
         editor.component
         conf.options.packageName = "com.x.y"
@@ -108,8 +112,7 @@ class DebugUiSmokeTest : BasePlatformTestCase() {
         editor.applyTo(conf)
         assertEquals("com.x.y", conf.options.packageName)
         com.intellij.openapi.util.Disposer.dispose(editor)
-        val a = com.intellij.execution.configurations.ConfigurationTypeUtil.findConfigurationType("EmmyLua.Attach")!!
-            .configurationFactories[0].createTemplateConfiguration(project) as com.fixcode.intellij.lua.debug.ui.attach.LuaAttachConfiguration
+        val a = luaType.configurationFactories[0].createTemplateConfiguration(project) as com.fixcode.intellij.lua.debug.ui.attach.LuaAttachConfiguration
         val ae = a.configurationEditor as com.intellij.openapi.options.SettingsEditor<com.fixcode.intellij.lua.debug.ui.attach.LuaAttachConfiguration>
         ae.component
         a.options.onlyLuaProcesses = false
