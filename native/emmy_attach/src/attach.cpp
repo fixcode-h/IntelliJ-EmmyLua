@@ -74,6 +74,7 @@ struct CoreApi {
 	decltype(&Emmy_FinishHostPcall) finishHostPcall = nullptr;
 	decltype(&Emmy_SyncThreadHook) syncThreadHook = nullptr; // 可选：旧核心没有
 	decltype(&Emmy_WaitIDE) waitIDE = nullptr;               // 可选：没有时不等 IDE
+	decltype(&Emmy_WaitIDEForVm) waitIDEForVm = nullptr;     // 可选：等完马上刷新钩子；旧核心没有时退到 waitIDE
 };
 
 // IDE 从发起附加到下完断点：emmy_tool 返回后连端口（等 Lua 时每 200 毫秒试一次）+ 握手 + 断点，一般不到 1 秒
@@ -205,6 +206,7 @@ bool LoadCore(const char* version) {
 #undef EMMY_LOAD
 	g_core.syncThreadHook = reinterpret_cast<decltype(g_core.syncThreadHook)>(GetProcAddress(core, "Emmy_SyncThreadHook"));
 	g_core.waitIDE = reinterpret_cast<decltype(g_core.waitIDE)>(GetProcAddress(core, "Emmy_WaitIDE"));
+	g_core.waitIDEForVm = reinterpret_cast<decltype(g_core.waitIDEForVm)>(GetProcAddress(core, "Emmy_WaitIDEForVm"));
 	return true;
 }
 
@@ -233,8 +235,9 @@ void OnLuaEntry(lua_State* L) {
 	const uint64_t vmId = g_core.registerLuaVm(L, "windows-attach");
 	Trace("new lua_State %p -> vm %llu", static_cast<void*>(L), static_cast<unsigned long long>(vmId));
 	// 附加后的第一个新 VM：在它跑任何 Lua 之前等 IDE 下完断点（IDE 已就绪时立刻返回）
-	if (g_holdNewVm.exchange(false) && g_core.waitIDE) {
-		const int ready = g_core.waitIDE(kHoldNewVmMs);
+	// 等完要马上刷新这个线程的钩子：VM 登记时 IDE 还没下断点，靠每 1000 条指令一次的检查才用上，模块顶层代码早跑完了
+	if (g_holdNewVm.exchange(false) && (g_core.waitIDEForVm || g_core.waitIDE)) {
+		const int ready = g_core.waitIDEForVm ? g_core.waitIDEForVm(L, kHoldNewVmMs) : g_core.waitIDE(kHoldNewVmMs);
 		Trace("hold new vm: ide %s", ready ? "ready" : "not ready after timeout");
 	}
 }

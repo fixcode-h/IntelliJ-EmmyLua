@@ -478,6 +478,14 @@ int Emmy_WaitIDE(int timeoutMs) {
 	return Core::Get().WaitConfigured(timeoutMs) ? 1 : 0;
 }
 
+int Emmy_WaitIDEForVm(lua_State* L, int timeoutMs) {
+	const bool ready = Core::Get().WaitConfigured(timeoutMs);
+	if (L && Core::Get().FindVmByState(L)) {
+		if (emmy::HookMux* mux = emmy::FindMux(emmy::lua::GlobalStateOf(L))) mux->KickNow(L);
+	}
+	return ready ? 1 : 0;
+}
+
 int Emmy_WaitForClient(int timeoutMs) {
 	auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs < 0 ? 0 : timeoutMs);
 	while (!Core::Get().connected()) {

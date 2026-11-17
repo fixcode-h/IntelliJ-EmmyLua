@@ -860,6 +860,41 @@ TEST_CASE("session.exceptions") {
 }
 
 
+// 注入方式「先附加再开始 PIE」：新 VM 在跑第一段 Lua 前等 IDE 下完断点（Emmy_WaitIDEForVm），
+// 模块顶层只执行一次的代码也要停住（之前钩子要过 1000 条指令才刷新，顶层几行早跑完了）
+TEST_CASE("session.new_vm_top_level_breakpoint") {
+	std::atomic<bool> done{false};
+	std::thread late([&] {
+		lua_State* L = luaL_newstate();
+		luaL_openlibs(L);
+		Emmy_RegisterLuaVm(L, "late");
+		Emmy_WaitIDEForVm(L, 5000);
+		const char* src = "local M = {}\nlocal inited = 0\ninited = inited + 1\nreturn M\n";
+		if (lua::LoadBuffer(L, src, std::strlen(src), "@game/late.lua") == LUA_OK) lua_pcall(L, 0, 1, 0);
+		Emmy_UnregisterLuaVm(L);
+		lua_close(L);
+		done = true;
+	});
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	TestClient c;
+	CHECK(c.Connect("127.0.0.1", g_port));
+	CHECK(Ok(Hello(c)));
+	g_rev = 0;
+	json bp = {{"id", "late"}, {"source", {{"path", "D:/proj/game/late.lua"}}}, {"line", 3}};
+	CHECK(Ok(SetBps(c, json::array({bp}))));
+	CHECK(Ok(c.Request("configurationDone")));
+	json pz = c.WaitEvent("paused", 5000);
+	CHECK(pz.is_object());
+	if (pz.is_object()) {
+		CHECK_EQ(pz["body"]["top"]["line"].get<int>(), 3);
+		CHECK(Ok(SetBps(c, json::array())));
+		CHECK(Ok(Continue(c, pz)));
+	}
+	c.Request("disconnect");
+	late.join();
+	CHECK(done.load());
+}
+
 TEST_CASE("session.errorReport") {
 	TestClient c;
 	CHECK(c.Connect("127.0.0.1", g_port));

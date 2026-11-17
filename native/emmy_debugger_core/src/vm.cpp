@@ -287,8 +287,10 @@ int Vm::OnHook(lua_State* L, lua_Debug* ar) {
 			return 0;
 		}
 	}
+	bool refreshed = false;
 	if (pending_.load(std::memory_order_acquire) != 0) {
 		ProcessPending(L);
+		refreshed = true;
 	}
 	if (!active_.load(std::memory_order_relaxed)) {
 		return 0;
@@ -361,6 +363,13 @@ int Vm::OnHook(lua_State* L, lua_Debug* ar) {
 	}
 	// COUNT：保持当前的区域状态
 	AdaptCount();
+	if (refreshed && ev == LUA_HOOKCOUNT) {
+		// 断点刚变（或 VM 刚接入会话）：正在跑的函数没有 CALL 事件可等，当场判断它和它的调用者热不热。
+		// 否则模块顶层代码、主循环这类一直不返回的函数里新下的断点要等下次进入才生效
+		if (lua::HookFuncInfo(L, ar, false, f) && IsHotFunc(f)) return BaseMask() | region | LUA_MASKLINE;
+		lua_Debug self;
+		if (lua_getstack(L, 0, &self) && AnyHotFrame(L, &self)) return BaseMask() | region;
+	}
 	return BaseMask() | (curMask & (region | LUA_MASKLINE));
 }
 
