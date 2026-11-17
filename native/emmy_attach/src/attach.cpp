@@ -7,17 +7,21 @@
 // 挂钩的入口只负责在 Lua 线程上把 lua_State 报给核心（Emmy_RegisterLuaVm），其余都在核心里。
 // 附加时还没有 Lua 模块（UE 编辑器里 Game 还没启动）：返回 kWaitingForLua，后台线程每秒找一次，找到后照第 1 步初始化，
 // token 用最近一次附加给的。UnLua 等把 Lua 当 C++ 编译时导出名是修饰过的（?lua_gettop@@...），按 @@ 前的名字认。
-// 等的同时挂 LoadLibraryExW / LoadLibraryExA：UnLua 的 Lua.dll 是延迟加载的，第一次调 lua_* 时才加载，
+// 等的同时挂 ntdll 的 LdrLoadDll（所有 LoadLibrary* 和延迟加载最后都走它；没有时退到 LoadLibraryExW / ExA）：
+// UnLua 的 Lua.dll 是延迟加载的，第一次调 lua_* 时才加载，
 // 紧接着就建 VM、跑模块顶层代码。只靠每秒找一次会晚上最多 1 秒，这些代码（如 GameInstance 的 ReceiveInit）就错过了；
 // 挂上之后 Lua 模块一加载完、在同一线程上返回给调用方之前就完成初始化。
 // 附加后第一次遇到新的 Lua VM 时，在 Lua 线程上最多等 kHoldNewVmMs 毫秒让 IDE 连上并下完断点（configurationDone），
 // 再放它往下跑；IDE 已经就绪时不等。这样「先附加再开始 PIE」时，VM 一创建就执行的代码也能停住。
+// 环境变量 EMMY_ATTACH_TRACE 指向一个文件时，把附加、等 Lua、初始化、VM 登记的时间点追加写进去，排查时序问题用。
 #include <Windows.h>
 #include <Psapi.h>
 #include <TlHelp32.h>
 
 #include <atomic>
+#include <cstdarg>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <unordered_map>
@@ -31,6 +35,31 @@
 extern HINSTANCE g_attachInstance;
 
 namespace {
+
+// ---- 跟踪日志（EMMY_ATTACH_TRACE=文件路径 时才写） ----
+// 不用 C++ 流和堆：可能在 LdrLoadDll 钩子里、加载器刚放锁的时候调用
+void Trace(const char* fmt, ...) {
+	static const DWORD envLen = GetEnvironmentVariableA("EMMY_ATTACH_TRACE", nullptr, 0);
+	if (envLen == 0) return;
+	char path[MAX_PATH];
+	if (GetEnvironmentVariableA("EMMY_ATTACH_TRACE", path, MAX_PATH) == 0) return;
+	char line[512];
+	int n = _snprintf_s(line, sizeof(line), _TRUNCATE, "%lu [%lu] ", GetTickCount(), GetCurrentThreadId());
+	if (n < 0) n = 0;
+	va_list ap;
+	va_start(ap, fmt);
+	int m = _vsnprintf_s(line + n, sizeof(line) - n - 2, _TRUNCATE, fmt, ap);
+	va_end(ap);
+	if (m < 0) m = static_cast<int>(strlen(line + n));
+	n += m;
+	line[n++] = '\r';
+	line[n++] = '\n';
+	HANDLE f = CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+	if (f == INVALID_HANDLE_VALUE) return;
+	DWORD written = 0;
+	WriteFile(f, line, static_cast<DWORD>(n), &written, nullptr);
+	CloseHandle(f);
+}
 
 // ---- 核心（按版本动态加载的 emmy_debugger_core.dll） ----
 struct CoreApi {
@@ -201,9 +230,13 @@ void OnLuaEntry(lua_State* L) {
 	g_seen.insert(L);
 	ReleaseSRWLockExclusive(&g_vmLock);
 	// 协程也会走到这里，核心按 global_State 合并成同一个 VM
-	g_core.registerLuaVm(L, "windows-attach");
+	const uint64_t vmId = g_core.registerLuaVm(L, "windows-attach");
+	Trace("new lua_State %p -> vm %llu", static_cast<void*>(L), static_cast<unsigned long long>(vmId));
 	// 附加后的第一个新 VM：在它跑任何 Lua 之前等 IDE 下完断点（IDE 已就绪时立刻返回）
-	if (g_holdNewVm.exchange(false) && g_core.waitIDE) g_core.waitIDE(kHoldNewVmMs);
+	if (g_holdNewVm.exchange(false) && g_core.waitIDE) {
+		const int ready = g_core.waitIDE(kHoldNewVmMs);
+		Trace("hold new vm: ide %s", ready ? "ready" : "not ready after timeout");
+	}
 }
 
 // lua_KContext 在 5.2 是 int、5.3/5.4 是 intptr_t：按 intptr_t 转发，x86/x64 的调用约定下对 int 也成立
@@ -305,6 +338,7 @@ uint32_t Initialize() {
 	if (!strcmp(version, "54")) hooked += InstallHook("lua_resume", reinterpret_cast<void*>(&Resume54Hook)) ? 1 : 0;
 	else if (!strcmp(version, "51")) hooked += InstallHook("lua_resume", reinterpret_cast<void*>(&Resume51Hook)) ? 1 : 0;
 	else hooked += InstallHook("lua_resume", reinterpret_cast<void*>(&Resume52Hook)) ? 1 : 0;
+	Trace("lua %s: listening on %d, hooked %d entry points", version, port, hooked);
 	if (hooked == 0) return emmy_attach::kHookFailed;
 	InstallHook("lua_close", reinterpret_cast<void*>(&CloseHook));
 	return emmy_attach::kOk;
@@ -319,6 +353,7 @@ void TryInitializeLocked() {
 	t_initializing = true;
 	g_initResult = Initialize();
 	t_initializing = false;
+	Trace("initialize -> %u", g_initResult);
 	// 还没找到 Lua 时之后再找；其余失败不重试，避免挂两遍钩子
 	g_initialized = g_initResult != emmy_attach::kNoLua;
 	g_initDone.store(g_initialized, std::memory_order_release);
@@ -342,15 +377,29 @@ bool ExportsLua(HMODULE module) {
 void OnModuleLoaded(HMODULE module) {
 	if (!module || t_initializing || g_initDone.load(std::memory_order_acquire)) return;
 	if (!ExportsLua(module)) return;
+	Trace("lua module loaded at %p, initializing on loader thread", static_cast<void*>(module));
 	AcquireSRWLockExclusive(&g_initLock);
 	if (!g_initialized) TryInitializeLocked();
 	if (g_initialized) g_waiting = false;
 	ReleaseSRWLockExclusive(&g_initLock);
 }
 
+struct UnicodeStringView {
+	USHORT Length;
+	USHORT MaximumLength;
+	PWSTR Buffer;
+};
+typedef LONG(NTAPI* LdrLoadDllFn)(PWSTR, PULONG, UnicodeStringView*, PVOID*);
 typedef HMODULE(WINAPI* LoadLibraryExWFn)(LPCWSTR, HANDLE, DWORD);
 typedef HMODULE(WINAPI* LoadLibraryExAFn)(LPCSTR, HANDLE, DWORD);
 
+// LoadLibrary*、延迟加载（delayimp 的 LoadLibraryExA）、LdrLoadDll 直调最后都到这里；加载器锁在返回前已经放掉
+LONG NTAPI LdrLoadDllHook(PWSTR searchPath, PULONG characteristics, UnicodeStringView* name, PVOID* base) {
+	auto orig = Original<LdrLoadDllFn>();
+	const LONG status = orig(searchPath, characteristics, name, base);
+	if (status >= 0 && base) OnModuleLoaded(static_cast<HMODULE>(*base));
+	return status;
+}
 HMODULE WINAPI LoadLibraryExWHook(LPCWSTR name, HANDLE file, DWORD flags) {
 	auto orig = Original<LoadLibraryExWFn>();
 	HMODULE module = orig(name, file, flags);
@@ -365,29 +414,35 @@ HMODULE WINAPI LoadLibraryExAHook(LPCSTR name, HANDLE file, DWORD flags) {
 	return module;
 }
 
-// LoadLibraryA/W 在 kernelbase 里都转到 Ex 版本；kernelbase 没有时退到 kernel32。挂过就不再挂。
+bool HookExport(HMODULE module, const char* name, void* hook) {
+	void* target = module ? reinterpret_cast<void*>(GetProcAddress(module, name)) : nullptr;
+	if (!target) return false;
+	auto* handle = new HOOK_TRACE_INFO();
+	if (LhInstallHook(target, hook, target, handle) != 0) {
+		delete handle;
+		Trace("hook %s failed: %ls", name, RtlGetLastErrorString());
+		return false;
+	}
+	ULONG acl[1] = {0};
+	LhSetExclusiveACL(acl, 0, handle); // 空的排除列表 = 所有线程都走钩子
+	return true;
+}
+
+// 优先挂 ntdll!LdrLoadDll：kernelbase 的 LoadLibraryExA/W 在不同 Windows 版本上互相转调的方式不同，
+// 延迟加载辅助函数也可能绕开它们；挂不上时退到 kernelbase（没有时 kernel32）的 LoadLibraryExW / ExA。挂过就不再挂。
 bool g_loadHooksInstalled = false; // g_initLock 保护
 void InstallLoadLibraryHooksLocked() {
 	if (g_loadHooksInstalled) return;
 	g_loadHooksInstalled = true;
+	if (HookExport(GetModuleHandleW(L"ntdll.dll"), "LdrLoadDll", reinterpret_cast<void*>(&LdrLoadDllHook))) {
+		Trace("waiting for lua: hooked LdrLoadDll");
+		return;
+	}
 	HMODULE kb = GetModuleHandleW(L"kernelbase.dll");
 	if (!kb) kb = GetModuleHandleW(L"kernel32.dll");
-	if (!kb) return;
-	struct Item {
-		const char* name;
-		void* hook;
-	} items[] = {{"LoadLibraryExW", reinterpret_cast<void*>(&LoadLibraryExWHook)}, {"LoadLibraryExA", reinterpret_cast<void*>(&LoadLibraryExAHook)}};
-	for (const Item& item : items) {
-		void* target = reinterpret_cast<void*>(GetProcAddress(kb, item.name));
-		if (!target) continue;
-		auto* handle = new HOOK_TRACE_INFO();
-		if (LhInstallHook(target, item.hook, target, handle) != 0) {
-			delete handle;
-			continue;
-		}
-		ULONG acl[1] = {0};
-		LhSetExclusiveACL(acl, 0, handle);
-	}
+	const bool w = HookExport(kb, "LoadLibraryExW", reinterpret_cast<void*>(&LoadLibraryExWHook));
+	const bool a = HookExport(kb, "LoadLibraryExA", reinterpret_cast<void*>(&LoadLibraryExAHook));
+	Trace("waiting for lua: hooked LoadLibraryExW=%d LoadLibraryExA=%d", w, a);
 }
 
 DWORD WINAPI WaitForLuaThread(LPVOID) {
@@ -417,6 +472,7 @@ DWORD WINAPI AttachInit(LPVOID param) {
 		g_core.setToken(g_pendingToken.c_str());
 	}
 	uint32_t result = g_initResult;
+	Trace("attach: initialized=%d result=%u", g_initialized ? 1 : 0, g_initResult);
 	if (!g_initialized) {
 		// 还没有 Lua：留在进程里等。Lua 模块一加载就初始化（LoadLibrary 钩子），后台线程每秒再找一次兜底。
 		// 线程只开一个，重复附加只更新 token

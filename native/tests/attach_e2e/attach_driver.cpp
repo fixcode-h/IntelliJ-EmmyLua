@@ -134,6 +134,13 @@ void LateLoadScenario(const std::string& tools, const std::string& hostExe) {
 	si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
 	PROCESS_INFORMATION pi{};
 	std::string cmdLine = "\"" + hostExe + "\"";
+	// 注入组件把附加、等 Lua、初始化、VM 登记的时间点写进这个文件，失败时打印出来看时序
+	char tempDir[MAX_PATH] = {0};
+	GetTempPathA(MAX_PATH, tempDir);
+	const std::string tracePath = std::string(tempDir) + "emmy_attach_late_trace.txt";
+	DeleteFileA(tracePath.c_str());
+	SetEnvironmentVariableA("EMMY_ATTACH_TRACE", tracePath.c_str());
+	const int failuresBefore = g_failures;
 	if (!CreateProcessA(nullptr, cmdLine.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
 		Check(false, "启动晚加载宿主");
 		CloseHandle(stdinRead);
@@ -182,6 +189,19 @@ void LateLoadScenario(const std::string& tools, const std::string& hostExe) {
 	TerminateProcess(pi.hProcess, 0);
 	CloseHandle(pi.hThread);
 	CloseHandle(pi.hProcess);
+	SetEnvironmentVariableA("EMMY_ATTACH_TRACE", nullptr);
+	if (g_failures != failuresBefore) {
+		std::printf("---- 注入组件跟踪（%s）----\n", tracePath.c_str());
+		if (FILE* f = std::fopen(tracePath.c_str(), "rb")) {
+			char buf[4096];
+			size_t n;
+			while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) std::fwrite(buf, 1, n, stdout);
+			std::fclose(f);
+		} else {
+			std::printf("（没有跟踪文件：组件没写任何东西）\n");
+		}
+		std::printf("----\n");
+	}
 }
 
 } // namespace
@@ -201,6 +221,13 @@ int main(int argc, char** argv) {
 	si.cb = sizeof(si);
 	PROCESS_INFORMATION pi{};
 	std::string cmdLine = "\"" + hostExe + "\"";
+	// 注入组件把附加、等 Lua、初始化、VM 登记的时间点写进这个文件，失败时打印出来看时序
+	char tempDir[MAX_PATH] = {0};
+	GetTempPathA(MAX_PATH, tempDir);
+	const std::string tracePath = std::string(tempDir) + "emmy_attach_late_trace.txt";
+	DeleteFileA(tracePath.c_str());
+	SetEnvironmentVariableA("EMMY_ATTACH_TRACE", tracePath.c_str());
+	const int failuresBefore = g_failures;
 	if (!CreateProcessA(nullptr, cmdLine.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
 		std::printf("[FAIL] 启动宿主失败（%lu）\n", GetLastError());
 		return 1;
