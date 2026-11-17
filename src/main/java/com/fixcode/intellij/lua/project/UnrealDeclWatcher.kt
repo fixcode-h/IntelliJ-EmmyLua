@@ -27,9 +27,13 @@ class UnrealDeclWatcher(private val project: Project) : Disposable {
             .scheduleWithFixedDelay({ check() }, 15, 15, TimeUnit.SECONDS)
     }
 
-    /** 设置页点了按钮后马上看一次，不等下一轮。 */
+    /**
+     * 点了按钮、生成刚跑完时马上看，不等下一轮。UELink 空闲 5 秒后才写清单（之前不算生成过），
+     * 所以 3 秒看一次不够：再在 8、15 秒各看一次，清单一出现就换库目录。
+     */
     fun checkSoon() {
-        AppExecutorUtil.getAppScheduledExecutorService().schedule({ check() }, 3, TimeUnit.SECONDS)
+        val executor = AppExecutorUtil.getAppScheduledExecutorService()
+        for (delay in longArrayOf(3, 8, 15)) executor.schedule({ check() }, delay, TimeUnit.SECONDS)
     }
 
     private fun current(): List<Path> =
