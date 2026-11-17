@@ -19,8 +19,12 @@ import com.intellij.openapi.project.Project
 class LuaDebugSettings : SimplePersistentStateComponent<LuaDebugSettings.State>(State()) {
 
     class State : BaseState() {
-        /** 允许 Agent 用 mode=lua 执行任意表达式；默认只允许读变量路径（设计文档 6.2）。 */
-        var allowAgentLuaEval by property(false)
+        /**
+         * 允许 Agent 用 mode=lua 执行任意表达式。2.5.2 起默认开启（用户 2026-11-17）；仍按控制处理，每个会话第一次要用户确认。
+         * BaseState 不存等于默认值的项：以前没动过这项的用户（存的是旧默认 false，没写进文件）升级后自动变成开启；
+         * 升级后手动关掉的会存成 false。
+         */
+        var allowAgentLuaEval by property(true)
         /** 空 = 自动找（ANDROID_HOME / PATH）。 */
         var adbPath by string("")
         /** 未裁剪 so 的搜索目录，分号分隔，支持 $PROJECT_DIR$。 */

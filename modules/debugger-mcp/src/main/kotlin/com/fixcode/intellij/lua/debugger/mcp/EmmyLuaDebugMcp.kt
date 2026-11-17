@@ -64,7 +64,7 @@ class EmmyLuaDebugMcp(
             - The first control action on a session and every attach ask the user in the IDE; on `permission_denied` ask the user, do not retry.
             - The user's own breakpoints are listed without `byAgent`; leave them alone.
             - While a VM is stopped the game thread is frozen: continue when done.
-            - `eval` defaults to read-only value paths (self.items[3].id, #list); mode=lua is off unless the user enabled it.
+            - `eval` defaults to read-only value paths (self.items[3].id, #list); mode=lua runs Lua (allowed by default, the user confirms once per session; may be turned off in settings).
             - Refs and frames die when the VM continues; on `stale_reference` fetch the stack again.
             - `profile` samples the Lua call stack every 1000 VM instructions: `selfPct` is time in the function itself, `totalPct` includes
               callees. It counts Lua instructions, not time inside C / engine calls, and Lua runs about 2x slower while sampling.

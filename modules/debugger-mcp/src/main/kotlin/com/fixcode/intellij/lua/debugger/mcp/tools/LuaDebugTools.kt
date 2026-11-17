@@ -491,7 +491,7 @@ class LuaDebugTools(
             useWhen = "$SESSION reports event=break: see where and why, read variables and table fields (depth 1-3, ref to expand), " +
                 "evaluate value paths, switch frames with frame=N; output / probes any time; profile while a slow scene runs to find hot Lua functions.",
             insteadOf = "guessing values or adding print / os.clock() timers: reads the live state without changing scripts.",
-            notFor = "a running VM (stack / locals / eval need event=break). mode=lua is off unless the user enabled it: prefer value " +
+            notFor = "a running VM (stack / locals / eval need event=break). mode=lua needs a one-time user confirmation per session (the user may have turned it off): prefer value " +
                 "paths. Refs die when the VM continues. profile counts Lua instructions, not time in C/engine calls; Lua runs ~2x slower meanwhile.",
             results = "stack: frames[{i,function,file,line}]; locals/eval: value nodes {n,t,v,c,more,ref,err}; output/probes: items + next; " +
                 "profile: samples + items[{fn,file,line,selfPct,totalPct}].",
@@ -611,7 +611,7 @@ class LuaDebugTools(
             if (!policy.luaEvalAllowed()) {
                 throw ToolException(
                     "eval_forbidden",
-                    "执行任意 Lua 已关闭（防止 Agent 改动游戏状态）。改用 mode=value_path 读变量，" +
+                    "用户在设置里关掉了执行任意 Lua（防止 Agent 改动游戏状态）。改用 mode=value_path 读变量，" +
                         "或请用户在 设置 > 工具 > EmmyLua 调试 里打开「允许 Agent 执行任意 Lua」。",
                 )
             }

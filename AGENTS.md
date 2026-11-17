@@ -66,7 +66,7 @@
 - 控制（断点增删改、继续、单步、暂停、结束会话、UE 热重载 `reload`）：每个调试会话**第一次**控制时在 IDE 里弹通知「允许一次 / 本次会话总是允许 / 拒绝」；拒绝或超时返回 `permission_denied`，说明里让 Agent 去问用户，不要重试。「撤销 Agent 控制」清掉所有授权。
 - `attach` 每次都确认。
 - `profile`（采样性能分析）按只读处理、不弹确认：它不暂停、不改变量、不改执行路径，和 `output` / `probes` 一样只观察；代价是采样期间 Lua 变慢（约 2 倍），所以限时（`duration_ms` ≤ 60000）并由 runtime 到点自动停，IDE 断开也会停。
-- `eval` 默认 `mode=value_path`（只读变量路径）；`mode=lua` 执行任意 Lua，要用户在设置里打开，并且按控制处理。runtime 侧的 `allowLuaEval` 也由引擎按设置下发，作为第二道保险。
+- `eval` 默认 `mode=value_path`（只读变量路径）；`mode=lua` 执行任意 Lua，设置里「允许 Agent 执行任意 Lua 表达式」默认开启（2.5.2 起，用户 2026-11-17 定；用户可关），按控制处理（每个会话第一次弹确认）。runtime 侧的 `allowLuaEval` 也由引擎按设置下发，作为第二道保险。
 - 监听地址、来源校验、客户端连接由 IDE 的 MCP 服务器负责，插件不碰。
 
 ### 传输和接入（和 UEToVS 的差别）
