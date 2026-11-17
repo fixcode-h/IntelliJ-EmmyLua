@@ -39,6 +39,12 @@ data class SessionConfig(
     val heartbeatIntervalMillis: Long = 5_000,
     val heartbeatMaxMisses: Int = 3,
     val reconnect: ReconnectPolicy = ReconnectPolicy(),
+    /**
+     * 握手回 BUSY（进程里还挂着上一个 IDE 连接）时的重试：停止调试后马上再附加、上次 IDE 被强杀时，
+     * runtime 要等旧连接关掉或心跳超时（15 秒）才释放。默认最多等约 20 秒。
+     */
+    val busyRetries: Int = 20,
+    val busyRetryDelayMillis: Long = 1_000,
     val outputCapacity: Int = 5_000,
     val breakpointHitCapacity: Int = 5_000
 )
