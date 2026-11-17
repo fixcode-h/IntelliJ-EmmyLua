@@ -91,6 +91,7 @@ class LuaMcpInstallDialog private constructor(
             }
         }
         row { comment(LuaDebugBundle.message("mcp.dialog.safe")) }
+        row { comment(LuaDebugBundle.message("mcp.dialog.routerOnly")) }
     }
 
     override fun createLeftSideActions(): Array<Action> = arrayOf(uninstallAction)

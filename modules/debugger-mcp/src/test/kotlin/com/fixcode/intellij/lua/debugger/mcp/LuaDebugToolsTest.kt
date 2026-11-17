@@ -8,6 +8,7 @@ import com.fixcode.intellij.lua.debugger.mcp.tools.LuaDebugTools
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -249,6 +250,44 @@ class LuaDebugToolsTest {
         confirmer.launch = true
         val r = client.call(S, mapOf("action" to "attach", "pid" to 100))
         assertEquals("s-new", r["sessionId"])
+    }
+
+    @Test
+    fun `configs 列出运行配置，launch 按名字以 Debug 启动并每次确认`() {
+        backend.runConfigs += RunConfigInfo("UE Lua Attach", "Lua 附加", lua = true, canDebug = true, selected = true)
+        backend.runConfigs += RunConfigInfo("Server", "Application", lua = false, canDebug = true)
+        backend.runConfigs += RunConfigInfo("Docs", "Shell Script", lua = false, canDebug = false)
+        val list = client.call(S, mapOf("action" to "configs"))
+        assertEquals(3L, list["count"])
+        @Suppress("UNCHECKED_CAST")
+        val items = list["items"] as List<Map<String, Any?>>
+        assertEquals(true, items[0]["lua"])
+        assertEquals(true, items[2]["noDebug"])
+        assertFalse(items[1].containsKey("lua")) // 默认值省略
+
+        confirmer.launch = false
+        assertEquals("permission_denied", client.call(S, mapOf("action" to "launch", "config" to "UE Lua Attach")).code)
+        assertTrue(backend.commands.isEmpty())
+        confirmer.launch = true
+        val r = client.call(S, mapOf("action" to "launch", "config" to "lua attach")) // 部分匹配、不分大小写
+        assertEquals("s-launch", r["sessionId"])
+        assertEquals("launch UE Lua Attach debug=true", backend.commands.last())
+
+        assertEquals("not_supported", client.call(S, mapOf("action" to "launch", "config" to "Docs")).code)
+        assertEquals("target_not_found", client.call(S, mapOf("action" to "launch", "config" to "nope")).code)
+        val other = client.call(S, mapOf("action" to "launch", "config" to "Server"))
+        assertNull(other["sessionId"])
+        assertNotNull(other["note"])
+        assertEquals("invalid_argument", client.call(S, mapOf("action" to "launch")).code)
+    }
+
+    @Test
+    fun `restart 换成新会话`() {
+        backend.addSession("s1", "game.exe (1)")
+        val r = client.call(S, mapOf("action" to "restart"))
+        assertEquals("s1", r["restarted"])
+        assertEquals("s1-r", r["sessionId"])
+        assertEquals("restart s1", backend.commands.last())
     }
 
     @Test

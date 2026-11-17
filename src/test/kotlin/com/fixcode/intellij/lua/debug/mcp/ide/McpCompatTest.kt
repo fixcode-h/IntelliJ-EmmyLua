@@ -28,7 +28,8 @@ class McpCompatTest {
         for (tool in tools) {
             val d = IdeMcpCompat.descriptor(tool)
             assertEquals(tool.name, d.name)
-            assertEquals(tool.description, d.description)
+            assertEquals(IdeMcpCompat.describe(tool), d.description)
+            assertTrue(d.description.endsWith("\n${IdeMcpCompat.ZH_TITLE_PREFIX}${tool.titleZh}"))
         }
         val r = IdeMcpCompat.result(arrayOf(com.intellij.mcpserver.McpToolCallResultContent.Text("{}")), true)
         assertTrue(r.isError)
@@ -46,7 +47,14 @@ class McpCompatTest {
                 for (tool in tools) {
                     val d = IdeMcpCompat.descriptor(tool, loader)
                     assertEquals("${dir.name} ${tool.name}", tool.name, get(d, "getName"))
-                    assertEquals(dir.name, tool.description, get(d, "getDescription"))
+                    assertEquals(dir.name, IdeMcpCompat.describe(tool), get(d, "getDescription"))
+                    runCatching { get(d, "getCategory") }.getOrNull()?.let { category ->
+                        // 2026.2 起：alwaysIncluded = true，「仅路由器模式」下也直接列出
+                        category.javaClass.methods.firstOrNull { it.name == "getAlwaysIncluded" }?.let {
+                            assertEquals("${dir.name} alwaysIncluded", true, it.invoke(category))
+                        }
+                        assertEquals(dir.name, IdeMcpCompat.CATEGORY_SHORT_NAME, get(category, "getShortName"))
+                    }
                     runCatching { d.javaClass.getMethod("getTitle") }.getOrNull()?.let {
                         assertEquals(dir.name, tool.title, it.invoke(d))
                     }

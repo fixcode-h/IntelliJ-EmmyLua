@@ -13,7 +13,7 @@ interface McpConfirmer {
      */
     fun confirmControl(subject: String, clientName: String?): ControlDecision
 
-    /** 「Agent 请求附加到 X」：每次都确认。 */
+    /** 「Agent 想 [description]」（附加到进程、以 Debug 启动运行配置）：每次都确认。[description] 是动宾短语。 */
     fun confirmLaunch(description: String, clientName: String?): Boolean
 
     /** 设置里是否允许 evaluate 的 mode=lua（执行任意 Lua）。 */
@@ -52,7 +52,7 @@ class McpPermissionPolicy(private val confirmer: McpConfirmer) {
 
     fun checkLaunch(description: String, clientName: String?): String? =
         if (confirmer.confirmLaunch(description, clientName)) null
-        else "用户没有同意附加到「$description」（拒绝或超时）。请先询问用户。"
+        else "用户没有同意$description（拒绝或超时）。请先询问用户，不要重试。"
 
     fun luaEvalAllowed(): Boolean = confirmer.luaEvalAllowed()
 

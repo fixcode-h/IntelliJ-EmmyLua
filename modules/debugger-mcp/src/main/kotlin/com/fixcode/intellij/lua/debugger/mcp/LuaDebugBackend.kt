@@ -30,6 +30,25 @@ interface LuaDebugBackend {
 
     fun stopSession(sessionId: String): CompletableFuture<Unit>
 
+    // ---- IDE 运行配置（IDE 自带 MCP 的 execute_run_configuration 只能 Run，调试要从这里启动）----
+
+    /** 项目里的运行配置；[RunConfigInfo.running] 表示正在运行或调试。 */
+    fun listRunConfigurations(): List<RunConfigInfo> = emptyList()
+
+    /**
+     * 用 IDE 的 Debug（或 Run）执行器启动一个运行配置，和用户点调试按钮一样。
+     * Lua 调试配置等到会话连上再完成，返回带 sessionId 的结果；其他配置启动后就完成。
+     */
+    fun launchConfiguration(request: LaunchRequest): CompletableFuture<LaunchResult> =
+        CompletableFuture.failedFuture(LuaDebugBackendException(ErrorCode.NOT_SUPPORTED, "这个 IDE 版本的插件不支持启动运行配置。"))
+
+    /**
+     * 重启调试会话：用运行配置启动的按配置重新执行（会重新找进程），Agent 直接附加的按原目标重新附加。
+     * 完成时返回新会话的 sessionId。
+     */
+    fun restartSession(sessionId: String): CompletableFuture<String> =
+        CompletableFuture.failedFuture(LuaDebugBackendException(ErrorCode.NOT_SUPPORTED, "这个 IDE 版本的插件不支持重启会话。"))
+
     fun listVms(sessionId: String): List<VmInfo>
 
     /** 运行时能力位（协议 v3 welcome.caps），例如 "luaEval"、"valuePath"、"logpoint"。 */
@@ -157,6 +176,36 @@ enum class ErrorCode {
 }
 
 enum class TargetKind { PROCESS, DEVICE }
+
+data class RunConfigInfo(
+    val name: String,
+    /** 配置类型的显示名，例如「Lua 附加」「Application」。 */
+    val type: String,
+    /** 新调试链路的 Lua 配置：Debug 启动后会出现在 lua_debug_session 的会话里。 */
+    val lua: Boolean,
+    /** 有能以 Debug 方式运行它的 runner。 */
+    val canDebug: Boolean,
+    val running: Boolean = false,
+    /** IDE 工具栏当前选中的配置。 */
+    val selected: Boolean = false,
+    /** 多项目时所属的项目名（由 Composite 填）。 */
+    val project: String? = null,
+)
+
+data class LaunchRequest(
+    val name: String,
+    /** false = 用 Run 执行器（只对非 Lua 配置有意义）。 */
+    val debug: Boolean = true,
+    /** 多项目时指定项目名；省略时按配置名在各项目里找。 */
+    val project: String? = null,
+)
+
+data class LaunchResult(
+    val name: String,
+    /** Lua 配置启动后连上的会话；非 Lua 配置为空。 */
+    val sessionId: String? = null,
+    val executor: String = "debug",
+)
 
 enum class SessionKind { ATTACH, DEVICE, ADDRESS }
 
