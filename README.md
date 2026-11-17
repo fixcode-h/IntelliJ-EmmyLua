@@ -42,6 +42,7 @@ EmmyLua 是一个功能强大的 Lua 语言支持插件，专为 IntelliJ IDEA �
 - **MCP 调试工具** - 让 Claude Code、Cursor 等 Agent 直接下断点、看栈和变量
 - **MCP 代码查找** - Agent 用 `lua_code` 按名字找 Lua 函数 / 方法 / 类、按 require 路径找文件、看文件大纲、查引用（经 emmylua_ls，替代 UEToVS 的 Lua 工具）
 - **UE 一键热重载** - 编辑器右键「重载到 UE」（Ctrl+Alt+R）或设置里打开「保存后自动重载」，经 UELink 让开着的 UE 编辑器 / 游戏重新加载 Lua 模块，不用附加
+- **从变量跳到 UE 编辑器** - 暂停时变量树里的 UE 对象右键「在 UE 中选中」（关卡里选中并对焦它所属的 Actor，资源、蓝图在内容浏览器里定位）、「在 UE 中打开资产」（打开资源，Actor、UMG 控件打开它的蓝图）；经 UELink 2.10.0 以上，Lua 停在编辑器里时等继续运行后执行
 - **断点诊断** - 一直没对上代码的断点变灰并在悬停里说明原因；调试工具栏「诊断断点」列出加载过的 chunk 和建议的路径映射
 - **调试控制台** - 交互式调试控制台，支持表达式求值
 - **Lua 采样性能分析** - 调试窗口的「Lua 采样」页开始 / 停止采样，按函数看自身和总计占比、双击跳到源码，可导出折叠栈用 speedscope / flamegraph.pl 看火焰图；Android 真机附加也能用，Agent 用 `lua_debug_inspect action=profile`

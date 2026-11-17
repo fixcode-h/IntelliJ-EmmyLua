@@ -647,6 +647,7 @@ EMMY_HOST_API_EXPORT int      EMMY_HOST_API_CALL Emmy_HasHostValueProviderV2(uin
 
 runtime 侧约定：
 
+- UELink 给 UObject 的 `hint` 是 `GetPathName()` 原文（不截断），IDE 右键「在 UE 中选中 / 打开资产」把它原样交给 UELink 的 `object.reveal`（第 16 节）。runtime 有时会把 `hint` 换成别的提示（例如被遮蔽的局部变量），IDE 只认以 `/` 开头、不含空白的 `hint`。
 - 生成 userdata 或 table 的 `Variable` 时先调 `describe`（L + index）。认领了就用它的 `typeName` / `summary` / `hint` / `kind`；`valid = false` 时摘要是 `<已失效>`、带 `attrs: ["invalid"]`、没有子项，**之后不再对这个值调用 helper 或 `__tostring`**。
 - userdata 被认领时，它的子项全部来自 `listChildren`（L + index）；table 被认领时（UnLua 实例表），自己的 Lua 字段照常列出，再加一个分组「UE 对象 名字」，分组的子项来自 `listChildren`（第 6.4 节）。
 - 子项里 `expandable` 为真的，runtime 分配协议 `ref` 并记住 `childRef`；展开时用 `hostRef = childRef` 再调 `listChildren`。`kind = "group"` 的子项当分组节点显示。
@@ -765,6 +766,7 @@ val groups: List<VariableDto>?, val sorted: Boolean?, val truncated: Boolean?
 | 隐藏此字段 | 同上 | 改显示规则文件的 `hide` |
 | 标记对象 | 有 `objectId` 的 | 平台 Mark Object |
 | 在调用栈中查看 | 协程 | 切换线程 |
+| 在 UE 中选中 / 在 UE 中打开资产 | `kind = ueObject` 且 `hint` 是对象路径的（UELink 显示的 UObject） | 经 UELink（2.10.0+）的 `object.reveal` 让编辑器选中所属 Actor、在内容浏览器定位资源或蓝图 / 打开资源或实例的蓝图（`debug/ue/UnrealObjectReveal`）。Lua 停在编辑器进程里时游戏线程和编辑器界面都卡在暂停循环里，`/rpc` 不会被处理，所以等这个会话没有暂停了再发 |
 
 悬停（编辑器里鼠标停在变量上）：直接显示同一棵树的根节点，首层自动展开。内联值（行尾灰字）：只用 `value`，不展开任何东西；只请求编辑器可见行涉及的名字（协议第 18 节已约定）。
 

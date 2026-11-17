@@ -32,6 +32,7 @@ import com.fixcode.intellij.lua.debug.engine.VariableContainer
 import com.fixcode.intellij.lua.debug.protocol.Capabilities
 import com.fixcode.intellij.lua.debug.protocol.EvalModes
 import com.fixcode.intellij.lua.debug.protocol.VariableDto
+import com.fixcode.intellij.lua.debug.ue.UnrealObjectReveal
 import java.util.concurrent.CompletableFuture
 import javax.swing.Icon
 
@@ -310,6 +311,14 @@ class LuaV3Value internal constructor(
     }
 
     internal val pinned: Boolean get() = variable.hasAttr("pinned")
+
+    /** 右键「在 UE 中选中 / 打开资产」用：UE 对象的路径（UELink 宿主值提供者的 hint），不是 UE 对象时为 null。 */
+    internal val ueObjectPath: String? get() = UnrealObjectReveal.objectPathOf(variable)
+
+    /** 菜单上显示的对象名：UELink 给的摘要是对象名（GetName）。 */
+    internal val ueObjectName: String get() = variable.value
+
+    internal val session: DebugSession get() = engine
 
     override fun canNavigateToSource(): Boolean = variable.location != null
 
