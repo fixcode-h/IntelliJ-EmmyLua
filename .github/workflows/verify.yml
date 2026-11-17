@@ -36,6 +36,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash .github/scripts/fetch-emmylua-ls.sh "" build/emmylua-ls
+      # 真 emmylua_ls 冒烟：UE 布局下的声明能跳转、5 万行声明的冷启动时间（docs/design/lsp-migration.md 的目标）
+      - name: emmylua_ls smoke test
+        run: python3 .github/scripts/lsp-smoke.py build/emmylua-ls/linux-x64/emmylua_ls --report "$GITHUB_STEP_SUMMARY"
       - name: Test, build and verify
         env:
           # 新引擎对着真的原生核心跑端到端用例（NativeRuntimeE2eTest）

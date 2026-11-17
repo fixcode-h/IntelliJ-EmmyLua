@@ -13,6 +13,24 @@ env:
 
 # 工作流运行的任务
 jobs:
+  # 出包门槛：同一个提交上的「Verify Plugin」「Native Core」「Android Agent」都通过才发版。
+  # 这几个工作流和本工作流同时被 push 触发，这里等它们跑完；因路径过滤没有触发的（这次没改到）算通过。
+  tests-gate:
+    name: Wait for tests
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+      - name: Wait for test workflows on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: bash .github/scripts/wait-for-checks.sh "$SHA" verify.yml native-core.yml android-agent.yml
+
   # 原生二进制在出包时现编（不提交进仓库）：Windows 附加用的工具和 dll、Android 真机附加的 agent
   native-windows:
     name: Native windows (${{ matrix.arch }})
@@ -99,7 +117,7 @@ jobs:
           if-no-files-found: error
 
   build-and-release:
-    needs: [native-windows, android-agent]
+    needs: [tests-gate, native-windows, android-agent]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -244,3 +262,16 @@ jobs:
           git add version.properties
           git commit -m "chore(release): 自动更新版本至 ${{ env.NEW_VERSION }}" -m "[skip ci]"
           git push
+
+      # 版本跟踪提交只在 main 上，合回 dev，免得 dev 的版本号落后、以后改这个文件冲突。合不上只警告，不影响发版
+      - name: Merge release commit back to dev
+        continue-on-error: true
+        run: |
+          git fetch origin dev
+          git checkout -B dev-sync origin/dev
+          if git merge --no-edit -m "合并发版 v${{ env.NEW_VERSION }} 的版本跟踪提交回 dev [skip ci]" origin/main; then
+            git push origin HEAD:dev
+          else
+            git merge --abort || true
+            echo "::warning::版本跟踪提交没能自动合回 dev，请手动 git merge origin/main"
+          fi

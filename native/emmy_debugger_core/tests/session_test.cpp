@@ -1060,29 +1060,35 @@ TEST_CASE("session.profile_sampling") {
 	json st = c.Request("profile", {{"action", "start"}, {"intervalInstructions", 100}});
 	CHECK(Ok(st));
 	CHECK_EQ(st["body"]["vms"].size(), static_cast<size_t>(1));
-	std::this_thread::sleep_for(std::chrono::milliseconds(500));
-	json r = c.Request("profile", {{"action", "result"}, {"sort", "total"}, {"limit", 10}});
+	// 采到 add 要看运气：Windows 上 sleep(500us) 实际睡 1–15 毫秒，tick 次数比 Linux 少两个数量级，
+	// 固定等 500 毫秒常常一次 add 都采不到。改成轮询到条件满足（最多 10 秒）。
+	json r;
+	bool hasTick = false, hasAdd = false, foldedOk = false;
+	double tickTotal = 0;
+	for (int attempt = 0; attempt < 100 && !(hasTick && hasAdd && foldedOk); ++attempt) {
+		std::this_thread::sleep_for(std::chrono::milliseconds(100));
+		r = c.Request("profile", {{"action", "result"}, {"sort", "total"}, {"limit", 10}});
+		if (!Ok(r)) break;
+		hasTick = hasAdd = foldedOk = false;
+		for (auto& f : r["body"]["functions"]) {
+			if (f["source"] == "@game/main.lua" && f["line"] == 7) { // tick 总是从宿主 lua_pcall 进来，没有名字
+				hasTick = true;
+				tickTotal = f["totalPercent"].get<double>();
+			}
+			if (f["fn"] == "add" && f["line"] == 3) hasAdd = true;
+		}
+		for (auto& sk : r["body"]["stacks"]) {
+			const std::string text = sk["stack"].get<std::string>();
+			if (text.find("(game/main.lua:7);add (game/main.lua:3)") != std::string::npos) foldedOk = true;
+		}
+	}
 	CHECK(Ok(r));
 	CHECK(r["body"]["running"].get<bool>());
 	CHECK(r["body"]["samples"].get<uint64_t>() > 0);
-	bool hasTick = false, hasAdd = false;
-	double tickTotal = 0;
-	for (auto& f : r["body"]["functions"]) {
-		if (f["source"] == "@game/main.lua" && f["line"] == 7) { // tick 总是从宿主 lua_pcall 进来，没有名字
-			hasTick = true;
-			tickTotal = f["totalPercent"].get<double>();
-		}
-		if (f["fn"] == "add" && f["line"] == 3) hasAdd = true;
-	}
 	CHECK(hasTick);
 	CHECK(hasAdd);
 	CHECK(tickTotal > 50.0); // 游戏线程每次进 Lua 都从 tick 开始
 	CHECK(r["body"]["functions"].size() <= static_cast<size_t>(10));
-	bool foldedOk = false;
-	for (auto& sk : r["body"]["stacks"]) {
-		const std::string text = sk["stack"].get<std::string>();
-		if (text.find("(game/main.lua:7);add (game/main.lua:3)") != std::string::npos) foldedOk = true;
-	}
 	CHECK(foldedOk);
 
 	// 暂停在断点时不采样
