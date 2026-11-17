@@ -48,6 +48,22 @@ object UnrealDecl {
     }
 
     /**
+     * IDE 里打开 / 关掉后台生成：记进项目设置，再通知 UE 编辑器。设置页「应用」和上手检查共用。
+     * UE 编辑器没开时只记下开关，[UnrealDeclWatcher] 发现编辑器打开后自动补开。
+     */
+    fun setEnabledFromIde(project: Project, enabled: Boolean) {
+        LuaProjectSettings.getInstance(project).unrealLuaDecl = enabled
+        UnrealDeclWatcher.getInstance(project).resetSync()
+        runInBackground(project) {
+            try {
+                setEnabled(project, enabled)
+            } catch (e: IOException) {
+                if (enabled) "已记下，UE 编辑器打开后自动开始生成（${e.message}）" else throw e
+            }
+        }
+    }
+
+    /**
      * UE 那边还没开时：IDE 里勾了开关就先打开再刷新，没勾就报错让先勾上。
      * 设置页里勾了还没点「应用」时按界面上的勾选算（[enabledInUi]）。
      */

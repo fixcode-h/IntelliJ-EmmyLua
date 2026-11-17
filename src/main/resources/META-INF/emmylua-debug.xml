@@ -64,6 +64,9 @@
                                  instance="com.fixcode.intellij.lua.debug.ui.settings.LuaDebugConfigurable"/>
 
         <postStartupActivity implementation="com.fixcode.intellij.lua.debug.ui.mcp.LuaMcpInstallPromptActivity"/>
+        <!-- 打开 UE 项目时的「EmmyLua 上手检查」气泡：语言服务、UE 声明、MCP 合在一个里，UE 项目不再单独弹 MCP 气泡 -->
+        <postStartupActivity implementation="com.fixcode.intellij.lua.onboarding.LuaOnboardingPromptActivity"/>
+        <notificationGroup id="EmmyLua Onboarding" displayType="BALLOON"/>
         <notificationGroup id="EmmyLua Debug" displayType="BALLOON" bundle="messages.LuaDebugBundle" key="notification.group"/>
     </extensions>
 
@@ -93,6 +96,10 @@
     </actions>
 
     <actions>
+        <!-- 工具 → EmmyLua 上手检查…：随时打开 -->
+        <action id="EmmyLua.Onboarding" class="com.fixcode.intellij.lua.onboarding.OpenLuaOnboardingAction">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
         <group id="EmmyLua.Debug.Tools" popup="true" text="EmmyLua 调试">
             <action id="EmmyLua.Debug.InstallMcp"
                     class="com.fixcode.intellij.lua.debug.ui.mcp.InstallMcpAction"/>

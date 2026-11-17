@@ -30,6 +30,7 @@ EmmyLua 是一个功能强大的 Lua 语言支持插件，专为 IntelliJ IDEA �
 - **新版注解语法**：泛型、`---@enum`、`---@overload` 等，和 VS Code / Neovim 上的 EmmyLua 行为一致
 - **标准库**：emmylua_ls 内置，按配置的 Lua 版本（5.1–5.4、LuaJIT）选择
 - **Unreal Engine / UnLua**：IDE 只打开 UE 项目里的 `Content/Script` 时，插件自动往上找 `.uproject`，把 UnLua「Generate IntelliSense」生成的目录（如 `Plugins/UnLua/Intermediate/IntelliSense`）加进库目录，蓝图类型和 `UE.xxx` 都能补全和跳转
+- **上手检查**：打开 UE 项目时，如果还有没准备好的（语言服务没起来、没有 UE 声明、没开 UELink 后台生成、MCP 没装到项目），只弹一个「EmmyLua 上手检查」气泡；点开后一页列出每项状态和一键处理按钮，处理完自动刷新。随时可从「工具 → EmmyLua 上手检查…」打开，「不再提示」按项目记住
 
 以前的 PSI 实现里这些功能**已去掉**：彩虹变量、内联变量等重构、Lua SDK 和 Lua 模块类型、LuaCheck 外部工具（诊断改由 emmylua_ls 做）。
 
