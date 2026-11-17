@@ -8,6 +8,8 @@
 #include "vm.h"
 
 #include <algorithm>
+#include <cmath>
+#include <cstdlib>
 #include <chrono>
 #include <cinttypes>
 #include <cstdio>
@@ -302,8 +304,15 @@ std::string Inspector::FormatNumber(lua_State* L, int idx) {
 	if (lua::IsInteger(L, idx)) {
 		std::snprintf(buf, sizeof(buf), "%lld", static_cast<long long>(lua_tointeger(L, idx)));
 	} else {
-		lua_Number n = lua_tonumber(L, idx);
-		std::snprintf(buf, sizeof(buf), "%.14g", static_cast<double>(n));
+		const double n = static_cast<double>(lua_tonumber(L, idx));
+		// 整数值的浮点数按整数写（带 .0），2^53 以内不用科学计数法（例如 UnLua 的 TypeHash）；
+		// 其他按 %.14g，读回来不相等时再用 %.17g，保证显示的就是真实值
+		if (std::isfinite(n) && n == std::floor(n) && std::fabs(n) < 9007199254740992.0) {
+			std::snprintf(buf, sizeof(buf), EMMY_LUA_VERSION_NUM >= 503 ? "%.1f" : "%.0f", n);
+		} else {
+			std::snprintf(buf, sizeof(buf), "%.14g", n);
+			if (std::isfinite(n) && std::strtod(buf, nullptr) != n) std::snprintf(buf, sizeof(buf), "%.17g", n);
+		}
 		// 5.3+ 的浮点数在 Lua 里打印带 .0，保持一致，便于区分整数
 		if (EMMY_LUA_VERSION_NUM >= 503 && std::strpbrk(buf, ".eEn") == nullptr) {
 			size_t len = std::strlen(buf);

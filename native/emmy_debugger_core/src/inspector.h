@@ -154,6 +154,7 @@ private:
 		std::string owner; // 子项函数名的前缀（类名）
 		bool noEvalNames = false; // 别的协程的帧：valuePath 只对当前帧有效，不给 evaluateName
 		std::string ruleType; // 显示规则按这个类型名匹配（11.1）：类名或模块全名
+		bool unluaClass = false; // UnLua 的类表 / 元表（有 ClassDesc），内部字段收进「内部」
 		bool formatter = false; // 子项由 helper v2 formatter 列（11.2）
 		std::string fmtType;    // 匹配 formatter 时用的类型名
 	};
@@ -195,6 +196,10 @@ private:
 	std::string ClassName(lua_State* L, int idx);
 	const std::string& LoadedName(lua_State* L, int idx);
 	std::string TableSummary(lua_State* L, int idx, size_t maxLen);
+	// 宿主认领的表（UnLua 实例）摘要后面带上的几个 Lua 字段：{Health=100, …}
+	std::string FieldSample(lua_State* L, int idx, size_t maxFields);
+	// 方法、__index 是函数、元表、UnLua 内部字段收进一个默认折叠的「内部」分组
+	void FoldInternal(RefEntry& entry, std::vector<RichKey> internals);
 	// ---- 显示规则（rich_rules.cpp） ----
 	const TypeViewRule* RuleFor(const std::string& type) const;
 	std::string RenderRuleSummary(lua_State* L, int idx, const TypeViewRule& rule);

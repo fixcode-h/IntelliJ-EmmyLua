@@ -60,6 +60,9 @@ struct Game {
 	void Run() {
 		lua_State* L = luaL_newstate();
 		luaL_openlibs(L);
+		// 测试里造 UnLua 类表要用 lightuserdata（ClassDesc），Lua 自己造不出来
+		lua_pushcfunction(L, [](lua_State* S) { lua_pushlightuserdata(S, reinterpret_cast<void*>(0x1234)); return 1; });
+		lua_setglobal(L, "mklud");
 		Emmy_RegisterLuaVm(L, "test");
 		Emmy_SetVmName(L, "TestVM");
 		lua::LoadBuffer(L, kScript, std::strlen(kScript), "@game/main.lua");
@@ -589,6 +592,14 @@ end)())L";
 	}
 	std::map<std::string, json> groups;
 	for (auto& g : ov["body"]["groups"]) groups[g["name"].get<std::string>()] = g;
+	// 方法、元表收在默认折叠的「内部」里，而且排在最后
+	CHECK(groups.count("内部"));
+	CHECK_EQ(ov["body"]["groups"].back()["name"].get<std::string>(), std::string("内部"));
+	CHECK(!groups.count("方法"));
+	if (groups.count("内部")) {
+		json inner = c.Request("variables", {{"ref", groups["内部"]["ref"]}});
+		for (auto& g : inner["body"]["variables"]) groups[g["name"].get<std::string>()] = g;
+	}
 	CHECK(groups.count("方法"));
 	CHECK(groups.count("继承自 BagPanel"));
 	CHECK(groups.count("继承自 BaseView"));
@@ -1049,29 +1060,35 @@ TEST_CASE("session.profile_sampling") {
 	json st = c.Request("profile", {{"action", "start"}, {"intervalInstructions", 100}});
 	CHECK(Ok(st));
 	CHECK_EQ(st["body"]["vms"].size(), static_cast<size_t>(1));
-	std::this_thread::sleep_for(std::chrono::milliseconds(500));
-	json r = c.Request("profile", {{"action", "result"}, {"sort", "total"}, {"limit", 10}});
+	// 采到 add 要看运气：Windows 上 sleep(500us) 实际睡 1–15 毫秒，tick 次数比 Linux 少两个数量级，
+	// 固定等 500 毫秒常常一次 add 都采不到。改成轮询到条件满足（最多 10 秒）。
+	json r;
+	bool hasTick = false, hasAdd = false, foldedOk = false;
+	double tickTotal = 0;
+	for (int attempt = 0; attempt < 100 && !(hasTick && hasAdd && foldedOk); ++attempt) {
+		std::this_thread::sleep_for(std::chrono::milliseconds(100));
+		r = c.Request("profile", {{"action", "result"}, {"sort", "total"}, {"limit", 10}});
+		if (!Ok(r)) break;
+		hasTick = hasAdd = foldedOk = false;
+		for (auto& f : r["body"]["functions"]) {
+			if (f["source"] == "@game/main.lua" && f["line"] == 7) { // tick 总是从宿主 lua_pcall 进来，没有名字
+				hasTick = true;
+				tickTotal = f["totalPercent"].get<double>();
+			}
+			if (f["fn"] == "add" && f["line"] == 3) hasAdd = true;
+		}
+		for (auto& sk : r["body"]["stacks"]) {
+			const std::string text = sk["stack"].get<std::string>();
+			if (text.find("(game/main.lua:7);add (game/main.lua:3)") != std::string::npos) foldedOk = true;
+		}
+	}
 	CHECK(Ok(r));
 	CHECK(r["body"]["running"].get<bool>());
 	CHECK(r["body"]["samples"].get<uint64_t>() > 0);
-	bool hasTick = false, hasAdd = false;
-	double tickTotal = 0;
-	for (auto& f : r["body"]["functions"]) {
-		if (f["source"] == "@game/main.lua" && f["line"] == 7) { // tick 总是从宿主 lua_pcall 进来，没有名字
-			hasTick = true;
-			tickTotal = f["totalPercent"].get<double>();
-		}
-		if (f["fn"] == "add" && f["line"] == 3) hasAdd = true;
-	}
 	CHECK(hasTick);
 	CHECK(hasAdd);
 	CHECK(tickTotal > 50.0); // 游戏线程每次进 Lua 都从 tick 开始
 	CHECK(r["body"]["functions"].size() <= static_cast<size_t>(10));
-	bool foldedOk = false;
-	for (auto& sk : r["body"]["stacks"]) {
-		const std::string text = sk["stack"].get<std::string>();
-		if (text.find("(game/main.lua:7);add (game/main.lua:3)") != std::string::npos) foldedOk = true;
-	}
 	CHECK(foldedOk);
 
 	// 暂停在断点时不采样
@@ -1119,6 +1136,87 @@ TEST_CASE("session.profile_sampling") {
 		cleared = g_game->hookCleared.load();
 	}
 	CHECK(cleared);
+}
+
+// ---- UnLua 对象的显示：实例表摘要带字段、Object 不重复列、类表只显示类名、内部字段收起 ----
+namespace {
+int EMMY_HOST_API_CALL UeDescribe(void*, const EmmyHostValueQuery* q) {
+	lua_State* L = q->L;
+	if (!L || lua_type(L, q->index) != LUA_TTABLE) return EMMY_HOST_VALUE_UNAVAILABLE;
+	lua_pushstring(L, "__ue");
+	lua_rawget(L, q->index);
+	const bool ue = lua_toboolean(L, -1) != 0;
+	lua_pop(L, 1);
+	if (!ue) return EMMY_HOST_VALUE_UNAVAILABLE;
+	const char* s = R"({"valid":true,"typeName":"BP_X_C","summary":"BP_X_C_0","kind":"ueObject","expandable":true})";
+	q->write(q->sink, s, std::strlen(s));
+	return EMMY_HOST_VALUE_OK;
+}
+int EMMY_HOST_API_CALL UeList(void*, const EmmyHostValueQuery* q) {
+	const char* s = R"({"total":0,"children":[]})";
+	q->write(q->sink, s, std::strlen(s));
+	return EMMY_HOST_VALUE_OK;
+}
+} // namespace
+
+TEST_CASE("session.unlua_object_view") {
+	EmmyHostValueProviderV2 p{};
+	p.size = sizeof(p);
+	p.version = EMMY_HOST_VALUE_ABI_VERSION;
+	p.name = "ue-test";
+	p.describe = &UeDescribe;
+	p.listChildren = &UeList;
+	uint64_t pid = Emmy_RegisterHostValueProviderV2(&p);
+	TestClient c;
+	CHECK(c.Connect("127.0.0.1", g_port));
+	CHECK(Ok(Hello(c, json::array({"valuePath", "luaEval", "richVariables"}))));
+	g_rev = 0;
+	CHECK(Ok(SetBps(c, json::array({Bp("uo", 9)}))));
+	CHECK(Ok(c.Request("configurationDone")));
+	json pz = c.WaitEvent("paused");
+	CHECK(pz.is_object());
+	if (!pz.is_object()) { Emmy_UnregisterHostValueProviderV2(pid); return; }
+	json stack = c.Request("stackTrace", {{"vmId", pz["body"]["vmId"]}, {"pauseId", pz["body"]["pauseId"]}});
+	uint64_t frameId = stack["body"]["frames"][0]["frameId"];
+	json ev = c.Request("evaluate", {{"frameId", frameId}, {"mode", "lua"}, {"expression",
+		"{__ue = true, Health = 100, Damage = 128.0, Object = io.stdout,"
+		" DamageType = {__name = '/Script/Engine.UDamageType', ClassDesc = mklud(), TypeHash = 140685849361140.0}}"}});
+	CHECK(Ok(ev));
+#if EMMY_LUA_VERSION_NUM >= 503
+	CHECK_EQ(ev["body"]["value"].get<std::string>(), std::string("BP_X_C_0 {Damage=128.0, DamageType=class UDamageType, Health=100}"));
+#endif
+	json ov = c.Request("variables", {{"ref", ev["body"]["ref"]}});
+	uint64_t dtRef = 0;
+	for (auto& v : ov["body"]["variables"]) {
+		CHECK(v["name"] != "Object"); // 和「UE 对象」分组是同一个对象
+		if (v["name"] == "DamageType") {
+			CHECK_EQ(v["value"].get<std::string>(), std::string("class UDamageType"));
+			CHECK_EQ(v["kind"].get<std::string>(), std::string("class"));
+			dtRef = v["ref"];
+		}
+	}
+	bool ueGroup = false;
+	for (auto& g : ov["body"]["groups"]) if (g["name"] == "UE 对象") ueGroup = true;
+	CHECK(ueGroup);
+	CHECK(dtRef != 0);
+	json dv = c.Request("variables", {{"ref", dtRef}});
+	CHECK_EQ(dv["body"]["total"].get<int>(), 0); // ClassDesc / TypeHash / __name 都不在主列表
+	uint64_t innerRef = 0;
+	for (auto& g : dv["body"]["groups"]) if (g["name"] == "内部") innerRef = g["ref"];
+	CHECK(innerRef != 0);
+	json inner = c.Request("variables", {{"ref", innerRef}});
+	CHECK_EQ(inner["body"]["variables"][0]["name"].get<std::string>(), std::string("UnLua 字段"));
+	json fields = c.Request("variables", {{"ref", inner["body"]["variables"][0]["ref"]}});
+	for (auto& v : fields["body"]["variables"]) {
+#if EMMY_LUA_VERSION_NUM >= 503
+		if (v["name"] == "TypeHash") CHECK_EQ(v["value"].get<std::string>(), std::string("140685849361140.0"));
+#endif
+	}
+	CHECK_EQ(fields["body"]["total"].get<int>(), 3);
+	CHECK(Ok(SetBps(c, json::array())));
+	CHECK(Ok(Continue(c, pz)));
+	c.Request("disconnect");
+	Emmy_UnregisterHostValueProviderV2(pid);
 }
 
 int main() {

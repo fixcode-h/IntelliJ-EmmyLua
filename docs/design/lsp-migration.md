@@ -88,6 +88,7 @@ IDE 里只保留不需要语义的东西，全部基于一个**手写的 Kotlin 
 emmylua_ls 自己读工作区根目录的 `.emmyrc.json`（也认 `.luarc.json`、`.emmyrc.lua`），改了自动重载。插件**不另造配置格式**：
 
 - 插件通过 `workspace/configuration`（section `emmylua`）下发一份「部分配置」，emmylua_ls 把它合并在 `.emmyrc.json` 之后：对象逐项合并、数组取并集。所以用户写的库目录和插件探测到的库目录会叠加，不会互相覆盖。
+- 同一份部分配置还写进 `<IDE system>/emmylua/emmyrc/<项目>.json`，用环境变量 `EMMYLUALS_CONFIG` 交给 emmylua_ls：它只等配置请求 5 秒，IDE 刚启动忙时会超时，库目录整个丢掉（UE 声明全都找不到）。这个文件在 `.emmyrc.json` 之前合并，标量以用户文件为准。
 - 插件下发的内容：自动探测到的 UE 库目录（§3）、设置页里填的额外库目录、默认 Lua 版本（只在 `.emmyrc.json` 没写时生效）。
 - 设置页（设置 → 语言和框架 → EmmyLua）只放：emmylua_ls 路径（留空用插件自带的）、额外库目录、是否自动探测 UE 项目、默认 Lua 版本，和「打开 / 新建 .emmyrc.json」按钮。
 
@@ -107,6 +108,8 @@ IDE 常常只打开 UE 项目里的 `Content/Script`。UnLua 编辑器里「Gene
 2. 在 UE 项目下找这些目录，存在的都加进 `workspace.library`：
    - `Intermediate/IntelliSense`
    - `Plugins/<插件>/Intermediate/IntelliSense`，插件目录下没有时再看 `Plugins/<分类>/<插件>/Intermediate/IntelliSense`（UnLua 生成的就在 `Plugins/UnLua/Intermediate/IntelliSense`）
+   - UnLua 插件（`.uplugin` 名字以 UnLua 开头）自带的静态声明 `Content/IntelliSense`
+   - UnLua 插件自带的 Lua 脚本 `Content/Script`（`UnLua.Class` 等的实现），有没有 UELink 声明都加
 3. 加进库的目录只做索引和跳转，不报诊断；`Content/Script` 本身仍是工作区根，`require("A.B")` 按它解析。
 4. 设置里可以关掉自动探测。探测结果在「EmmyLua」设置页上显示，方便确认。
 
@@ -154,6 +157,8 @@ UnLua 的 Generate IntelliSense 要手动点、整遍生成。UEKit 的 UELink 2
 | IDE 堆占用 | 不再随 Lua 代码量增长 | 索引都在 emmylua_ls 进程里，IDE 不建 stub 索引 |
 | 冷启动到第一次跳转可用 | 5 万行声明（UnLua IntelliSense 量级）< 10 秒 | emmylua_ls 并行索引；之后的跳转、补全 < 100 毫秒 |
 | 项目打开时 IDE 索引 | 不再出现 Lua 的「正在建索引」 | 去掉了 stub / 文件索引 |
+
+实测（2026-11-17，emmylua_ls 0.25.1，云端 Linux x64）：5 万行生成声明冷启动到第一次跳转 0.3 秒，20 万行 0.9 秒。CI 的 `Verify Plugin` 每次用 `.github/scripts/lsp-smoke.py` 跑一遍（UE 布局下的跳转 + 冷启动计时，超过 30 秒失败），结果在运行摘要里。
 
 ## 8. 风险
 

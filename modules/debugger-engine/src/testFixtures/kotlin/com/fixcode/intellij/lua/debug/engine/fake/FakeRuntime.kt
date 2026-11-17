@@ -107,6 +107,10 @@ class FakeRuntime(
     @Volatile
     var ignorePings: Boolean = false
 
+    /** 接下来几次握手回 BUSY（模拟上一个 IDE 连接还没释放）。 */
+    @Volatile
+    var busyHandshakes: Int = 0
+
     /** 让下一个某命令返回指定错误。 */
     private val injectedErrors = HashMap<String, Pair<String, String>>()
 
@@ -549,6 +553,10 @@ class FakeRuntime(
         val hello = HelloArgs.fromJson(request.args)
         if (hello.protocol != 3) return error(ErrorCodes.PROTOCOL_MISMATCH, "调试 runtime 只支持协议 v3，请升级 IDE 插件或 runtime 到同一版本。")
         if (token != null && hello.token != token) return error(ErrorCodes.AUTH_FAILED, "配对码不正确，请核对后重试。")
+        if (busyHandshakes > 0) {
+            busyHandshakes--
+            return error(ErrorCodes.BUSY, "这个进程已经被另一个调试器连接，先断开那边再试。")
+        }
         connection.handshaken = true
         val welcome = Welcome(
             sessionId = "fake-${connections}",
