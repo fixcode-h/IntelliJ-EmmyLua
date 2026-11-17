@@ -24,6 +24,9 @@
     每个版本的更新内容见 <a href="https://github.com/fixcode-h/IntelliJ-EmmyLua/releases">GitHub Releases</a>。
     ]]></change-notes>
     <!-- since-build / until-build 由 build.gradle.kts 写入（2025.2 起，不设上限） -->
+    <!-- 上游 EmmyLua 和本插件注册同一个语言 ID「Lua」、文件类型「lua」，同时启用会互相覆盖；IDE 安装时会提示停用其中一个。
+         其他 Lua 插件（EmmyLua2、Luanalysis 等）的 ID 核对过再加 -->
+    <incompatible-with>com.tang</incompatible-with>
     <!-- 可选：JSON 插件在时给 .emmyrc.json 挂 schema；拼写检查模块在时挂 Lua 词典 -->
     <depends optional="true" config-file="emmylua-json.xml">com.intellij.modules.json</depends>
     <depends optional="true" config-file="emmylua-spellchecker.xml">com.intellij.modules.spellchecker</depends>
