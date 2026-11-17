@@ -19,7 +19,7 @@ import java.util.concurrent.TimeoutException
  *
  * - `lua_debug_session`：status / targets / attach / stop / pause / continue / step / wait / reload
  * - `lua_debug_breakpoints`：list / add / remove / enable / clear
- * - `lua_debug_inspect`：stack / vms / locals / eval / output / probes / profile
+ * - `lua_debug_inspect`：stack / vms / locals / eval / set / output / probes / profile
  *
  * [backend] 每次调用时取：IDE 没有打开项目、新引擎没装好时返回 null，工具报 engine_unavailable。
  */
@@ -41,24 +41,24 @@ class LuaDebugTools(
 
     // ======================================================================= lua_debug_session
 
-    private val sessionActions = arrayOf("status", "targets", "attach", "stop", "pause", "continue", "step", "wait", "reload", "help")
+    private val sessionActions = arrayOf("status", "configs", "launch", "targets", "attach", "stop", "restart", "pause", "continue", "step", "wait", "reload", "help")
 
     private fun sessionTool() = McpTool(
         name = SESSION,
         title = "Start / step / wait in the Lua debugger",
         titleZh = "Lua 调试：会话与单步",
         description = ToolGuide(
-            what = "Drives the IDE's EmmyLua debugger on running Lua (UE/UnLua, Unity, own engine, Android device): list sessions and " +
-                "targets, attach to a local process or Android app, pause, continue, step over/into/out/to line, wait until it stops. " +
-                "reload: hot-reload Lua modules into the open UE editor/game via UELink (no session needed).",
-            useWhen = "you need to see Lua run: stop where a suspect line runs, catch a Lua error where raised, step through code. " +
-                "Typical: status (or targets -> attach) -> $BREAKPOINTS add -> trigger the code -> wait -> $INSPECT -> step / continue. " +
-                "After editing UnLua scripts: reload files=[...] or changed=true instead of restarting PIE.",
+            what = "Drives the IDE's EmmyLua debugger on running Lua (UE/UnLua, Unity, own engine, Android): start debugging a run " +
+                "configuration (launch, Debug executor; the IDE's execute_run_configuration only Runs), attach to a process or " +
+                "Android app, stop/restart, pause, continue, step, wait until it stops. reload: hot-reload Lua into UE via UELink.",
+            useWhen = "you need to see Lua run: stop where a suspect line runs, catch a Lua error, step through code. Typical: " +
+                "status (or configs -> launch name=..., or targets -> attach) -> $BREAKPOINTS add -> trigger the code -> wait -> " +
+                "$INSPECT -> step / continue. After editing UnLua scripts: reload files=[...] instead of restarting PIE.",
             insteadOf = "adding print() calls to guess values: breakpoints show the real state without editing scripts.",
-            notFor = "C++ or Blueprint (use the VS debugger tools). attach, reload and the first control of a session ask the user in " +
-                "the IDE; on permission_denied ask the user. A stopped VM freezes the game.",
-            results = "status: sessions + stop location; pause/step/wait: event = break / probe / resumed / exited / timeout / idle, " +
-                "break: location, stack, locals; reload: targets[{pid,kind,items[{module,ok|error}]}]; help: guide.",
+            notFor = "C++ or Blueprint (VS debugger tools). launch, attach, reload and the first control of a session ask the " +
+                "user in the IDE; on permission_denied ask the user. A stopped VM freezes the game.",
+            results = "status: sessions + stop location; configs: run configs; pause/step/wait: event = break / probe / resumed / " +
+                "exited / timeout / idle, break: location, stack, locals; help: guide.",
         ).render(),
         inputSchema = schema {
             string("action", "What to do.", required = true, enum = sessionActions.toList())
@@ -66,15 +66,20 @@ class LuaDebugTools(
             string("vm", "Lua VM id from $INSPECT action=vms (default: the stopped VM / all VMs).")
             string("kind", "targets: process / device. step: over (default) / into / out / toLine (run to file+line).",
                 enum = listOf("process", "device", "over", "into", "out", "toLine"))
+            string("config", "launch: run configuration name from action=configs (exact, or a unique part).")
+            string("project", "configs/launch: project name when several projects are open.")
+            boolean("debug", "launch: true (default) = Debug executor; false = Run.")
             integer("pid", "attach: process id (local process, or on the device with 'device').", minimum = 1)
             string("name", "attach: local process name part, e.g. UnrealEditor (several matches -> error listing pids).")
+            integer("limit", "configs: page size (default 50, max 200).", minimum = 1, maximum = 200)
+            integer("offset", "configs: items to skip.", minimum = 0)
             string("device", "attach: adb serial of an Android device (see action=targets kind=device).")
             string("package", "attach with device: application package name.")
             boolean("launch", "attach with device: restart the app and attach at startup.")
             string("file", "step toLine: Lua file (absolute or relative to the project).")
             integer("line", "step toLine: 1-based line.", minimum = 1)
             integer("frames", "status: stack frames to include for a stopped VM (0-20, default 5).", minimum = 0, maximum = 20)
-            integer("wait_ms", "pause/continue/step: also wait up to this long for the next stop (step 10000, pause 5000, continue 0).",
+            integer("wait_ms", "pause/continue/step/launch: also wait up to this long for the next stop (step 10000, pause 5000, others 0).",
                 minimum = 0, maximum = 120000)
             integer("timeout_ms", "wait: max wait (default 30000).", minimum = 0, maximum = 120000)
             boolean("include_probes", "wait: also return on a probe hit (breakpoint with capture + auto_continue). Default true.")
@@ -89,6 +94,9 @@ class LuaDebugTools(
         val b = backend()
         when (call.args.choice("action", null, *sessionActions)) {
             "status" -> status(b, call.args)
+            "configs" -> configs(requireBackend(b), call.args)
+            "launch" -> launch(requireBackend(b), call)
+            "restart" -> restart(requireBackend(b), call)
             "targets" -> targets(requireBackend(b), call.args)
             "attach" -> attach(requireBackend(b), call)
             "stop" -> stop(requireBackend(b), call)
@@ -118,8 +126,79 @@ class LuaDebugTools(
         }
         val result = obj("count" to items.size)
         result["sessions"] = items
-        if (items.isEmpty()) result["note"] = "没有调试会话。用 action=targets 找进程或设备再 action=attach，或请用户在 IDE 里启动调试。"
+        if (items.isEmpty()) result["note"] = "没有调试会话。用 action=configs 看运行配置再 action=launch config=<名字> 以 Debug 启动，" +
+            "或 action=targets 找进程或设备再 action=attach。"
         return result
+    }
+
+    private fun configs(b: LuaDebugBackend, args: JsonArgs): Map<String, Any?> {
+        val project = args.string("project")?.takeIf { it.isNotBlank() }
+        val all = b.listRunConfigurations().filter { project == null || it.project == null || it.project == project }
+        val offset = args.int("offset", 0, 0, Int.MAX_VALUE)
+        val limit = args.int("limit", 50, 1, 200)
+        val m = LinkedHashMap(page(all.drop(offset).take(limit), offset, all.size > offset + limit, all.size) { c ->
+            obj("name" to c.name, "type" to c.type, "project" to c.project, "lua" to c.lua,
+                "noDebug" to !c.canDebug, "running" to c.running, "selected" to c.selected)
+        })
+        if (all.isEmpty()) m["note"] = "项目里没有运行配置：附加本机进程用 action=targets + action=attach。"
+        return m
+    }
+
+    /** 以 Debug（默认）启动运行配置，和用户点调试按钮一样；Lua 配置等会话连上再返回。 */
+    private fun launch(b: LuaDebugBackend, call: ToolCall): Map<String, Any?> {
+        val a = call.args
+        val wanted = a.string("config")?.takeIf { it.isNotBlank() }
+            ?: throw ToolArgumentException("launch 要给 'config'（运行配置名，先 action=configs 列出）")
+        val project = a.string("project")?.takeIf { it.isNotBlank() }
+        val debug = a.bool("debug", true)
+        val waitMs = a.int("wait_ms", 0, 0, 120000)
+        val config = resolveConfig(b.listRunConfigurations().filter { project == null || it.project == null || it.project == project }, wanted)
+        if (debug && !config.canDebug) {
+            throw ToolException("not_supported", "运行配置「${config.name}」（${config.type}）不能以 Debug 方式运行；可以 debug=false 以 Run 启动。")
+        }
+        val verb = if (debug) "以 Debug 启动" else "运行"
+        policy.checkLaunch("${verb}运行配置「${config.name}」", call.client.clientName)?.let { throw denied(it) }
+        // 先订阅再启动：启动后马上命中断点也不会漏
+        PauseWaiter(b, call.client).use { waiter ->
+            val started = await(b.launchConfiguration(LaunchRequest(config.name, debug, config.project ?: project)), timeouts.attachMillis)
+            val m = obj("config" to started.name, "executor" to started.executor, "sessionId" to started.sessionId)
+            val sid = started.sessionId
+            if (sid != null) {
+                b.listSessions().firstOrNull { it.sessionId == sid }?.let { m["target"] = it.target }
+                if (waitMs > 0) {
+                    val pause = waiter.unseenPause(sid)
+                    m.putAll(if (pause != null) breakResult(b, call.client, pause)
+                        else outcome(b, call.client, waiter.await(sid, waitMs.toLong(), includeProbe = false, stopOnResume = false)))
+                }
+            } else if (debug) {
+                m["note"] = "不是 Lua 调试配置，已用 IDE 的调试器启动；它的会话不归 lua_debug_* 管。"
+            }
+            return m
+        }
+    }
+
+    private fun resolveConfig(list: List<RunConfigInfo>, wanted: String): RunConfigInfo {
+        list.filter { it.name == wanted }.let { if (it.size == 1) return it[0] }
+        val exact = list.filter { it.name.equals(wanted, ignoreCase = true) }
+        if (exact.size == 1) return exact[0]
+        val partial = list.filter { it.name.contains(wanted, ignoreCase = true) }
+        return when (partial.size) {
+            1 -> partial[0]
+            0 -> throw ToolException("target_not_found", "没有名为「$wanted」的运行配置。现有：" +
+                list.take(20).joinToString("、") { it.name }.ifEmpty { "（无）" } + "。")
+            else -> throw ToolArgumentException("「$wanted」匹配多个运行配置：" +
+                partial.take(20).joinToString("、") { it.name + (it.project?.let { p -> " @$p" } ?: "") } + "；写全名，多项目时加 project。")
+        }
+    }
+
+    /** 重启：用运行配置启动的按配置重跑，直接附加的按原目标重新附加；返回新会话。 */
+    private fun restart(b: LuaDebugBackend, call: ToolCall): Map<String, Any?> {
+        val s = resolveSession(b, call.args)
+        requireControl(s, call)
+        val newId = await(b.restartSession(s.sessionId), timeouts.attachMillis)
+        policy.forget(s.sessionId)
+        val target = b.listSessions().firstOrNull { it.sessionId == newId }?.target ?: s.target
+        return obj("restarted" to s.sessionId, "sessionId" to newId, "target" to target)
     }
 
     private fun targets(b: LuaDebugBackend, args: JsonArgs): Map<String, Any?> {
@@ -478,7 +557,7 @@ class LuaDebugTools(
 
     // ======================================================================= lua_debug_inspect
 
-    private val inspectActions = arrayOf("stack", "vms", "locals", "eval", "output", "probes", "profile")
+    private val inspectActions = arrayOf("stack", "vms", "locals", "eval", "set", "output", "probes", "profile")
 
     private fun inspectTool() = McpTool(
         name = INSPECT,
@@ -489,7 +568,7 @@ class LuaDebugTools(
                 "value paths (self.items[3].id, #list) and, if allowed, any Lua expression; also debug output (print, Lua errors, " +
                 "logpoints), probe records and a sampling profile, which work while the game runs.",
             useWhen = "$SESSION reports event=break: see where and why, read variables and table fields (depth 1-3, ref to expand), " +
-                "evaluate value paths, switch frames with frame=N; output / probes any time; profile while a slow scene runs to find hot Lua functions.",
+                "evaluate value paths, set a value to test a fix (set), switch frames with frame=N; output / probes any time; profile while a slow scene runs.",
             insteadOf = "guessing values or adding print / os.clock() timers: reads the live state without changing scripts.",
             notFor = "a running VM (stack / locals / eval need event=break). mode=lua needs a one-time user confirmation per session (the user may have turned it off): prefer value " +
                 "paths. Refs die when the VM continues. profile counts Lua instructions, not time in C/engine calls; Lua runs ~2x slower meanwhile.",
@@ -501,14 +580,16 @@ class LuaDebugTools(
             string("session_id", "Session (optional when there is only one, or only one is stopped).")
             string("vm", "Lua VM id (default: the stopped VM).")
             integer("frame", "Stack frame, 0 = top (default 0).", minimum = 0)
-            string("scope", "locals: locals (default) / upvalues / globals.", enum = listOf("locals", "upvalues", "globals"))
+            string("scope", "locals: locals (default) / upvalues / globals. set: where a bare name lives (default: local, then upvalue).",
+                enum = listOf("locals", "upvalues", "globals"))
             string("ref", "locals: expand this value (ref from a previous result) instead of a scope.")
-            string("path", "locals: start from this value path inside the scope, e.g. self.items[3].")
+            string("path", "locals: start from this value path inside the scope, e.g. self.items[3]. set: the variable to change (hp, self.hp, items[3]).")
+            string("value", "set: new value; value_path mode: a literal (100, \"a\", true, nil) or another value path; mode=lua: any Lua expression.")
             string("filter", "locals: keep variables whose name contains it; output: keep lines containing it.")
             integer("depth", "locals/eval: table levels to expand (0-3, default 1).", minimum = 0, maximum = 3)
             string("expr", "eval: value path (self.hp, items[3].id, #list) or, with mode=lua, a Lua expression.")
             stringArray("exprs", "eval: several expressions (watch list).", 10)
-            string("mode", "eval: value_path (default, read-only) or lua (arbitrary Lua; needs the user's permission).",
+            string("mode", "eval/set: value_path (default) or lua (arbitrary Lua; needs the user's permission).",
                 enum = listOf("value_path", "lua"))
             integer("cursor", "output/probes: 'next' of the previous call, returns only newer items.", minimum = 0)
             integer("max_chars", "output: max characters (default 3000, newest kept).", minimum = 200, maximum = 10000)
@@ -528,6 +609,7 @@ class LuaDebugTools(
             "vms" -> vms(b, call.args)
             "locals" -> locals(b, call.args)
             "eval" -> eval(b, call)
+            "set" -> set(b, call)
             "output" -> output(b, call.args)
             "probes" -> probes(b, call.args)
             "profile" -> profile(b, call.args)
@@ -631,6 +713,34 @@ class LuaDebugTools(
         val (items, truncated) = ResultJson.fit(results, ResultJson.MAX_BUDGET) { it }
         val m = obj("truncated" to truncated)
         m["results"] = items
+        return m
+    }
+
+    /** 改变量：会改游戏状态，按控制处理（每个会话第一次弹确认）；mode=lua 还要设置里允许执行任意 Lua。 */
+    private fun set(b: LuaDebugBackend, call: ToolCall): Map<String, Any?> {
+        val a = call.args
+        val path = a.string("path")?.trim()?.takeIf { it.isNotEmpty() } ?: throw ToolArgumentException("set 要给 'path'（要改的变量，例如 self.hp）")
+        val value = a.string("value")?.takeIf { it.isNotBlank() } ?: throw ToolArgumentException("set 要给 'value'（新值，例如 100、\"text\"、nil）")
+        ValuePaths.splitLast(path) ?: throw ToolArgumentException("'$path' 不是能改的值路径：写成 hp、self.hp、items[3] 或 cfg[\"key\"]")
+        val mode = if (a.choice("mode", "value_path", "value_path", "lua") == "lua") EvalMode.LUA else EvalMode.VALUE_PATH
+        val scope = when (a.string("scope")?.takeIf { it.isNotBlank() }?.let { a.choice("scope", null, "locals", "upvalues", "globals") }) {
+            "locals" -> VariableScope.LOCALS
+            "upvalues" -> VariableScope.UPVALUES
+            "globals" -> VariableScope.GLOBALS
+            else -> null
+        }
+        val p = requirePause(b, a)
+        if (mode == EvalMode.LUA && !policy.luaEvalAllowed()) {
+            throw ToolException(
+                "eval_forbidden",
+                "用户在设置里关掉了执行任意 Lua。新值改用字面量或值路径（不带 mode=lua），或请用户在 设置 > 工具 > EmmyLua 调试 里打开「允许 Agent 执行任意 Lua」。",
+            )
+        }
+        requireControl(b.listSessions().first { it.sessionId == p.sessionId }, call)
+        val frameId = frameId(b, p, a)
+        val v = await(b.setVariable(SetVariableRequest(frameId, path, value, mode, scope)), timeouts.requestMillis)
+        val m = obj("ok" to true)
+        m["value"] = ResultJson.value(v.copy(name = path))
         return m
     }
 

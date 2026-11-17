@@ -6,6 +6,9 @@ import com.fixcode.intellij.lua.highlighting.LuaHighlightingData
 import com.intellij.codeInsight.generation.actions.CommentByLineCommentAction
 import com.intellij.openapi.editor.colors.EditorColorsManager
 import java.awt.Color
+import com.intellij.ide.structureView.TreeBasedStructureViewBuilder
+import com.intellij.lang.LanguageStructureViewBuilder
+import com.fixcode.intellij.lua.structure.LuaOutlineElement
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.redhat.devtools.lsp4ij.LanguageServersRegistry
 
@@ -51,5 +54,20 @@ class LuaPluginWiringTest : BasePlatformTestCase() {
         val page = LuaColorSettingsPage()
         val tags = Regex("<(\\w+)>").findAll(page.demoText).map { it.groupValues[1] }.toSet()
         assertEquals(emptySet<String>(), tags - page.additionalHighlightingTagToDescriptorMap.keys)
+    }
+
+    /** 结构窗口用词法大纲，不等语言服务器。 */
+    fun testStructureViewListsDeclarations() {
+        val file = myFixture.configureByText("s.lua", "local M = {}\nfunction M:Foo(a) end\nlocal function bar() end\nreturn M\n")
+        val builder = LanguageStructureViewBuilder.getInstance().getStructureViewBuilder(file) as TreeBasedStructureViewBuilder
+        val model = builder.createStructureViewModel(myFixture.editor)
+        try {
+            val top = model.root.children.map { it.presentation.presentableText }
+            assertEquals(listOf("M", "bar()"), top)
+            val m = model.root.children.first() as LuaOutlineElement
+            assertEquals(listOf("Foo(a)"), m.children.map { it.presentation.presentableText })
+        } finally {
+            model.dispose()
+        }
     }
 }

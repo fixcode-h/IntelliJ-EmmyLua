@@ -114,7 +114,7 @@ jobs:
         with:
           name: windows-attach-${{ matrix.arch }}
           path: out/${{ matrix.arch }}
-      # 端到端：真的注入一个只链接 lua54.dll 的进程，下断点、停下、断开、再附加（native/tests/attach_e2e）
+      # 端到端：真的注入一个只链接 lua54.dll 的进程，下断点、停下、断开、再附加；再测先附加、后延迟加载 Lua 时断在顶层代码（native/tests/attach_e2e）
       - name: Attach end-to-end
         run: |
           cmake -S native/tests/attach_e2e -B build/e2e-${{ matrix.arch }} -A ${{ matrix.platform }}
@@ -125,7 +125,7 @@ jobs:
           # 宿主要找得到 lua54.dll（和宿主放在一起）
           Get-ChildItem build/e2e-${{ matrix.arch }} -Recurse -Filter lua54.dll | Select-Object -First 1 | Copy-Item -Destination $bin
           $tools = (Resolve-Path "out/${{ matrix.arch }}").Path
-          & "$bin/attach_driver.exe" $tools (Resolve-Path "$bin/attach_host.exe").Path
+          & "$bin/attach_driver.exe" $tools (Resolve-Path "$bin/attach_host.exe").Path (Resolve-Path "$bin/attach_host_late.exe").Path
           exit $LASTEXITCODE
 
   bench:

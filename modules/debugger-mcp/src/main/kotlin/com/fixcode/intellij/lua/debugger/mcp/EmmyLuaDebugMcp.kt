@@ -40,13 +40,15 @@ class EmmyLuaDebugMcp(
             EmmyLua debugs Lua running in a game or tool (UE/UnLua, Unity, own engines, Android devices) through the IDE's debugger.
             Use these tools when you need runtime values or control flow of Lua code instead of adding print() calls and reloading.
 
-            Loop: `lua_debug_session` action=`status` (no session: action=`targets`, then `attach`) -> `lua_debug_breakpoints` action=`add`
+            Loop: `lua_debug_session` action=`status` (no session: action=`configs` then `launch` config=..., or `targets` then `attach`) -> `lua_debug_breakpoints` action=`add`
             -> let the user (or a test) trigger the code -> `lua_debug_session` action=`wait` -> `lua_debug_inspect` action=`stack` / `locals` / `eval`
             -> `lua_debug_session` action=`step` or `continue` -> wait again.
 
             | Need | Tool |
             |---|---|
             | What is being debugged, is anything stopped | `lua_debug_session` action=`status` |
+            | Start debugging a run configuration (the IDE's own `execute_run_configuration` only Runs) | `lua_debug_session` action=`configs`, then `launch` config=<name> (debug=false to Run) |
+            | Restart the debugged game / re-attach | `lua_debug_session` action=`restart` |
             | Attach to a local process / Android app | `lua_debug_session` action=`targets`, then `attach` (pid / name, or device + package) |
             | Stop at a line | `lua_debug_breakpoints` action=`add` file + line (+ condition, hit_count) |
             | Log without stopping | `lua_debug_breakpoints` action=`add` message="hp={self.hp}" |
@@ -55,16 +57,19 @@ class EmmyLuaDebugMcp(
             | Where is it, call stack | `lua_debug_inspect` action=`stack` |
             | Variables | `lua_debug_inspect` action=`locals` (scope, path, depth, ref to expand) |
             | A value | `lua_debug_inspect` action=`eval` expr="self.items[3].id" |
+            | Change a value to test a fix | `lua_debug_inspect` action=`set` path="self.hp" value="100" (value_path: literal or another path; mode=lua: any expression) |
             | Step | `lua_debug_session` action=`step` kind=over/into/out/toLine |
             | print output, Lua errors | `lua_debug_inspect` action=`output` (cursor = previous next) |
             | Which Lua functions are slow | `lua_debug_inspect` action=`profile` duration_ms (≤ 60000) sort=self/total limit; the game keeps running |
             | Clean up | `lua_debug_breakpoints` action=`clear` (only the agent's breakpoints) |
             | Hot-reload edited UnLua scripts into the open UE editor / game | `lua_debug_session` action=`reload` files=[...] / modules=[...] / changed=true |
 
-            - The first control action on a session and every attach ask the user in the IDE; on `permission_denied` ask the user, do not retry.
+            - The first control action on a session and every attach / launch ask the user in the IDE; on `permission_denied` ask the user, do not retry.
             - The user's own breakpoints are listed without `byAgent`; leave them alone.
             - While a VM is stopped the game thread is frozen: continue when done.
             - `eval` defaults to read-only value paths (self.items[3].id, #list); mode=lua runs Lua (allowed by default, the user confirms once per session; may be turned off in settings).
+            - `set` changes the live game (control: the user confirms once per session). A bare name is a local, then an upvalue;
+              scope=globals for a global. The change lasts until the code assigns it again; it does not edit the script.
             - Refs and frames die when the VM continues; on `stale_reference` fetch the stack again.
             - `profile` samples the Lua call stack every 1000 VM instructions: `selfPct` is time in the function itself, `totalPct` includes
               callees. It counts Lua instructions, not time inside C / engine calls, and Lua runs about 2x slower while sampling.

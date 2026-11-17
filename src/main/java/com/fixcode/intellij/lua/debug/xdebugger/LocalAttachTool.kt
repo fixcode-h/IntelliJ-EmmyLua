@@ -30,7 +30,9 @@ class LocalAttachTool(
         val reinjected: Boolean,
         /** 目标还没加载 Lua：调试组件已就位，Lua 加载后才开始监听 [port]，这期间连不上是正常的。 */
         val waiting: Boolean = false,
-        val message: String? = null
+        val message: String? = null,
+        /** 插件自带的 runtime 版本（出包时写的 runtime-version.txt）；本地开发版没有。 */
+        val bundledRuntime: String? = null
     )
 
     /** [arch] 为空时现查；同一个会话里应该只查一次（进程退出后 arch_pid 会失败，不能拿它的结果回退成 x86）。 */
@@ -40,7 +42,8 @@ class LocalAttachTool(
         if (!tool.isFile) throw IOException("插件里缺少 $arch/$TOOL，请确认插件包完整")
         log("注入 $arch 调试组件到进程 $pid …")
         val (exit, output) = run(listOf(tool.path, "attach", "-p", pid.toString(), "-dir", dir.path, "-dll", HOOK, "-auth-token", token, "-protocol", "3"), dir)
-        val result = parseResult(output, exit)
+        val bundled = File(dir, "runtime-version.txt").takeIf { it.isFile }?.readText()?.trim()?.ifEmpty { null }
+        val result = parseResult(output, exit).copy(bundledRuntime = bundled)
         // waiting 的提示由调用方用「任何级别都显示」的方式打出（用户要知道在等什么）
         if (!result.waiting) log(
             when {

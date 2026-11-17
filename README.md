@@ -26,7 +26,7 @@ EmmyLua 是一个功能强大的 Lua 语言支持插件，专为 IntelliJ IDEA �
 
 - **IDE 侧**：Lua 文件类型（`.lua`、`.lua.txt`）、语法和注解标签高亮、括号匹配、注释切换、新建 Lua 文件和实时模板
 - **编辑小功能**（只靠词法器，不建语法树）：`then` / `do` / `function(...)` / `repeat` / `{` 后回车自动缩进并补上 `end` / `until` / `}`，打 `end` / `else` 自动回退缩进，`---` 注解行回车续行；Surround With（`if` / `do` / `for` / `function` / `--region`）；后缀模板（`.if` `.ifnot` `.nn` `.null` `.local` `.return` `.print` `.fori` `.forp` `.fora` `.par`）；意图动作「生成函数注解」；`.emmyrc.json` / `.luarc.json` 的字段补全和校验（JSON Schema）；项目树「外部库」里能浏览 UE 声明和额外库目录；拼写检查认得 Lua 关键字和标准库名
-- **emmylua_ls 提供**：补全、跳转到定义 / 实现、查找引用、重命名、悬停文档、参数提示、内联提示、诊断和快速修复、格式化、语义高亮、代码折叠、结构视图、转到符号、调用层次
+- **emmylua_ls 提供**：补全、跳转到定义 / 实现、查找引用、重命名、悬停文档、参数提示、内联提示、诊断和快速修复、格式化、语义高亮、代码折叠、转到符号、调用层次
 - **新版注解语法**：泛型、`---@enum`、`---@overload` 等，和 VS Code / Neovim 上的 EmmyLua 行为一致
 - **标准库**：emmylua_ls 内置，按配置的 Lua 版本（5.1–5.4、LuaJIT）选择
 - **Unreal Engine / UnLua**：IDE 只打开 UE 项目里的 `Content/Script` 时，插件自动往上找 `.uproject`，把 UnLua「Generate IntelliSense」生成的目录（如 `Plugins/UnLua/Intermediate/IntelliSense`）加进库目录，蓝图类型和 `UE.xxx` 都能补全和跳转
@@ -50,9 +50,11 @@ EmmyLua 是一个功能强大的 Lua 语言支持插件，专为 IntelliJ IDEA �
 
 本插件依赖 **LSP4IJ** 插件。从磁盘安装本插件时，IDE 会提示同时安装 LSP4IJ，确认即可。emmylua_ls 已随插件打包（Windows x64 / arm64、macOS x64 / arm64、Linux x64 / arm64），不用另外安装。
 
-### 从 GitHub Releases 安装
+### 从插件市场安装
 
-本插件**还没有上架 JetBrains 插件市场**。插件市场里搜「EmmyLua」搜到的是上游 EmmyLua，和本插件用同一个语言 ID，不能同时启用（装本插件时 IDE 会提示停用上游 EmmyLua）。
+插件市场里搜 **EmmyLua Enhanced**（正在准备上架，见 [发布到插件市场](docs/marketplace.md)）。注意市场里叫「EmmyLua」的是上游插件，和本插件用同一个语言 ID，不能同时启用（装本插件时 IDE 会提示停用上游 EmmyLua）。
+
+### 从 GitHub Releases 安装
 
 1. 从 [Releases](https://github.com/fixcode-h/IntelliJ-EmmyLua/releases) 页面下载最新版本
 2. 进入 `File` → `Settings` → `Plugins`

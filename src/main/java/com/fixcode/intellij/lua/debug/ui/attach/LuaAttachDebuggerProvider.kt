@@ -38,20 +38,16 @@ class LuaAttachDebuggerProvider : XAttachDebuggerProvider {
         processInfo: ProcessInfo,
         contextHolder: UserDataHolder,
     ): List<XAttachDebugger> {
-        val scanned = scanOnce(attachHost, contextHolder)
+        val scanned = scanOnce(contextHolder)
         val process = scanned[processInfo.pid] ?: return emptyList()
         if (!LuaLocalProcessScanner.isLuaCandidate(process)) return emptyList()
         return listOf(LuaLocalAttachDebugger(process))
     }
 
-    private fun scanOnce(host: XAttachHost, holder: UserDataHolder): Map<Int, LuaLocalProcess> {
+    /** 只接本机主机（[isAttachHostApplicable]），它的进程列表就是 OSProcessUtil 的，直接取，不走已废弃的同步 getProcessList。 */
+    private fun scanOnce(holder: UserDataHolder): Map<Int, LuaLocalProcess> {
         holder.getUserData(SCAN_KEY)?.let { return it }
-        val processes = try {
-            host.getProcessList()
-        } catch (_: Exception) {
-            LuaLocalProcessScanner.listProcesses()
-        }
-        return LuaLocalProcessScanner.scan(processes).also {
+        return LuaLocalProcessScanner.scan(LuaLocalProcessScanner.listProcesses()).also {
             holder.putUserData(SCAN_KEY, it)
             lastScan = it
         }

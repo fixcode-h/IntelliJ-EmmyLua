@@ -2,11 +2,12 @@ package com.fixcode.intellij.lua.debug.ui.device
 
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
+import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.fileChooser.FileChooser
 import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
+import com.intellij.openapi.project.DumbAwareAction
 import com.intellij.openapi.project.Project
-import com.intellij.ui.AnActionButton
 import com.intellij.ui.ToolbarDecorator
 import com.intellij.ui.table.TableView
 import com.intellij.util.ui.ColumnInfo
@@ -45,10 +46,12 @@ class SourceMappingTable(private val project: Project) : Disposable {
             if (table.isEditing) table.cellEditor?.stopCellEditing()
             rows.forEach { model.removeRow(it) }
         }
-        .addExtraAction(object : AnActionButton(LuaDebugBundle.message("device.mapping.browse"), AllIcons.Actions.MenuOpen) {
+        .addExtraAction(object : DumbAwareAction(LuaDebugBundle.message("device.mapping.browse"), null, AllIcons.Actions.MenuOpen) {
             override fun actionPerformed(e: AnActionEvent) = browseLocal()
-            override fun isEnabled(): Boolean = table.selectedRow >= 0
-            override fun getActionUpdateThread() = com.intellij.openapi.actionSystem.ActionUpdateThread.EDT
+            override fun update(e: AnActionEvent) {
+                e.presentation.isEnabled = table.selectedRow >= 0
+            }
+            override fun getActionUpdateThread() = ActionUpdateThread.EDT
         })
         .setPreferredSize(JBUI.size(500, 110))
         .createPanel()

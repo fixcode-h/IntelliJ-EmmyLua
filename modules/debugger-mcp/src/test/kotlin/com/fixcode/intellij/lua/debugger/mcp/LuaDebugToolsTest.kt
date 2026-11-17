@@ -8,6 +8,7 @@ import com.fixcode.intellij.lua.debugger.mcp.tools.LuaDebugTools
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -217,6 +218,35 @@ class LuaDebugToolsTest {
     }
 
     @Test
+    fun `set 改变量按控制确认，参数不对直接报错`() {
+        backend.addSession()
+        backend.firePause()
+        assertEquals("invalid_argument", client.call(I, mapOf("action" to "set", "value" to "1")).code)
+        assertEquals("invalid_argument", client.call(I, mapOf("action" to "set", "path" to "self.", "value" to "1")).code)
+        confirmer.control = ControlDecision.DENY
+        assertEquals("permission_denied", client.call(I, mapOf("action" to "set", "path" to "self.hp", "value" to "100")).code)
+        confirmer.control = ControlDecision.ALLOW_ONCE
+        val ok = client.call(I, mapOf("action" to "set", "path" to "self.hp", "value" to "100"))
+        assertFalse(ok.isError)
+        assertEquals("100", (ok["value"] as Map<*, *>)["v"])
+        assertTrue(backend.commands.contains("set VALUE_PATH self.hp=100"))
+        client.call(I, mapOf("action" to "set", "path" to "Debug", "value" to "true", "scope" to "globals"))
+        assertTrue(backend.commands.contains("set VALUE_PATH Debug=true GLOBALS"))
+    }
+
+    @Test
+    fun `值路径拆成父路径和最后一段`() {
+        assertEquals(null to "hp", ValuePaths.splitLast("hp"))
+        assertEquals("self" to "hp", ValuePaths.splitLast("self.hp"))
+        assertEquals("self.items" to "[3]", ValuePaths.splitLast("self.items[3]"))
+        assertEquals("cfg" to "[a.b]", ValuePaths.splitLast("cfg[\"a.b\"]"))
+        assertEquals("a[\"x]\"]" to "y", ValuePaths.splitLast("a[\"x]\"].y"))
+        assertEquals(null, ValuePaths.splitLast("self."))
+        assertEquals(null, ValuePaths.splitLast("a[f()]"))
+        assertEquals(null, ValuePaths.splitLast("#list"))
+    }
+
+    @Test
     fun `clear 默认只删 Agent 断点`() {
         backend.addSession()
         backend.breakpoints += BreakpointInfo("u1", BreakpointOrigin.IDE, "/proj/A.lua", 1, true)
@@ -249,6 +279,44 @@ class LuaDebugToolsTest {
         confirmer.launch = true
         val r = client.call(S, mapOf("action" to "attach", "pid" to 100))
         assertEquals("s-new", r["sessionId"])
+    }
+
+    @Test
+    fun `configs 列出运行配置，launch 按名字以 Debug 启动并每次确认`() {
+        backend.runConfigs += RunConfigInfo("UE Lua Attach", "Lua 附加", lua = true, canDebug = true, selected = true)
+        backend.runConfigs += RunConfigInfo("Server", "Application", lua = false, canDebug = true)
+        backend.runConfigs += RunConfigInfo("Docs", "Shell Script", lua = false, canDebug = false)
+        val list = client.call(S, mapOf("action" to "configs"))
+        assertEquals(3L, list["count"])
+        @Suppress("UNCHECKED_CAST")
+        val items = list["items"] as List<Map<String, Any?>>
+        assertEquals(true, items[0]["lua"])
+        assertEquals(true, items[2]["noDebug"])
+        assertFalse(items[1].containsKey("lua")) // 默认值省略
+
+        confirmer.launch = false
+        assertEquals("permission_denied", client.call(S, mapOf("action" to "launch", "config" to "UE Lua Attach")).code)
+        assertTrue(backend.commands.isEmpty())
+        confirmer.launch = true
+        val r = client.call(S, mapOf("action" to "launch", "config" to "lua attach")) // 部分匹配、不分大小写
+        assertEquals("s-launch", r["sessionId"])
+        assertEquals("launch UE Lua Attach debug=true", backend.commands.last())
+
+        assertEquals("not_supported", client.call(S, mapOf("action" to "launch", "config" to "Docs")).code)
+        assertEquals("target_not_found", client.call(S, mapOf("action" to "launch", "config" to "nope")).code)
+        val other = client.call(S, mapOf("action" to "launch", "config" to "Server"))
+        assertNull(other["sessionId"])
+        assertNotNull(other["note"])
+        assertEquals("invalid_argument", client.call(S, mapOf("action" to "launch")).code)
+    }
+
+    @Test
+    fun `restart 换成新会话`() {
+        backend.addSession("s1", "game.exe (1)")
+        val r = client.call(S, mapOf("action" to "restart"))
+        assertEquals("s1", r["restarted"])
+        assertEquals("s1-r", r["sessionId"])
+        assertEquals("restart s1", backend.commands.last())
     }
 
     @Test

@@ -27,9 +27,13 @@ class UnrealDeclWatcher(private val project: Project) : Disposable {
             .scheduleWithFixedDelay({ check() }, 15, 15, TimeUnit.SECONDS)
     }
 
-    /** 设置页点了按钮后马上看一次，不等下一轮。 */
+    /**
+     * 点了按钮、生成刚跑完时马上看，不等下一轮。UELink 空闲 5 秒后才写清单（之前不算生成过），
+     * 所以 3 秒看一次不够：再在 8、15 秒各看一次，清单一出现就换库目录。
+     */
     fun checkSoon() {
-        AppExecutorUtil.getAppScheduledExecutorService().schedule({ check() }, 3, TimeUnit.SECONDS)
+        val executor = AppExecutorUtil.getAppScheduledExecutorService()
+        for (delay in longArrayOf(3, 8, 15)) executor.schedule({ check() }, delay, TimeUnit.SECONDS)
     }
 
     private fun current(): List<Path> =
@@ -53,16 +57,21 @@ class UnrealDeclWatcher(private val project: Project) : Disposable {
         EmmyLuaServer.restart(project)
     }
 
-    /** IDE 里勾了开关、UE 编辑器后开（或重开）的，补一次 luadecl.enable；没勾时不动 UE 那边（可能是在控制台里开的） */
+    /**
+     * IDE 里勾了开关、UE 编辑器后开（或重开）的，补一次 luadecl.enable（连同蓝图开关；UE 那边蓝图开关和 IDE 不一致也改过来）；
+     * 没勾时不动 UE 那边（可能是在控制台里开的）
+     */
     private fun syncEditor() {
-        if (!LuaProjectSettings.getInstance(project).unrealLuaDecl) return
+        val settings = LuaProjectSettings.getInstance(project)
+        if (!settings.unrealLuaDecl) return
         val ue = UnrealDecl.ueRoot(project) ?: return
         val editor = UELinkClient.findEditor(ue) ?: return
         if (editor.pid == syncedPid) return
         runCatching {
             val status = UELinkClient.call(editor, "luadecl.status")
-            if (status.get("active")?.asBoolean != true) {
-                UELinkClient.call(editor, "luadecl.enable", com.google.gson.JsonObject().apply { addProperty("enabled", true) })
+            val blueprints = settings.unrealLuaDeclBlueprints
+            if (status.get("active")?.asBoolean != true || UnrealDecl.blueprintsDiffer(status, blueprints)) {
+                UELinkClient.call(editor, "luadecl.enable", UnrealDecl.enableArgs(true, blueprints))
             }
             syncedPid = editor.pid
         }

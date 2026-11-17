@@ -59,7 +59,7 @@ class LuaAttachConfiguration(project: Project, factory: ConfigurationFactory) :
 
     public override fun getOptions(): LuaAttachOptions = super.getOptions() as LuaAttachOptions
 
-    override fun getConfigurationEditor(): SettingsEditor<out RunConfiguration> = LuaAttachSettingsEditor()
+    override fun getConfigurationEditor(): SettingsEditor<LuaAttachConfiguration> = LuaAttachSettingsEditor()
 
     override fun getState(executor: Executor, environment: ExecutionEnvironment): RunProfileState = NoProcessState
 

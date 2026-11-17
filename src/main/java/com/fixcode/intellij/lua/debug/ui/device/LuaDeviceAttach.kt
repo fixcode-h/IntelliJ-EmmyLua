@@ -30,7 +30,14 @@ import javax.swing.Icon
  */
 class LuaDeviceAttachHost(val device: LuaDevice) : XAttachHost {
     @Throws(ExecutionException::class)
-    override fun getProcessList(): List<ProcessInfo> {
+    override suspend fun getProcessListAsync(): List<ProcessInfo> = listProcesses()
+
+    /** 平台仍把它声明为抽象方法，只能实现；新版平台走 [getProcessListAsync]。 */
+    @Deprecated("Use getProcessListAsync")
+    @Throws(ExecutionException::class)
+    override fun getProcessList(): List<ProcessInfo> = listProcesses()
+
+    private fun listProcesses(): List<ProcessInfo> {
         val service = LuaDeviceService.getInstance() ?: return emptyList()
         val processes = try {
             service.listProcesses(device.serial, onlyDebuggable = true)
@@ -47,7 +54,13 @@ class LuaDeviceAttachHost(val device: LuaDevice) : XAttachHost {
 class LuaDeviceAttachHostProvider : XAttachHostProvider<LuaDeviceAttachHost> {
     override fun getPresentationGroup(): XAttachPresentationGroup<out XAttachHost> = DeviceHostGroup
 
-    override fun getAvailableHosts(project: Project?): List<LuaDeviceAttachHost> {
+    override suspend fun getAvailableHostsAsync(project: Project?): List<LuaDeviceAttachHost> = onlineHosts()
+
+    /** 平台仍把它声明为抽象方法，只能实现；新版平台走 [getAvailableHostsAsync]。 */
+    @Deprecated("Use getAvailableHostsAsync")
+    override fun getAvailableHosts(project: Project?): List<LuaDeviceAttachHost> = onlineHosts()
+
+    private fun onlineHosts(): List<LuaDeviceAttachHost> {
         val service = LuaDeviceService.getInstance() ?: return emptyList()
         return try {
             service.listDevices().filter { it.state == LuaDeviceState.ONLINE }.map { LuaDeviceAttachHost(it) }

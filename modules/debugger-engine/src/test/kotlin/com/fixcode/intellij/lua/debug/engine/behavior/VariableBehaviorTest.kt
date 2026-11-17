@@ -1,7 +1,6 @@
 package com.fixcode.intellij.lua.debug.engine.behavior
 
 import com.fixcode.intellij.lua.debug.engine.BreakpointRequest
-import com.fixcode.intellij.lua.debug.engine.DebugEngineException
 import com.fixcode.intellij.lua.debug.engine.MappingRule
 import com.fixcode.intellij.lua.debug.engine.SourceFileIndex
 import com.fixcode.intellij.lua.debug.engine.SourceMapper
@@ -160,6 +159,5 @@ class VariableBehaviorTest : BehaviorTestBase() {
         val locals = session.scopes(session.topFrame(pause)!!).await().first()
         val error = session.setVariable(locals, "index", "2").awaitFailure()
         assertEquals(ErrorCodes.UNSUPPORTED, error.code)
-        assertTrue(error is DebugEngineException)
     }
 }
