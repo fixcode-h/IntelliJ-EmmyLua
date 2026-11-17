@@ -143,3 +143,27 @@
 2. 同时修 2.2（CI 回绿 + 出包门槛）、2.1 第 1 步（UELink 修订版）、2.3、2.4。这几项都小，可以一起进下一版。
 3. 断点确认通了，再按清单完整验收；进行中的三件做完后一起出一版。
 4. 再做 1.2 冒烟测试和第 3 节的稳定性几项。
+
+## 6. 处理结果（2026-11-17 同日）
+
+用户确认「一起修」后，除真机验收和下面「没做」的几项外都已进 `dev`：
+
+| 条目 | 结果 |
+| --- | --- |
+| 2.2 / Windows `profile_sampling` | 测试改为轮询到采样数据齐全（最多 10 秒），不再受 Windows 计时粒度影响 |
+| 2.2 / 出包门槛 | `auto-release.yml` 加 `tests-gate`：等 Verify Plugin、Native Core、Android Agent 在同一提交上全绿才出包（`.github/scripts/wait-for-checks.sh`） |
+| 2.4 | 发版提交自动合回 `dev`；这次已手动合过一次 |
+| 2.1 | UELink 2.5.3：钩子被别人（调试器）占着时不再抢回，只在调试器断开（钩子为空）后重新挂；`lua.profile start` 被占时返回 `warning`；超时钩子只在仍是自己时才恢复。根治（核心导出共享钩子接口）没做 |
+| 2.3 | README 改为从 GitHub Releases 安装并说明冲突；`plugin.xml` 加 `incompatible-with com.tang` |
+| 1.2 / 3-7 | `verify.yml` 用真 emmylua_ls 跑 `.github/scripts/lsp-smoke.py`（UE 布局、外部库、UnLua IntelliSense 跳转）；冷启动实测 5 万行 0.3 秒、20 万行 0.9 秒，记进 `lsp-migration.md` |
+| 3-1 | 钩子入口出致命错误（C++ 异常、Windows 上的访问违例）后只停用这个 VM：摘钩子、恢复原钩子、IDE 输出「调试器内部错误」；Lua 自己的 `lua_error` 照常抛 |
+| 3-2 | 第一次进钩子时用一段已知小函数自检 `lua_getinfo` / `lua_getlocal`，不对就停用这个 VM 并说明 |
+| 3-3 | 不需要做：LSP4IJ 0.21 默认就把语言服务器错误弹成通知并自动重启 |
+| 3-4 | `native-core.yml` 的 `windows-attach` 真的注入只链接 `lua54.dll` 的宿主，跑附加、断点、断开、再附加（`native/tests/attach_e2e`） |
+| 3-5 | `bench_hook --baseline bench/baseline.json`：五个场景比基线差超过 25%（且绝对多 0.15 倍）就失败 |
+| 3-6 | 真 runtime 端到端测试加延迟断言（目标的 3 倍兜底）。本机实测：命中到栈帧 101 ms（目标 80 ms，偏高）、局部变量 16 ms、1 万项首页 9 ms、单步 5 ms |
+| 3-10 | 两个设置页互相加了链接 |
+| 3-11 | 新增 `docs/user/attach.md`、`android.md`、`ue-declarations.md`，README 链过去 |
+| 3-12 | `deps-check.yml` 每月比对 emmylua_ls、LSP4IJ 最新版，有新版开 issue |
+
+没做：1.1 真机验收（要用户实测）；3-8 两套采样合并（等钩子根治）；3-9 首次使用引导；3-13 Agent 面板工具（不在本仓库）。
