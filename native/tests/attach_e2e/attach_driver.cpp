@@ -5,6 +5,7 @@
 //   4. 再附加一次（reinjected:true，换新 token），断点照样能停（验收清单 A11 / A12）
 //   5. 给了 attach_host_late.exe 时：起一个延迟加载 Lua 的宿主，先附加（waiting:true），再让它加载 Lua，
 //      断点要停在 VM 一创建就执行、只执行一次的顶层代码上（UE 里先附加再开始 PIE、断在 ReceiveInit 的情况）
+//   6. 同一个宿主用 emmy_tool launch 启动（「启动并附加」）：程序一启动就建 VM，第一行顶层代码也要断住
 // 全部通过返回 0；任何一步失败打印原因返回 1。
 #include "test_client.h"
 
@@ -204,6 +205,82 @@ void LateLoadScenario(const std::string& tools, const std::string& hostExe) {
 	}
 }
 
+
+void PrintTrace(const std::string& tracePath) {
+	std::printf("---- 注入组件跟踪（%s）----\n", tracePath.c_str());
+	if (FILE* f = std::fopen(tracePath.c_str(), "rb")) {
+		char buf[4096];
+		size_t n;
+		while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) std::fwrite(buf, 1, n, stdout);
+		std::fclose(f);
+	} else {
+		std::printf("（没有跟踪文件：组件没写任何东西）\n");
+	}
+	std::printf("----\n");
+}
+
+// 启动并附加：和 LocalAttachTool.launch 同样的调用（程序、参数走环境变量），程序一启动就建 VM 跑顶层代码
+void LaunchScenario(const std::string& tools, const std::string& hostExe) {
+	std::printf("\n== 启动并附加 ==\n");
+	char tempDir[MAX_PATH] = {0};
+	GetTempPathA(MAX_PATH, tempDir);
+	const std::string tracePath = std::string(tempDir) + "emmy_attach_launch_trace.txt";
+	DeleteFileA(tracePath.c_str());
+	SetEnvironmentVariableA("EMMY_ATTACH_TRACE", tracePath.c_str());
+	SetEnvironmentVariableA("EMMY_LAUNCH_EXE", hostExe.c_str());
+	SetEnvironmentVariableA("EMMY_LAUNCH_ARGS", "--go");
+	const int failuresBefore = g_failures;
+	const std::string token = "e2e00000000000000000000000000004";
+	const std::string cmd = "\"\"" + tools + "\\emmy_tool.exe\" launch -dir \"" + tools + "\" -auth-token " + token + " -protocol 3\"";
+	int exitCode = 0;
+	const auto started = std::chrono::steady_clock::now();
+	const std::string out = RunCapture(cmd, exitCode);
+	SetEnvironmentVariableA("EMMY_LAUNCH_EXE", nullptr);
+	SetEnvironmentVariableA("EMMY_LAUNCH_ARGS", nullptr);
+	std::printf("emmy_tool launch（退出码 %d）：\n%s\n", exitCode, out.c_str());
+	json launch = LastJsonLine(out);
+	Check(exitCode == 0 && Ok(launch), "emmy_tool launch 成功");
+	Check(Ok(launch) && launch.value("launched", false) && launch.value("pid", 0) > 0, "结果里有 launched 和 pid");
+	if (Ok(launch)) {
+		const DWORD pid = static_cast<DWORD>(launch.value("pid", 0));
+		HANDLE process = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+		TestClient c;
+		bool connected = false;
+		for (int i = 0; i < 50 && !connected; ++i) {
+			connected = c.Connect(launch.value("host", std::string("127.0.0.1")), launch.value("port", 0), 1000);
+			if (!connected) std::this_thread::sleep_for(std::chrono::milliseconds(200));
+		}
+		Check(connected, "连上启动的程序里的 runtime");
+		if (connected) {
+			Check(Ok(c.Request("hello", {{"protocol", 3}, {"client", {{"name", "attach-e2e"}, {"version", "0"}}}, {"token", token}})),
+				"hello（带 token）");
+			json bp = {{"id", "launch"}, {"source", {{"path", "D:/proj/game/init.lua"}}}, {"line", 3}};
+			Check(Ok(c.Request("setBreakpoints", {{"revision", 1}, {"replaceAll", true}, {"upserts", json::array({bp})}})),
+				"下断点 init.lua:3（程序启动时就执行、只执行一次）");
+			Check(Ok(c.Request("configurationDone")), "configurationDone");
+			json paused = c.WaitEvent("paused", 10000);
+			Check(paused.is_object(), "停在启动时就执行的第 3 行");
+			if (paused.is_object()) {
+				const json& body = paused["body"];
+				json stack = c.Request("stackTrace", {{"vmId", body["vmId"]}, {"pauseId", body["pauseId"]}});
+				Check(Ok(stack) && !stack["body"]["frames"].empty() && stack["body"]["frames"][0].value("line", 0) == 3, "栈顶在第 3 行");
+				Check(Ok(c.Request("continue", {{"vmId", body["vmId"]}, {"pauseId", body["pauseId"]}})), "继续");
+			}
+			const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count();
+			std::printf("从启动到停住：%lld 毫秒\n", static_cast<long long>(ms));
+			c.Request("disconnect");
+		}
+		if (process != nullptr) {
+			DWORD code = 0;
+			Check(GetExitCodeProcess(process, &code) && code == STILL_ACTIVE, "断开后启动的程序还在运行");
+			TerminateProcess(process, 0);
+			CloseHandle(process);
+		}
+	}
+	SetEnvironmentVariableA("EMMY_ATTACH_TRACE", nullptr);
+	if (g_failures != failuresBefore) PrintTrace(tracePath);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -268,7 +345,10 @@ int main(int argc, char** argv) {
 	TerminateProcess(pi.hProcess, 0);
 	CloseHandle(pi.hThread);
 	CloseHandle(pi.hProcess);
-	if (argc >= 4) LateLoadScenario(tools, argv[3]);
+	if (argc >= 4) {
+		LateLoadScenario(tools, argv[3]);
+		LaunchScenario(tools, argv[3]);
+	}
 	std::printf("\n%s：%d 项失败\n", g_failures ? "失败" : "通过", g_failures);
 	return g_failures ? 1 : 0;
 }

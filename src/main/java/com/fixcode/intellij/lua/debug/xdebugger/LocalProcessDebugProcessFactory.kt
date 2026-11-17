@@ -3,6 +3,7 @@ package com.fixcode.intellij.lua.debug.xdebugger
 import com.intellij.openapi.util.SystemInfo
 import com.intellij.xdebugger.XDebugProcess
 import com.intellij.xdebugger.XDebugSession
+import com.intellij.xdebugger.XDebugSessionListener
 import com.fixcode.intellij.lua.debug.api.LuaDebugProcessFactory
 import com.fixcode.intellij.lua.debug.api.LuaDebugTarget
 import com.fixcode.intellij.lua.debug.engine.transport.Connector
@@ -23,7 +24,15 @@ class LocalProcessDebugProcessFactory : LuaDebugProcessFactory {
     override fun createDebugProcess(session: XDebugSession, target: LuaDebugTarget): XDebugProcess {
         val local = target as? LuaDebugTarget.LocalProcess
             ?: throw IllegalArgumentException("不支持的调试目标：${target.displayName}")
-        val connector = InjectingConnector(local.pid, LocalAttachTool.newToken())
+        val connector = InjectingConnector(local.pid, local.authToken ?: LocalAttachTool.newToken())
+        if (local.terminateOnStop) {
+            // 「启动并附加」启动的程序跟着调试会话走：点停止就结束它（进程已经自己退出时什么也不做）
+            session.addSessionListener(object : XDebugSessionListener {
+                override fun sessionStopped() {
+                    ProcessHandle.of(local.pid.toLong()).ifPresent { it.destroy() }
+                }
+            })
+        }
         val process = LuaV3DebugProcessFactory.createProcess(session, target, connector) { config ->
             config.copy(options = config.options.copy(captureOutput = local.captureOutput))
         }

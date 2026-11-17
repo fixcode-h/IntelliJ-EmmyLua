@@ -755,6 +755,10 @@ IDE 收到不认识的错误码按 `INTERNAL` 处理并展示 `message`。
 4. 重复附加（含 IDE 重连）：进程里已有 `emmy_attach.dll` 时不再注入，只换 token，返回 `reinjected:true`。进程里有旧版 `emmy_hook.dll` 时直接失败，提示重启目标进程。
 5. 目标进程里：`emmy_attach.dll` 在已加载模块里找导出 `lua_*` 的模块，按导出判断 Lua 版本（`lua_newuserdatauv` → 5.4，`lua_rotate` → 5.3，`lua_callk` → 5.2，否则 5.1；有 `luaJIT_setmode` 时报不支持），加载同目录的 `lua5X/emmy_debugger_core.dll`（dynamic 模式，用目标进程自己的 Lua），挂 `lua_pcall` / `lua_pcallk` / `lua_resume` / `lua_close` 在 Lua 线程上登记 VM，然后监听端口。附加时 Lua 必须已加载。
 6. 文件布局（每个位数目录）：`emmy_tool.exe`、`emmy_attach.dll`、`EasyHook.dll`、`lua51/` … `lua54/emmy_debugger_core.dll`。
+7. 启动并附加：`emmy_tool.exe launch -dir <位数目录> -auth-token <token> -protocol 3`。程序路径、工作目录、命令行参数（原样拼在程序路径后面）放在环境变量 `EMMY_LAUNCH_EXE` / `EMMY_LAUNCH_WORK` / `EMMY_LAUNCH_ARGS`（UTF-16 传递，路径里的中文、空格和参数里的引号都不会被改；也可以用 `-exe` / `-work` 传 ANSI 路径），位数由 IDE 读 exe 的 PE 头决定。
+   - 过程：以调试方式启动程序（不继承句柄），在 exe 入口点下软断点；停在入口点时（静态依赖的 DLL 都已加载，程序自己的代码一行没跑）恢复指令、挂起主线程、摘掉调试器，按第 2 步注入 `emmy_attach.dll`，成功后恢复主线程。不用 `CREATE_SUSPENDED` 直接注入：那时进程加载器还没初始化，远程线程里 `LoadLibrary` 不可靠。
+   - 结果和 `attach` 相同，多一个 `"launched":true`，`pid` 是新进程；Lua 通常是之后才加载的，所以常见 `waiting:true`。第一个 VM 照第 5 步等 IDE 的 `configurationDone`，启动阶段的顶层代码也能断住。
+   - 失败（程序没跑到入口点就退出、90 秒没到入口点、注入失败）时程序被结束，返回 `ok:false`。之后的重连照常用 `attach -p <pid>`（`reinjected:true`）。
 
 局域网发现（可选，内嵌模式）：runtime 每 2 秒向 UDP `255.255.255.255:9967` 广播一个 UTF-8 JSON 名片 `{"emmy":3,"name":"MyGame","pid":123,"port":9966,"platform":"android","arch":"arm64","needToken":true}`，不含 token。
 
@@ -827,6 +831,7 @@ IDE                                           runtime
 | v3.0（revision 0） | 2026-11-16 | 首个定稿。采用 IDE 引擎线程提出的消息字段命名（`command`/`args`、`ok`/`body`/`error`、`seq`/`event`/`body`）与命令名 |
 | v3.0（revision 0） | 2026-11-16 | 按 `emmy_debugger_core` 实现补充说明（不改字段语义）：`loadHelpers` 立即返回 `{}`、失败走 `output`；helper 读写宿主 `_G`；父协程帧为可选；`exceptions` 能力未声明时 `setOptions.exceptions` 只接受 `none`。变量视图的字段扩展见 [variable-view.md](variable-view.md)，后续合进第 9 节 |
 | v3.0（revision 0） | 2026-11-16 | 新增能力 `profiler` 和命令 `profile`（第 20 节），向后兼容：老 runtime 不声明这个能力，IDE 就不发 |
+| v3.0（revision 0） | 2026-11-17 | 新增 `emmy_tool launch`（第 16.1 节第 7 步）：启动程序、停在入口点注入，结果多 `launched:true`；不涉及线上协议 |
 | v3.0（revision 0） | 2026-11-17 | 新增能力 `errorReport`：`setOptions.collectErrors`、命令 `errors`、事件 `luaError`（第 21 节）。宿主 `lua_pcall` 自带错误处理函数（如 UnLua）时，核心把自己的处理函数串在它前面，`exceptions` 和 `collectErrors` 都能收到这类错误 |
 
 ---

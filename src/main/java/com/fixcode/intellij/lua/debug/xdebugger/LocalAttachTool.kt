@@ -16,6 +16,9 @@ import java.util.concurrent.TimeUnit
  *   失败 `{"ok":false,"error":"中文原因"}` + 非 0 退出码。端口以 JSON 为准（被占用时 runtime 会顺延）。
  * - 目标还没加载 Lua 时返回 `"waiting":true`（退出码 0）：组件在后台等 Lua 出现后才监听端口，IDE 持续连端口即可，不重新注入。
  * - 进程里已有 hook 时不重复注入，只更新 token 并返回同样的 JSON（reinjected:true），所以每次建连都可以先跑一遍。
+ * - 启动并附加：`emmy_tool.exe launch -dir <位数目录> -auth-token <token> -protocol 3`，程序、工作目录、参数走环境变量
+ *   EMMY_LAUNCH_EXE / EMMY_LAUNCH_WORK / EMMY_LAUNCH_ARGS（命令行转引号会弄坏带空格和引号的参数）。程序停在入口点时注入，
+ *   结果和 attach 一样，多一个 `"launched":true`，`pid` 是新进程。
  */
 class LocalAttachTool(
     /** 含 x86/、x64/ 子目录的工具根目录。 */
@@ -54,6 +57,26 @@ class LocalAttachTool(
         return result
     }
 
+    /** 启动 [exe] 并在它跑任何自己的代码前注入调试组件（协议 v3 第 16 节）。位数按 exe 的 PE 头选。 */
+    fun launch(exe: File, args: String, workDir: File?, token: String): Result {
+        val arch = exeArch(exe)
+        val dir = File(toolsRoot, arch)
+        val tool = File(dir, TOOL)
+        if (!tool.isFile) throw IOException("插件里缺少 $arch/$TOOL，请确认插件包完整")
+        log("启动 ${exe.name}（$arch）并注入调试组件 …")
+        val env = buildMap {
+            put("EMMY_LAUNCH_EXE", exe.path)
+            put("EMMY_LAUNCH_ARGS", args)
+            workDir?.let { put("EMMY_LAUNCH_WORK", it.path) }
+        }
+        val (exit, output) = run(listOf(tool.path, "launch", "-dir", dir.path, "-auth-token", token, "-protocol", "3"), dir, env, LAUNCH_TIMEOUT_SECONDS)
+        val bundled = File(dir, "runtime-version.txt").takeIf { it.isFile }?.readText()?.trim()?.ifEmpty { null }
+        val result = parseResult(output, exit).copy(bundledRuntime = bundled)
+        if (result.pid <= 0) throw IOException("启动结果里没有进程号：${output.trim().takeLast(200)}")
+        log("已启动进程 ${result.pid}，调试组件已就位")
+        return result
+    }
+
     /** 目标进程的位数（x64 / x86）。emmy_tool arch_pid 退出码 0 = x64，1 = x86，其他是出错（进程不存在、没权限）。 */
     fun detectArch(pid: Int): String {
         val probe = File(File(toolsRoot, "x86"), TOOL).takeIf { it.isFile } ?: File(File(toolsRoot, "x64"), TOOL)
@@ -66,16 +89,16 @@ class LocalAttachTool(
         }
     }
 
-    private fun run(command: List<String>, dir: File): Pair<Int, String> {
-        val process = ProcessBuilder(command).directory(dir).redirectErrorStream(true).start()
+    private fun run(command: List<String>, dir: File, env: Map<String, String> = emptyMap(), timeout: Long = timeoutSeconds): Pair<Int, String> {
+        val process = ProcessBuilder(command).directory(dir).redirectErrorStream(true).also { it.environment().putAll(env) }.start()
         process.outputStream.close()
         // emmy_tool 以 UTF-8 输出
         val reader = process.inputStream.bufferedReader(Charsets.UTF_8)
         val output = StringBuilder()
         val pump = Thread({ reader.forEachLine { line -> synchronized(output) { output.appendLine(line) } } }, "emmy-tool-output").apply { isDaemon = true; start() }
-        if (!process.waitFor(timeoutSeconds, TimeUnit.SECONDS)) {
+        if (!process.waitFor(timeout, TimeUnit.SECONDS)) {
             process.destroyForcibly()
-            throw IOException("注入超时（${timeoutSeconds} 秒没有结果），目标进程可能卡住或被安全软件拦截")
+            throw IOException("注入超时（${timeout} 秒没有结果），目标进程可能卡住或被安全软件拦截")
         }
         pump.join(1000)
         return process.exitValue() to synchronized(output) { output.toString() }
@@ -84,6 +107,39 @@ class LocalAttachTool(
     companion object {
         const val TOOL = "emmy_tool.exe"
         const val HOOK = "emmy_hook.dll"
+        /** emmy_tool 自己最多等 90 秒程序跑到入口点，这里多留一点。 */
+        private const val LAUNCH_TIMEOUT_SECONDS = 120L
+
+        /**
+         * 读 exe 的 PE 头判断位数：x64 / x86。ARM64 等不支持的直接报错。
+         * 不用 emmy_tool arch_file：它按 ANSI 代码页收路径，中文路径会找不到文件。
+         */
+        fun exeArch(exe: File): String {
+            if (!exe.isFile) throw IOException("找不到程序：${exe.path}")
+            val machine = try {
+                java.io.RandomAccessFile(exe, "r").use { f ->
+                    if (f.length() < 0x40) null
+                    else {
+                        f.seek(0x3C)
+                        val peOffset = Integer.reverseBytes(f.readInt()).toLong()
+                        if (peOffset <= 0 || peOffset + 6 > f.length()) null
+                        else {
+                            f.seek(peOffset)
+                            if (Integer.reverseBytes(f.readInt()) != 0x00004550) null
+                            else java.lang.Short.reverseBytes(f.readShort()).toInt() and 0xFFFF
+                        }
+                    }
+                }
+            } catch (e: IOException) {
+                throw IOException("读不了程序文件 ${exe.path}：${e.message}", e)
+            }
+            return when (machine) {
+                0x8664 -> "x64"
+                0x014C -> "x86"
+                null -> throw IOException("${exe.name} 不是 Windows 可执行文件")
+                else -> throw IOException("${exe.name} 的架构（0x${machine.toString(16)}）不支持，只支持 x64 和 x86")
+            }
+        }
 
         /** 32 位十六进制，每次附加新生成。 */
         fun newToken(): String = ByteArray(16).also { SecureRandom().nextBytes(it) }.joinToString("") { "%02x".format(it) }

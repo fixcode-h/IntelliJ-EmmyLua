@@ -9,6 +9,8 @@ public:
 	int Attach();
 	int AttachV3();
 
+	int Launch();
+
 	int ListProcesses();
 
 	int ArchFile();
