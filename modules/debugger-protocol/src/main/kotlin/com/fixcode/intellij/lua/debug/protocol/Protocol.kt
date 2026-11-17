@@ -35,6 +35,8 @@ object Commands {
     const val SET_VIEW_RULES = "setViewRules"
     /** 采样性能分析（第 20 节，能力 profiler）。 */
     const val PROFILE = "profile"
+    /** 错误聚合（第 21 节，能力 errorReport）。 */
+    const val ERRORS = "errors"
     const val CANCEL = "cancel"
     const val PING = "ping"
     const val DISCONNECT = "disconnect"
@@ -50,6 +52,8 @@ object Events {
     const val RESUMED = "resumed"
     const val OUTPUT = "output"
     const val TERMINATED = "terminated"
+    /** 错误聚合（第 21 节）：新错误马上推，同一条每秒最多推一次计数。 */
+    const val LUA_ERROR = "luaError"
 }
 
 object Capabilities {
@@ -77,11 +81,13 @@ object Capabilities {
     const val PROFILER = "profiler"
     /** 函数断点：断点带 function（7.7）。没协商到时 IDE 不下发函数断点，界面上标「runtime 不支持」。 */
     const val FUNCTION_BREAKPOINTS = "functionBreakpoints"
+    /** 错误聚合：setOptions.collectErrors、errors、luaError（第 21 节）。 */
+    const val ERROR_REPORT = "errorReport"
 
     /** IDE 在 hello 里声明想用的能力；最终生效的是 welcome 里的交集。 */
     val CLIENT_WANTED: List<String> = listOf(
         VALUE_PATH, LUA_EVAL, SET_VARIABLE, CONDITION, HIT_CONDITION, LOGPOINT, CAPTURE, RUN_TO_LINE,
-        EXCEPTIONS, COROUTINES, OUTPUT, HELPERS, SOURCE_HASH, TERMINATE, RICH_VARIABLES, VIEW_RULES, PROFILER,
+        EXCEPTIONS, COROUTINES, OUTPUT, HELPERS, SOURCE_HASH, TERMINATE, RICH_VARIABLES, VIEW_RULES, PROFILER, ERROR_REPORT,
         FUNCTION_BREAKPOINTS
     )
 }

@@ -402,6 +402,17 @@ class FakeRuntime(
         }
     }
 
+    // ---------- 错误聚合（第 21 节）：测试直接推 luaError，errors 返回预置的全量 ----------
+
+    /** errors list 返回的全量（测试预置；推送不会自动改它，和真 runtime 一样推送是限流过的） */
+    @Volatile var errorList: List<com.fixcode.intellij.lua.debug.protocol.LuaErrorDto> = emptyList()
+    @Volatile var errorsCleared = 0
+
+    /** 推一条 luaError 事件（runtime 的推送）。 */
+    fun pushLuaError(error: com.fixcode.intellij.lua.debug.protocol.LuaErrorDto) = synchronized(lock) {
+        event(com.fixcode.intellij.lua.debug.protocol.Events.LUA_ERROR, error)
+    }
+
     // ---------- 采样分析（第 20 节）：测试预置结果，假 runtime 不真的采样 ----------
 
     /** 每个 VM 的预置采样结果：函数（样本数）和折叠栈。result / stop 按 sort / limit / stackLimit 裁剪后返回。 */
@@ -540,6 +551,13 @@ class FakeRuntime(
                     Commands.CANCEL -> ok()
                     Commands.PROFILE -> if (Capabilities.PROFILER in caps) profile(request) else
                         error(ErrorCodes.UNKNOWN_COMMAND, "runtime 不支持命令 ${request.command}，请升级 runtime。")
+                    Commands.ERRORS -> if (Capabilities.ERROR_REPORT !in caps) {
+                        error(ErrorCodes.UNKNOWN_COMMAND, "runtime 不支持命令 ${request.command}，请升级 runtime。")
+                    } else if (request.args.get("action")?.asString == "clear") {
+                        errorList = emptyList(); errorsCleared++; ok()
+                    } else {
+                        ok(com.fixcode.intellij.lua.debug.protocol.ErrorsResult(errorList).toJson())
+                    }
                     Commands.DISCONNECT -> {
                         DisconnectArgs.fromJson(request.args)
                         reply(request, ok())
@@ -890,12 +908,12 @@ class FakeRuntime(
             Capabilities.HIT_CONDITION, Capabilities.LOGPOINT, Capabilities.CAPTURE, Capabilities.RUN_TO_LINE,
             Capabilities.EXCEPTIONS, Capabilities.OUTPUT, Capabilities.HELPERS, Capabilities.TERMINATE,
             Capabilities.RICH_VARIABLES, Capabilities.VIEW_RULES, Capabilities.COROUTINES, Capabilities.PROFILER,
-            Capabilities.FUNCTION_BREAKPOINTS
+            Capabilities.ERROR_REPORT, Capabilities.FUNCTION_BREAKPOINTS
         )
 
-        /** v3.0 原文的 runtime：没有变量视图增量，也没有采样分析。 */
+        /** v3.0 原文的 runtime：没有变量视图增量，也没有采样分析、错误聚合、函数断点。 */
         val CAPS_V30: List<String> = ALL_CAPS - Capabilities.RICH_VARIABLES - Capabilities.VIEW_RULES - Capabilities.PROFILER -
-            Capabilities.FUNCTION_BREAKPOINTS
+            Capabilities.ERROR_REPORT - Capabilities.FUNCTION_BREAKPOINTS
 
         /** 没有 runToLine 的 runtime：IDE 要走「临时断点 + 确认后继续」的兜底。 */
         val CAPS_WITHOUT_RUN_TO_LINE: List<String> = ALL_CAPS - Capabilities.RUN_TO_LINE

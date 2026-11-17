@@ -22,7 +22,7 @@
 - 现有三个：
   - `lua_debug_session`：`status` / `configs`（运行配置）/ `launch`（按运行配置以 Debug 启动；IDE 自带的 `execute_run_configuration` 只能 Run）/ `targets` / `attach` / `stop` / `restart` / `pause` / `continue` / `step` / `wait` / `reload`（经 UELink 热重载 UE 里的 Lua，不需要会话）/ `help`（完整用法）
   - `lua_debug_breakpoints`：`list` / `add`（`file` + `line`，或 `function` 按函数名下断点，二选一）/ `remove` / `enable` / `clear`
-  - `lua_debug_inspect`：`stack` / `vms` / `locals` / `eval` / `set`（改变量，按控制处理）/ `output` / `probes` / `profile`
+  - `lua_debug_inspect`：`stack` / `vms` / `locals` / `eval` / `set`（改变量，按控制处理）/ `output` / `probes` / `profile` / `errors`（按位置聚合的 Lua 错误，含被 pcall 接住的）
 - 代码查找类的工具不是调试工具，不叫 `lua_debug_*`，叫 `lua_code`：`search`（按名字找声明）/ `files`（按文件名或 require 路径找 .lua）/ `outline`（文件大纲）/ `references`（查引用）。它替代 UEToVS 删掉的 `search_lua` / `search_lua_files` / `get_lua_outline`，参数和返回照它们的形状（字段名按本规范）。逻辑在 `modules/debugger-mcp` 的 `code/` 包（`LuaCodeTools`，经 `LuaCodeBackend` 取数据），IDE 侧 `lsp/EmmyLuaCodeBackend` 只调 emmylua_ls（documentSymbol、workspace/symbol、references）和 IDE 的文件名索引，**不做语义分析**；只读，不弹确认。
 - `lua_` 前缀是为了和 UEToVS 的 `debug_*`、面板的 `ue_*` 不撞名。工具名一旦发布就不改：Agent 和用户的提示词里写死了它。改名或删掉时，旧名字保留一版，调用时返回「改用哪个」的错误。
 - IDE 的 MCP 服务器里所有插件的工具在同一个列表，所以前缀必须带 `lua_`；设置页里我们的类别是 `LuaDebug`，工具全名 `com.fixcode.intellij.lua.debug.mcp.LuaDebugToolset.<工具名>`（用户在「公开的工具」里的开关按全名记，不改）。

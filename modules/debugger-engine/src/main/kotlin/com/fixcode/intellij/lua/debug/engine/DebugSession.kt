@@ -16,6 +16,10 @@ import com.fixcode.intellij.lua.debug.protocol.ErrorCodes
 import com.fixcode.intellij.lua.debug.protocol.EvalModes
 import com.fixcode.intellij.lua.debug.protocol.EvaluateArgs
 import com.fixcode.intellij.lua.debug.protocol.Events
+import com.fixcode.intellij.lua.debug.protocol.ErrorsActions
+import com.fixcode.intellij.lua.debug.protocol.ErrorsArgs
+import com.fixcode.intellij.lua.debug.protocol.ErrorsResult
+import com.fixcode.intellij.lua.debug.protocol.LuaErrorDto
 import com.fixcode.intellij.lua.debug.protocol.HelloArgs
 import com.fixcode.intellij.lua.debug.protocol.LoadHelpersArgs
 import com.fixcode.intellij.lua.debug.protocol.OutputCategories
@@ -152,6 +156,7 @@ class DebugSession(
 
     private val outputLog = SequencedLog<OutputEvent>(config.outputCapacity)
     private val hitLog = SequencedLog<BreakpointHitEvent>(config.breakpointHitCapacity)
+    private val errorStore = ErrorStore()
 
     fun vms(): List<VmView> = snapshot.vms
     fun pauses(): List<PauseInfo> = snapshot.pauses
@@ -289,6 +294,7 @@ class DebugSession(
         allowLuaEval = options.allowLuaEval?.takeIf { welcome.has(Capabilities.LUA_EVAL) },
         // 没有 exceptions 能力的 runtime 只接受 none（协议 11 节），其他值不发，避免整条 setOptions 被拒
         exceptions = options.exceptions?.takeIf { it == ExceptionModes.NONE || welcome.has(Capabilities.EXCEPTIONS) },
+        collectErrors = options.collectErrors?.takeIf { welcome.has(Capabilities.ERROR_REPORT) },
         variableView = options.variableView?.takeIf { welcome.has(Capabilities.RICH_VARIABLES) }
     )
 
@@ -349,6 +355,8 @@ class DebugSession(
         setState(SessionState.RUNNING)
         startHeartbeat()
         val welcome = this.welcome!!
+        // runtime 每个新会话都从零计数，本地也清掉，避免重连后计数对不上
+        errorStore.clear()
         emit(DebugEvent.Connected(welcome, wasReconnect))
         later { startFuture.complete(welcome) }
     }
@@ -613,6 +621,7 @@ class DebugSession(
                 val item = outputLog.add(output)
                 emit(DebugEvent.Output(item.seq, output))
             }
+            Events.LUA_ERROR -> emit(DebugEvent.LuaError(errorStore.merge(LuaErrorDto.fromJson(body))))
             Events.TERMINATED -> runtimeTerminatedReason = TerminatedEvent.fromJson(body).reason?.let { "目标进程已结束（$it）" } ?: "目标进程已结束"
             else -> Unit // 协议约定：未知事件忽略
         }
@@ -1027,6 +1036,37 @@ class DebugSession(
                 ValueResult.fromJson(body)
             }
         }
+
+    // =====================================================================
+    // 错误聚合（协议第 21 节，能力 errorReport）
+    // =====================================================================
+
+    /** runtime 协商到了 errorReport 能力（「Lua 错误」页、MCP errors 据此决定能不能用）。 */
+    val supportsErrorReport: Boolean get() = hasCapability(Capabilities.ERROR_REPORT)
+
+    /** 本地缓存的错误（推送累积，计数可能略落后）；不发请求，UI 刷新列表用。 */
+    fun cachedErrors(): List<LuaErrorDto> = errorStore.snapshot()
+
+    /** 向 runtime 拉精确的全量并覆盖本地缓存；没连上或 runtime 不支持时返回本地缓存。 */
+    fun errors(): CompletableFuture<ErrorsResult> = callAsync {
+        if (!state.isConnected || !supportsErrorReport) {
+            CompletableFuture.completedFuture(ErrorsResult(errorStore.snapshot(), errorStore.dropped()))
+        } else {
+            request(Commands.ERRORS, ErrorsArgs(ErrorsActions.LIST).toJson()).thenApply { body ->
+                val result = ErrorsResult.fromJson(body)
+                errorStore.replace(result.items, result.dropped)
+                ErrorsResult(errorStore.snapshot(), result.dropped)
+            }
+        }
+    }
+
+    /** 清空（runtime 和本地）。 */
+    fun clearErrors(): CompletableFuture<Unit> = callAsync {
+        errorStore.clear()
+        emit(DebugEvent.ErrorsCleared)
+        if (!state.isConnected || !supportsErrorReport) CompletableFuture.completedFuture(Unit)
+        else request(Commands.ERRORS, ErrorsArgs(ErrorsActions.CLEAR).toJson()).thenApply { }
+    }
 
     // =====================================================================
     // 采样性能分析（协议第 20 节，能力 profiler）

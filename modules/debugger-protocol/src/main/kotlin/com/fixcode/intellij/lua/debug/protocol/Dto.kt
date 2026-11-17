@@ -162,13 +162,15 @@ data class SetOptionsArgs(
     val caseSensitive: Boolean? = null,
     val pauseLatencyMs: Int? = null,
     /** variable-view.md 13.5，只在协商了 richVariables 时下发；内容原样转发（设置页决定字段）。 */
-    val variableView: JsonObject? = null
+    val variableView: JsonObject? = null,
+    /** 错误聚合（第 21 节，能力 errorReport）：none / uncaught / all，取值同 [ExceptionModes]。 */
+    val collectErrors: String? = null
 ) : JsonDto {
     override fun toJson() = jsonObject {
         put("stopOnEntry", stopOnEntry); put("exceptions", exceptions); put("captureOutput", captureOutput)
         put("allowLuaEval", allowLuaEval); put("valuePathInvokeIndex", valuePathInvokeIndex)
         put("evalTimeoutMs", evalTimeoutMs); put("caseSensitive", caseSensitive); put("pauseLatencyMs", pauseLatencyMs)
-        put("variableView", variableView)
+        put("variableView", variableView); put("collectErrors", collectErrors)
     }
 
     /** 用 [other] 里给出的项覆盖本对象（setOptions 只改给出的项，本地也按同样规则累积）。 */
@@ -176,14 +178,15 @@ data class SetOptionsArgs(
         other.stopOnEntry ?: stopOnEntry, other.exceptions ?: exceptions, other.captureOutput ?: captureOutput,
         other.allowLuaEval ?: allowLuaEval, other.valuePathInvokeIndex ?: valuePathInvokeIndex,
         other.evalTimeoutMs ?: evalTimeoutMs, other.caseSensitive ?: caseSensitive, other.pauseLatencyMs ?: pauseLatencyMs,
-        other.variableView ?: variableView
+        other.variableView ?: variableView, other.collectErrors ?: collectErrors
     )
 
     companion object {
         fun fromJson(json: JsonObject) = SetOptionsArgs(
             json.optBoolean("stopOnEntry"), json.optString("exceptions"), json.optBoolean("captureOutput"),
             json.optBoolean("allowLuaEval"), json.optBoolean("valuePathInvokeIndex"), json.optInt("evalTimeoutMs"),
-            json.optBoolean("caseSensitive"), json.optInt("pauseLatencyMs"), json.optObject("variableView")
+            json.optBoolean("caseSensitive"), json.optInt("pauseLatencyMs"), json.optObject("variableView"),
+            json.optString("collectErrors")
         )
     }
 }
@@ -882,5 +885,52 @@ data class TerminatedEvent(val reason: String? = null) : JsonDto {
 
     companion object {
         fun fromJson(json: JsonObject) = TerminatedEvent(json.optString("reason"))
+    }
+}
+
+// ---------- 错误聚合（第 21 节） ----------
+
+/** 一条聚合后的 Lua 错误：luaError 事件和 errors 的条目同形。推送里的计数是限流过的，errors 的为准。 */
+data class LuaErrorDto(
+    val id: Long,
+    val vmId: Long,
+    val message: String,
+    val count: Long,
+    val firstMs: Long,
+    val lastMs: Long,
+    val chunkName: String? = null,
+    val line: Int? = null,
+    val uncaught: Boolean = false,
+    /** 只在第一次推送和 errors 里有。 */
+    val traceback: String? = null
+) : JsonDto {
+    override fun toJson() = jsonObject {
+        put("id", id); put("vmId", vmId); put("message", message); put("count", count); put("firstMs", firstMs); put("lastMs", lastMs)
+        put("chunkName", chunkName); put("line", line); if (uncaught) put("uncaught", true); put("traceback", traceback)
+    }
+
+    companion object {
+        fun fromJson(json: JsonObject) = LuaErrorDto(
+            json.optLong("id") ?: 0, json.optLong("vmId") ?: 0, json.optString("message") ?: "", json.optLong("count") ?: 1,
+            json.optLong("firstMs") ?: 0, json.optLong("lastMs") ?: 0, json.optString("chunkName"), json.optInt("line"),
+            json.optBoolean("uncaught") ?: false, json.optString("traceback")
+        )
+    }
+}
+
+data class ErrorsArgs(val action: String = ErrorsActions.LIST) : JsonDto {
+    override fun toJson() = jsonObject { put("action", action) }
+}
+
+object ErrorsActions {
+    const val LIST = "list"
+    const val CLEAR = "clear"
+}
+
+data class ErrorsResult(val items: List<LuaErrorDto>, val dropped: Long = 0) : JsonDto {
+    override fun toJson() = jsonObject { putObjects("items", items); if (dropped > 0) put("dropped", dropped) }
+
+    companion object {
+        fun fromJson(json: JsonObject) = ErrorsResult(json.objects("items", LuaErrorDto::fromJson), json.optLong("dropped") ?: 0)
     }
 }
