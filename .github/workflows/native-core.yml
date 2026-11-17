@@ -10,6 +10,7 @@ on:
       - "native/emmy_attach/**"
       - "native/emmy_tool/**"
       - "native/shared/**"
+      - "native/tests/**"
       - "native/CMakeLists.txt"
       - ".github/workflows/native-core.yml"
   pull_request:
@@ -19,6 +20,7 @@ on:
       - "native/emmy_attach/**"
       - "native/emmy_tool/**"
       - "native/shared/**"
+      - "native/tests/**"
       - "native/CMakeLists.txt"
       - ".github/workflows/native-core.yml"
 
@@ -112,6 +114,19 @@ jobs:
         with:
           name: windows-attach-${{ matrix.arch }}
           path: out/${{ matrix.arch }}
+      # 端到端：真的注入一个只链接 lua54.dll 的进程，下断点、停下、断开、再附加（native/tests/attach_e2e）
+      - name: Attach end-to-end
+        run: |
+          cmake -S native/tests/attach_e2e -B build/e2e-${{ matrix.arch }} -A ${{ matrix.platform }}
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          cmake --build build/e2e-${{ matrix.arch }} --config Release --parallel 4
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $bin = "build/e2e-${{ matrix.arch }}/Release"
+          # 宿主要找得到 lua54.dll（和宿主放在一起）
+          Get-ChildItem build/e2e-${{ matrix.arch }} -Recurse -Filter lua54.dll | Select-Object -First 1 | Copy-Item -Destination $bin
+          $tools = (Resolve-Path "out/${{ matrix.arch }}").Path
+          & "$bin/attach_driver.exe" $tools (Resolve-Path "$bin/attach_host.exe").Path
+          exit $LASTEXITCODE
 
   bench:
     # 共享 CI 机器抖动大，不卡绝对目标（本地用 bench_hook --check 对照目标）；
