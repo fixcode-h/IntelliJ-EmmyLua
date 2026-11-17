@@ -116,14 +116,15 @@ jobs:
           path: out
           if-no-files-found: error
 
-  build-and-release:
-    needs: [tests-gate, native-windows, android-agent]
+  # 打包和测试门槛并行：包先打好，门槛通过后 release 只做发布，不再从头编一遍
+  package:
+    needs: [native-windows, android-agent]
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    outputs:
+      version: ${{ steps.versioning.outputs.version }}
+      changelog: ${{ steps.generate_notes.outputs.changelog }}
 
     steps:
-      # ... [前面的 checkout, setup-java, setup-gradle, versioning, generate_notes 步骤保持不变] ...
       - name: Checkout code
         uses: actions/checkout@v4
         with:
@@ -134,7 +135,7 @@ jobs:
           java-version: '21'
           distribution: 'temurin'
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
+        uses: gradle/actions/setup-gradle@v4
       - name: Calculate New Version
         id: versioning
         run: |
@@ -163,6 +164,7 @@ jobs:
           fi
           echo "最终版本号为: $NEW_VERSION"
           echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
+          echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
           echo "LAST_COMMIT_HASH=$LAST_COMMIT_HASH" >> $GITHUB_ENV
       - name: Generate Release Notes
         id: generate_notes
@@ -234,6 +236,34 @@ jobs:
             unzip -l "$zip" | grep '/server/'
           done
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-package
+          path: |
+            build/distributions/*.zip
+            build/symbols/*.zip
+          if-no-files-found: error
+
+  release:
+    needs: [tests-gate, package]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      NEW_VERSION: ${{ needs.package.outputs.version }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Download package
+        uses: actions/download-artifact@v4
+        with:
+          name: release-package
+          path: build
+      - run: find build -type f | sort
+
       # 第七步：创建 GitHub Release 并上传构建产物
       - name: Create Release and Upload Asset
         uses: softprops/action-gh-release@v2
@@ -242,7 +272,7 @@ jobs:
             ## 自动构建产物 (v${{ env.NEW_VERSION }})
 
             **✨ 本次更新包含以下提交:**
-            ${{ steps.generate_notes.outputs.changelog }}
+            ${{ needs.package.outputs.changelog }}
           tag_name: v${{ env.NEW_VERSION }}
           name: Auto Build - v${{ env.NEW_VERSION }}
           prerelease: false
@@ -258,7 +288,6 @@ jobs:
           echo "LAST_RELEASE_DATE=$(date +'%Y-%m-%d')" >> version.properties
           git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git checkout -- src/main/resources/debugger/emmy/windows
           git add version.properties
           git commit -m "chore(release): 自动更新版本至 ${{ env.NEW_VERSION }}" -m "[skip ci]"
           git push
