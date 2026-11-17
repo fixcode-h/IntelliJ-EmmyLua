@@ -7,6 +7,11 @@
 // 挂钩的入口只负责在 Lua 线程上把 lua_State 报给核心（Emmy_RegisterLuaVm），其余都在核心里。
 // 附加时还没有 Lua 模块（UE 编辑器里 Game 还没启动）：返回 kWaitingForLua，后台线程每秒找一次，找到后照第 1 步初始化，
 // token 用最近一次附加给的。UnLua 等把 Lua 当 C++ 编译时导出名是修饰过的（?lua_gettop@@...），按 @@ 前的名字认。
+// 等的同时挂 LoadLibraryExW / LoadLibraryExA：UnLua 的 Lua.dll 是延迟加载的，第一次调 lua_* 时才加载，
+// 紧接着就建 VM、跑模块顶层代码。只靠每秒找一次会晚上最多 1 秒，这些代码（如 GameInstance 的 ReceiveInit）就错过了；
+// 挂上之后 Lua 模块一加载完、在同一线程上返回给调用方之前就完成初始化。
+// 附加后第一次遇到新的 Lua VM 时，在 Lua 线程上最多等 kHoldNewVmMs 毫秒让 IDE 连上并下完断点（configurationDone），
+// 再放它往下跑；IDE 已经就绪时不等。这样「先附加再开始 PIE」时，VM 一创建就执行的代码也能停住。
 #include <Windows.h>
 #include <Psapi.h>
 #include <TlHelp32.h>
@@ -39,10 +44,17 @@ struct CoreApi {
 	decltype(&Emmy_PrepareHostPcall) prepareHostPcall = nullptr;
 	decltype(&Emmy_FinishHostPcall) finishHostPcall = nullptr;
 	decltype(&Emmy_SyncThreadHook) syncThreadHook = nullptr; // 可选：旧核心没有
+	decltype(&Emmy_WaitIDE) waitIDE = nullptr;               // 可选：没有时不等 IDE
 };
+
+// IDE 从发起附加到下完断点：emmy_tool 返回后连端口（等 Lua 时每 200 毫秒试一次）+ 握手 + 断点，一般不到 1 秒
+constexpr int kHoldNewVmMs = 5000;
 
 SRWLOCK g_initLock = SRWLOCK_INIT;
 bool g_initialized = false;
+std::atomic<bool> g_initDone{false}; // = g_initialized，给不拿锁的 LoadLibrary 钩子看
+std::atomic<bool> g_holdNewVm{false}; // 附加后还没放行过新 VM：下一个新 VM 先等 IDE 就绪
+thread_local bool t_initializing = false; // 本线程正在初始化（加载核心时会再进 LoadLibrary 钩子）
 uint32_t g_initResult = emmy_attach::kNoLua;
 CoreApi g_core;
 std::unordered_map<std::string, void*> g_luaSymbols; // 选中的 Lua 模块的导出
@@ -163,6 +175,7 @@ bool LoadCore(const char* version) {
 	EMMY_LOAD(finishHostPcall, Emmy_FinishHostPcall)
 #undef EMMY_LOAD
 	g_core.syncThreadHook = reinterpret_cast<decltype(g_core.syncThreadHook)>(GetProcAddress(core, "Emmy_SyncThreadHook"));
+	g_core.waitIDE = reinterpret_cast<decltype(g_core.waitIDE)>(GetProcAddress(core, "Emmy_WaitIDE"));
 	return true;
 }
 
@@ -189,6 +202,8 @@ void OnLuaEntry(lua_State* L) {
 	ReleaseSRWLockExclusive(&g_vmLock);
 	// 协程也会走到这里，核心按 global_State 合并成同一个 VM
 	g_core.registerLuaVm(L, "windows-attach");
+	// 附加后的第一个新 VM：在它跑任何 Lua 之前等 IDE 下完断点（IDE 已就绪时立刻返回）
+	if (g_holdNewVm.exchange(false) && g_core.waitIDE) g_core.waitIDE(kHoldNewVmMs);
 }
 
 // lua_KContext 在 5.2 是 int、5.3/5.4 是 intptr_t：按 intptr_t 转发，x86/x64 的调用约定下对 int 也成立
@@ -301,12 +316,78 @@ std::string g_pendingToken; // 等待期间最近一次附加给的 token（g_in
 
 // 调用前持有 g_initLock
 void TryInitializeLocked() {
+	t_initializing = true;
 	g_initResult = Initialize();
+	t_initializing = false;
 	// 还没找到 Lua 时之后再找；其余失败不重试，避免挂两遍钩子
 	g_initialized = g_initResult != emmy_attach::kNoLua;
+	g_initDone.store(g_initialized, std::memory_order_release);
 	if (!g_initialized) g_luaSymbols.clear();
 	// 每次附加（含重连）都换成 IDE 这次给的 token；空串表示不校验
 	if (g_initResult == emmy_attach::kOk) g_core.setToken(g_pendingToken.c_str());
+}
+
+// 有模块加载完：还在等 Lua 就马上找一次（在加载它的线程上、返回调用方之前）
+// 只看刚加载的这个模块有没有导出 Lua API（UE 启动时会加载几百个模块，不能每次都扫全部）。
+// 被别的模块隐式依赖带进来的 Lua 模块看不到，由后台线程每秒一次兜底。
+bool ExportsLua(HMODULE module) {
+	RawExport exports[512]; // 不能用静态的：几个线程可能同时在加载模块
+	const size_t n = ReadLuaExports(reinterpret_cast<const uint8_t*>(module), exports, sizeof(exports) / sizeof(exports[0]));
+	for (size_t i = 0; i < n; ++i) {
+		if (exports[i].length == 10 && strncmp(exports[i].name, "lua_gettop", 10) == 0) return true;
+	}
+	return false;
+}
+
+void OnModuleLoaded(HMODULE module) {
+	if (!module || t_initializing || g_initDone.load(std::memory_order_acquire)) return;
+	if (!ExportsLua(module)) return;
+	AcquireSRWLockExclusive(&g_initLock);
+	if (!g_initialized) TryInitializeLocked();
+	if (g_initialized) g_waiting = false;
+	ReleaseSRWLockExclusive(&g_initLock);
+}
+
+typedef HMODULE(WINAPI* LoadLibraryExWFn)(LPCWSTR, HANDLE, DWORD);
+typedef HMODULE(WINAPI* LoadLibraryExAFn)(LPCSTR, HANDLE, DWORD);
+
+HMODULE WINAPI LoadLibraryExWHook(LPCWSTR name, HANDLE file, DWORD flags) {
+	auto orig = Original<LoadLibraryExWFn>();
+	HMODULE module = orig(name, file, flags);
+	// 只当数据 / 资源映射的不是可执行模块
+	if (!(flags & (LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_DATAFILE_EXCLUSIVE | LOAD_LIBRARY_AS_IMAGE_RESOURCE))) OnModuleLoaded(module);
+	return module;
+}
+HMODULE WINAPI LoadLibraryExAHook(LPCSTR name, HANDLE file, DWORD flags) {
+	auto orig = Original<LoadLibraryExAFn>();
+	HMODULE module = orig(name, file, flags);
+	if (!(flags & (LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_DATAFILE_EXCLUSIVE | LOAD_LIBRARY_AS_IMAGE_RESOURCE))) OnModuleLoaded(module);
+	return module;
+}
+
+// LoadLibraryA/W 在 kernelbase 里都转到 Ex 版本；kernelbase 没有时退到 kernel32。挂过就不再挂。
+bool g_loadHooksInstalled = false; // g_initLock 保护
+void InstallLoadLibraryHooksLocked() {
+	if (g_loadHooksInstalled) return;
+	g_loadHooksInstalled = true;
+	HMODULE kb = GetModuleHandleW(L"kernelbase.dll");
+	if (!kb) kb = GetModuleHandleW(L"kernel32.dll");
+	if (!kb) return;
+	struct Item {
+		const char* name;
+		void* hook;
+	} items[] = {{"LoadLibraryExW", reinterpret_cast<void*>(&LoadLibraryExWHook)}, {"LoadLibraryExA", reinterpret_cast<void*>(&LoadLibraryExAHook)}};
+	for (const Item& item : items) {
+		void* target = reinterpret_cast<void*>(GetProcAddress(kb, item.name));
+		if (!target) continue;
+		auto* handle = new HOOK_TRACE_INFO();
+		if (LhInstallHook(target, item.hook, target, handle) != 0) {
+			delete handle;
+			continue;
+		}
+		ULONG acl[1] = {0};
+		LhSetExclusiveACL(acl, 0, handle);
+	}
 }
 
 DWORD WINAPI WaitForLuaThread(LPVOID) {
@@ -328,6 +409,8 @@ DWORD WINAPI AttachInit(LPVOID param) {
 	const auto* p = static_cast<const RemoteThreadParam*>(param);
 	AcquireSRWLockExclusive(&g_initLock);
 	g_pendingToken = p ? p->authToken : "";
+	// 每次附加都是一个 IDE 要来：之后第一个新 VM 等它下完断点
+	g_holdNewVm.store(true, std::memory_order_release);
 	if (!g_initialized) {
 		TryInitializeLocked();
 	} else if (g_initResult == emmy_attach::kOk) {
@@ -335,7 +418,9 @@ DWORD WINAPI AttachInit(LPVOID param) {
 	}
 	uint32_t result = g_initResult;
 	if (!g_initialized) {
-		// 还没有 Lua：留在进程里等。线程只开一个，重复附加只更新 token
+		// 还没有 Lua：留在进程里等。Lua 模块一加载就初始化（LoadLibrary 钩子），后台线程每秒再找一次兜底。
+		// 线程只开一个，重复附加只更新 token
+		InstallLoadLibraryHooksLocked();
 		if (!g_waiting) {
 			HANDLE thread = CreateThread(nullptr, 0, &WaitForLuaThread, nullptr, 0, nullptr);
 			if (thread) {

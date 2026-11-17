@@ -70,7 +70,10 @@ class LocalProcessDebugProcessFactory : LuaDebugProcessFactory {
             return waitForLua(result)
         }
 
-        /** 组件在等 Lua 加载：每秒连一次端口，直到 runtime 开始监听；进程退出就结束，期间不重新注入。 */
+        /**
+         * 组件在等 Lua 加载：每 200 毫秒连一次端口，直到 runtime 开始监听；进程退出就结束，期间不重新注入。
+         * 连得快很重要：Lua 加载后第一个 VM 会在 Lua 线程上等 IDE 下完断点（最多 5 秒）再跑，等得越短游戏卡得越短。
+         */
         private fun waitForLua(result: LocalAttachTool.Result): MessageConnection {
             val connector = TcpConnector(result.host, result.port, connectTimeoutMillis = 1000, token = token)
             var lastLog = System.nanoTime()
@@ -86,7 +89,7 @@ class LocalProcessDebugProcessFactory : LuaDebugProcessFactory {
                     notice("仍在等待目标进程加载 Lua …")
                 }
                 try {
-                    Thread.sleep(1000)
+                    Thread.sleep(200)
                 } catch (e: InterruptedException) {
                     Thread.currentThread().interrupt()
                     throw IOException("已取消等待 Lua 加载", e)
