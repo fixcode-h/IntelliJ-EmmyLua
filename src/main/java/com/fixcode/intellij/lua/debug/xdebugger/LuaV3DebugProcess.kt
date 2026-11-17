@@ -555,7 +555,7 @@ class LuaV3DebugProcess(
 
     override fun profilerSupported(): Boolean = engine.state.isConnected && engine.supportsProfiler
 
-    override fun startProfiling(): CompletableFuture<Unit> = engine.profileStart().thenApply { }
+    override fun startProfiling(): CompletableFuture<Unit> = engine.profileStart().thenApply { profileNames.clear() }
 
     // 停止时要完整的函数表和尽量完整的折叠栈（导出用），runtime 那边还有约 8 MiB 的总长度上限
     override fun stopProfiling(): CompletableFuture<LuaProfileSnapshot> =
@@ -564,20 +564,30 @@ class LuaV3DebugProcess(
     override fun profileSnapshot(): CompletableFuture<LuaProfileSnapshot> =
         engine.profileResult(limit = 1000, stackLimit = 10000).thenApply(::toSnapshot)
 
-    private fun toSnapshot(result: ProfileResult) = LuaProfileSnapshot(
-        running = result.running,
-        samples = result.samples,
-        durationMs = result.durationMs,
-        rows = result.functions.map {
-            LuaProfileRow(
-                it.fn, it.source, it.line, if (it.isC) null else engine.localPathOfChunk(it.source),
-                it.selfSamples, it.totalSamples, it.selfPercent, it.totalPercent
-            )
-        },
-        folded = result.folded(),
-        totalStacks = result.totalStacks,
-        stacksTruncated = result.stacksTruncated,
-    )
+    // 推断出的函数名：「本地文件\n定义行」→ 名字（推断不出是 <匿名>）。采样中每 2 秒刷新一次，不每次都读文件
+    private val profileNames = ConcurrentHashMap<String, String>()
+
+    private fun toSnapshot(result: ProfileResult): LuaProfileSnapshot {
+        val renames = HashMap<String, String>()
+        val rows = result.functions.map {
+            val localPath = if (it.isC) null else engine.localPathOfChunk(it.source)
+            val name = if (localPath == null || it.fn != LuaProfileNames.ANONYMOUS || it.line <= 0) it.fn
+            else profileNames.getOrPut("$localPath\n${it.line}") { LuaProfileNames.functionName(it.fn, it.line) { line -> LuaProfileNames.fileLine(localPath, line) } }
+            if (!it.isC && (name != it.fn || LuaProfileNames.isStringChunk(it.source))) {
+                renames[LuaProfileNames.runtimeLabel(it.fn, it.source, it.line)] = LuaProfileNames.label(name, it.source, it.line)
+            }
+            LuaProfileRow(name, it.source, it.line, localPath, it.selfSamples, it.totalSamples, it.selfPercent, it.totalPercent)
+        }
+        return LuaProfileSnapshot(
+            running = result.running,
+            samples = result.samples,
+            durationMs = result.durationMs,
+            rows = rows,
+            folded = LuaProfileNames.rewriteFolded(result.folded(), renames),
+            totalStacks = result.totalStacks,
+            stacksTruncated = result.stacksTruncated,
+        )
+    }
 
     /** 接口约定监听器在 EDT 上收到通知。 */
     private fun fireModel(action: (LuaDebugSessionModel.Listener) -> Unit) {

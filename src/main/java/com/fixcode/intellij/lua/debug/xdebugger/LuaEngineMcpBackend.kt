@@ -721,9 +721,10 @@ class LuaEngineMcpBackend(private val project: Project) : LuaDebugBackend, Dispo
                 samples = r.samples,
                 durationMs = r.durationMs,
                 functions = r.functions.map { f ->
+                    val local = if (f.isC || f.source.isEmpty()) null else engine.localPathOfChunk(f.source)
                     ProfileFunction(
-                        name = f.fn,
-                        file = if (f.isC || f.source.isEmpty()) null else engine.localPathOfChunk(f.source) ?: f.source.removePrefix("@"),
+                        name = if (local == null) f.fn else LuaProfileNames.functionName(f.fn, f.line) { LuaProfileNames.fileLine(local, it) },
+                        file = if (f.isC || f.source.isEmpty()) null else local ?: LuaProfileNames.chunkDisplay(f.source),
                         line = f.line,
                         selfSamples = f.selfSamples, totalSamples = f.totalSamples,
                         selfPercent = f.selfPercent, totalPercent = f.totalPercent,
