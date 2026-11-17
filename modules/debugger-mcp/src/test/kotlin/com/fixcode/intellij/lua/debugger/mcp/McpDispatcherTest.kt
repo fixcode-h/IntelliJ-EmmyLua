@@ -44,6 +44,16 @@ class McpDispatcherTest {
         val r = McpTestClient(mcp.dispatcher).call("lua_debug_session", mapOf("action" to "help"))
         assertFalse(r.isError)
         assertTrue((r["guide"] as String).contains("lua_debug_inspect"))
+        assertTrue((r["guide"] as String).contains("lua_code"))
+    }
+
+    @Test
+    fun `给了代码后端时注册 lua_code`() {
+        assertFalse("lua_code" in mcp.dispatcher.toolNames)
+        val withCode = EmmyLuaDebugMcp({ FakeBackend() }, FakeConfirmer(), code = { listOf(FakeCodeBackend()) })
+        assertEquals(listOf("lua_debug_session", "lua_debug_breakpoints", "lua_debug_inspect", "lua_code"), withCode.dispatcher.toolNames)
+        val r = McpTestClient(withCode.dispatcher).call("lua_code", mapOf("action" to "files", "query" to "x"))
+        assertFalse(r.raw, r.isError)
     }
 
     @Test

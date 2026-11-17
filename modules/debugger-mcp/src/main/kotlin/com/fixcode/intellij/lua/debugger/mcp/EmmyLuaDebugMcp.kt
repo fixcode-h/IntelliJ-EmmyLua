@@ -1,5 +1,7 @@
 package com.fixcode.intellij.lua.debugger.mcp
 
+import com.fixcode.intellij.lua.debugger.mcp.code.LuaCodeBackend
+import com.fixcode.intellij.lua.debugger.mcp.code.LuaCodeTools
 import com.fixcode.intellij.lua.debugger.mcp.protocol.McpCallLog
 import com.fixcode.intellij.lua.debugger.mcp.protocol.McpConfirmer
 import com.fixcode.intellij.lua.debugger.mcp.protocol.McpLogger
@@ -9,17 +11,23 @@ import com.fixcode.intellij.lua.debugger.mcp.tools.LuaDebugTools
 
 /**
  * 把工具、权限、调用记录组装起来。IDE 侧只需提供引擎（[backend]）、确认弹窗（[confirmer]）和日志（[logger]），
- * 再把 [dispatcher] 的工具注册到 IDE 自带的 MCP 服务器。
+ * 再把 [dispatcher] 的工具注册到 IDE 自带的 MCP 服务器。给了 [code]（每个打开的项目一个，焦点项目在前）时
+ * 再加上代码查找工具 `lua_code`。
  */
 class EmmyLuaDebugMcp(
     backend: () -> LuaDebugBackend?,
     confirmer: McpConfirmer,
     logger: McpLogger = McpLogger.NONE,
     timeouts: LuaDebugTools.Timeouts = LuaDebugTools.Timeouts(),
+    code: (() -> List<LuaCodeBackend>)? = null,
 ) {
     val policy = McpPermissionPolicy(confirmer)
     val callLog = McpCallLog()
-    val dispatcher = McpToolDispatcher(LuaDebugTools(backend, policy, timeouts, GUIDE).all(), callLog, logger)
+    val dispatcher = McpToolDispatcher(
+        LuaDebugTools(backend, policy, timeouts, GUIDE).all() + (code?.let { LuaCodeTools(it).all() } ?: emptyList()),
+        callLog,
+        logger,
+    )
 
     companion object {
         /**
@@ -64,8 +72,23 @@ class EmmyLuaDebugMcp(
             - `verified: false` means the script is not loaded yet or the line has no code; it binds when the script loads.
             - Lines are 1-based, frame 0 is the top. Results are compact JSON; errors are {"error": code, "message": what to do}.
             - Errors: `invalid_argument`, `unknown_tool`, `engine_unavailable`, `no_session`, `not_paused`, `stale_reference`,
-              `permission_denied`, `eval_forbidden`, `not_supported`, `timeout`, `attach_failed`, `target_not_found`, `cancelled`, `internal_error`.
+              `permission_denied`, `eval_forbidden`, `not_supported`, `timeout`, `attach_failed`, `target_not_found`, `indexing`, `cancelled`, `internal_error`.
             - `reload` needs UELink (UEKit) in the UE project and UnLua; no UE editor or game running -> `target_not_found`.
+
+            ## Finding Lua code: `lua_code`
+
+            Not a debug tool: it looks up code through the IDE's emmylua_ls (no session needed, read-only).
+
+            | Need | Call |
+            |---|---|
+            | Where is a function / method / class / table declared | `lua_code` action=`search` query="OnButtonClicked" (fuzzy: "OBC", "M:Fire", "UI.MainPanel.Show"; kinds, container, match=exact) |
+            | Which file is a require path / script name | `lua_code` action=`files` query="UI.MainPanel" / "MainPan" |
+            | Structure of a big script before reading it | `lua_code` action=`outline` path="UI.MainPanel" (module, absolute or relative path) |
+            | Who uses a symbol | `lua_code` action=`references` query="M:Fire", or file + line + col |
+
+            - search covers project scripts by default; scope=all adds libraries (UE declarations, extra libraries, emmylua std).
+            - `indexing`: emmylua_ls is starting or indexing, retry in a few seconds. `engine_unavailable`: no project / no server, grep instead.
+            - Fields assigned outside a table constructor (`M.x = 1`) are not listed by emmylua_ls; grep for those.
         """.trimIndent()
     }
 }

@@ -23,6 +23,7 @@
   - `lua_debug_session`：`status` / `targets` / `attach` / `stop` / `pause` / `continue` / `step` / `wait` / `reload`（经 UELink 热重载 UE 里的 Lua，不需要会话）/ `help`（完整用法）
   - `lua_debug_breakpoints`：`list` / `add` / `remove` / `enable` / `clear`
   - `lua_debug_inspect`：`stack` / `vms` / `locals` / `eval` / `output` / `probes` / `profile`
+- 代码查找类的工具不是调试工具，不叫 `lua_debug_*`，叫 `lua_code`：`search`（按名字找声明）/ `files`（按文件名或 require 路径找 .lua）/ `outline`（文件大纲）/ `references`（查引用）。它替代 UEToVS 删掉的 `search_lua` / `search_lua_files` / `get_lua_outline`，参数和返回照它们的形状（字段名按本规范）。逻辑在 `modules/debugger-mcp` 的 `code/` 包（`LuaCodeTools`，经 `LuaCodeBackend` 取数据），IDE 侧 `lsp/EmmyLuaCodeBackend` 只调 emmylua_ls（documentSymbol、workspace/symbol、references）和 IDE 的文件名索引，**不做语义分析**；只读，不弹确认。
 - `lua_` 前缀是为了和 UEToVS 的 `debug_*`、面板的 `ue_*` 不撞名。工具名一旦发布就不改：Agent 和用户的提示词里写死了它。改名或删掉时，旧名字保留一版，调用时返回「改用哪个」的错误。
 - IDE 的 MCP 服务器里所有插件的工具在同一个列表，所以前缀必须带 `lua_`；设置页里我们的类别是 `LuaDebug`，工具全名 `com.fixcode.intellij.lua.debug.mcp.LuaDebugToolset.<工具名>`（用户在「公开的工具」里的开关按全名记，不改）。
 
@@ -48,7 +49,7 @@
 ### 错误
 
 - 出错返回 `isError: true` + `{"error": "<code>", "message": "<中文说明>"}`。`message` 原样给用户和 Agent 看，要写清楚**怎么办**（例：「游戏已继续运行，引用失效：先 lua_debug_session action=wait 或 lua_debug_inspect action=stack 取新的。」）。
-- 错误码（snake_case，加新的要在这里登记）：`invalid_argument`、`unknown_tool`、`engine_unavailable`、`no_session`、`no_vm`、`not_paused`、`stale_reference`、`permission_denied`、`eval_forbidden`、`not_supported`、`timeout`、`attach_failed`、`target_not_found`、`cancelled`、`internal_error`。
+- 错误码（snake_case，加新的要在这里登记）：`invalid_argument`、`unknown_tool`、`engine_unavailable`、`no_session`、`no_vm`、`not_paused`、`stale_reference`、`permission_denied`、`eval_forbidden`、`not_supported`、`timeout`、`attach_failed`、`target_not_found`、`indexing`（emmylua_ls 正在启动或建索引，稍后重试；`lua_code` 用）、`cancelled`、`internal_error`。
 - 参数错和权限拒绝是工具错误（`isError`），不是 JSON-RPC 协议错误；协议层的错误由 IDE 的 MCP 服务器处理。
 
 ### 说明文字
@@ -56,12 +57,12 @@
 - 每个工具的 description 用 `ToolGuide` 的固定结构（英文，给模型看）：`What` + `USE FIRST WHEN:` + `INSTEAD OF:` + `NOT FOR:` + 可选 `Results:`，总长不超过 1200 字。`UseWhen` 写具体场景和典型调用顺序，`InsteadOf` 写它比通用办法（加 print、读代码猜）好在哪，`NotFor` 写不能做什么、该用什么。
 - `title` 是英文显示名，`_meta.titles` 带 `{"zh", "en"}`，客户端按自己的界面语言选。
 - `annotations`：只读工具 `readOnlyHint: true`；会结束进程或丢数据的 `destructiveHint: true`。
-- IDE 的 MCP 服务器没有给单个插件的 `instructions` 和资源：调试循环写进 `lua_debug_session` 的说明（典型调用顺序），完整用法放 `EmmyLuaDebugMcp.GUIDE`，由 `lua_debug_session action=help` 返回。
-- 单测会检查：三段结构齐全、长度上限、参数名 snake_case（`LuaDebugToolsTest`）、`help` 能返回用法（`McpDispatcherTest`）。
+- IDE 的 MCP 服务器没有给单个插件的 `instructions` 和资源：调试循环写进 `lua_debug_session` 的说明（典型调用顺序），完整用法放 `EmmyLuaDebugMcp.GUIDE`（含 `lua_code` 一节），由 `lua_debug_session action=help` 返回。
+- 单测会检查：三段结构齐全、长度上限、参数名 snake_case（`LuaDebugToolsTest`、`LuaCodeToolsTest`）、`help` 能返回用法（`McpDispatcherTest`）。
 
 ### 权限
 
-- 只读（`status`、`list`、`stack`、`locals`、`output`……）默认允许。
+- 只读（`status`、`list`、`stack`、`locals`、`output`……，以及整个 `lua_code`）默认允许。
 - 控制（断点增删改、继续、单步、暂停、结束会话、UE 热重载 `reload`）：每个调试会话**第一次**控制时在 IDE 里弹通知「允许一次 / 本次会话总是允许 / 拒绝」；拒绝或超时返回 `permission_denied`，说明里让 Agent 去问用户，不要重试。「撤销 Agent 控制」清掉所有授权。
 - `attach` 每次都确认。
 - `profile`（采样性能分析）按只读处理、不弹确认：它不暂停、不改变量、不改执行路径，和 `output` / `probes` 一样只观察；代价是采样期间 Lua 变慢（约 2 倍），所以限时（`duration_ms` ≤ 60000）并由 runtime 到点自动停，IDE 断开也会停。
@@ -83,5 +84,6 @@
 ### 测试
 
 - `modules/debugger-mcp` 不依赖 IntelliJ，工具层用 `FakeBackend`（假引擎）单测，分发器（参数校验、错误格式、日志、调用记录）用 `McpDispatcherTest`。改工具时同步改 `LuaDebugToolsTest`。
+- `lua_code` 用 `FakeCodeBackend`（形状照 emmylua_ls 的真实回包）单测（`LuaCodeToolsTest`）；`LuaCodeRealServerTest` 用真的 emmylua_ls 跑一遍，只在环境变量 `EMMYLUA_LS` 指向可执行文件时运行，改了符号整形或 emmylua_ls 升级时跑一次。
 - IDE 适配用主插件的 `McpCompatTest`：编译用的 2025.2 总是测；其他版本把各版本 IDE 的 `plugins/mcpserver*/lib` 里的 MCP 服务器 jar（2026.2 起加 MCP Kotlin SDK 的 jar）放进 `EMMY_MCPSERVER_JARS/<版本>/` 再跑。2026.2 起的 jar 是 Java 25 字节码，在 Java 21 上测时先把类文件主版本号改成 65（只为验证构造参数，不进包）。
 - 云端拉不下 IntelliJ SDK 时，可以只用 kotlinc 编这个模块跑单测；主插件交给 CI。

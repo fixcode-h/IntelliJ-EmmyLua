@@ -39,6 +39,7 @@ EmmyLua 是一个功能强大的 Lua 语言支持插件，专为 IntelliJ IDEA �
 - **断点** - 条件断点、命中次数、日志断点、Probe（不停下只记录值）、Lua 出错时暂停
 - **变量和协程** - 变量分组展示、修改变量值、查看其他协程的调用栈
 - **MCP 调试工具** - 让 Claude Code、Cursor 等 Agent 直接下断点、看栈和变量
+- **MCP 代码查找** - Agent 用 `lua_code` 按名字找 Lua 函数 / 方法 / 类、按 require 路径找文件、看文件大纲、查引用（经 emmylua_ls，替代 UEToVS 的 Lua 工具）
 - **UE 一键热重载** - 编辑器右键「重载到 UE」（Ctrl+Alt+R）或设置里打开「保存后自动重载」，经 UELink 让开着的 UE 编辑器 / 游戏重新加载 Lua 模块，不用附加
 - **断点诊断** - 一直没对上代码的断点变灰并在悬停里说明原因；调试工具栏「诊断断点」列出加载过的 chunk 和建议的路径映射
 - **调试控制台** - 交互式调试控制台，支持表达式求值
@@ -109,7 +110,7 @@ end
 
 ### 调试配置
 
-详细说明：[附加调试（Windows）](docs/user/attach.md)、[Android 真机附加](docs/user/android.md)、[UE 声明](docs/user/ue-declarations.md)、[Agent 调试（MCP）](docs/mcp-debug-guide.md)。
+详细说明：[附加调试（Windows）](docs/user/attach.md)、[Android 真机附加](docs/user/android.md)、[UE 声明](docs/user/ue-declarations.md)、[Agent 调试和代码查找（MCP）](docs/mcp-debug-guide.md)。
 
 1. **附加本机进程（Windows）**
    - `Run` → `Attach to Process…`，在列表里选「Lua 附加」下的游戏进程；或新建运行配置「Lua 附加」

@@ -11,6 +11,10 @@ import com.intellij.openapi.vfs.VfsUtilCore
 import com.fixcode.intellij.lua.debugger.mcp.CompositeLuaDebugBackend
 import com.fixcode.intellij.lua.debugger.mcp.EmmyLuaDebugMcp
 import com.fixcode.intellij.lua.debugger.mcp.LuaDebugBackend
+import com.fixcode.intellij.lua.debugger.mcp.code.LuaCodeBackend
+import com.fixcode.intellij.lua.lsp.EmmyLuaCodeBackend
+import com.intellij.openapi.project.Project
+import java.util.concurrent.ConcurrentHashMap
 import com.fixcode.intellij.lua.debugger.mcp.protocol.McpLogger
 import java.nio.file.Path
 import java.util.concurrent.CopyOnWriteArrayList
@@ -19,6 +23,7 @@ import java.util.concurrent.CopyOnWriteArrayList
  * 应用级：Lua 调试工具的唯一一份状态（授权、调用记录、各客户端看过的暂停）。
  * 工具由 [com.fixcode.intellij.lua.debug.mcp.ide.LuaMcpToolsProvider] 注册到 IDE 自带的 MCP 服务器，
  * 调用都转到这里的 [mcp]；多个打开的项目合成一个引擎（[CompositeLuaDebugBackend]）。
+ * 代码查找工具 `lua_code` 也挂在这里：每个打开的项目一个 [EmmyLuaCodeBackend]，焦点项目排第一。
  */
 @Service(Service.Level.APP)
 class LuaDebugMcpTools : Disposable {
@@ -42,7 +47,20 @@ class LuaDebugMcpTools : Disposable {
                 McpLogger.Level.ERROR -> log.warn(line, error)
             }
         },
+        code = ::codeBackends,
     )
+
+    /** 按项目复用：后端里缓存了语言服务器和库目录。 */
+    private val codeBackendCache = ConcurrentHashMap<Project, EmmyLuaCodeBackend>()
+
+    private fun codeBackends(): List<LuaCodeBackend> {
+        codeBackendCache.keys.removeIf { it.isDisposed }
+        val focused = focusedProjectName()
+        return ProjectManager.getInstance().openProjects
+            .filter { !it.isDisposed && !it.isDefault }
+            .sortedByDescending { it.name == focused }
+            .map { project -> codeBackendCache.computeIfAbsent(project) { EmmyLuaCodeBackend(it) } }
+    }
 
     init {
         // 调用、授权变化都通知 UI（Agent 页）
@@ -83,6 +101,7 @@ class LuaDebugMcpTools : Disposable {
 
     override fun dispose() {
         listeners.clear()
+        codeBackendCache.clear()
     }
 
     companion object {
