@@ -117,6 +117,31 @@ class ReconnectBehaviorTest : BehaviorTestBase() {
     }
 
     @Test
+    fun `上一个调试连接还没释放时 握手 BUSY 自动重试后连上`() {
+        startRuntime()
+        runtime.busyHandshakes = 2
+        connect(config = testConfig().copy(busyRetryDelayMillis = 20))
+        assertEquals(SessionState.RUNNING, session.state)
+        assertEquals(3, runtime.connections)
+    }
+
+    @Test
+    fun `一直 BUSY 时按次数放弃并说明原因`() {
+        startRuntime()
+        runtime.busyHandshakes = 100
+        if (runtime.vm(1) == null) runtime.addVm("GameLua")
+        newSession(testConfig().copy(busyRetries = 2, busyRetryDelayMillis = 20))
+        val error = try {
+            session.start().get(5, java.util.concurrent.TimeUnit.SECONDS)
+            null
+        } catch (e: java.util.concurrent.ExecutionException) {
+            e.cause
+        }
+        assertTrue(error?.message, error?.message?.contains("另一个调试器") == true)
+        assertEquals(3, runtime.connections)
+    }
+
+    @Test
     fun `重连次数用完后会话结束并说明原因`() {
         connect(config = testConfig(ReconnectPolicy(maxAttempts = 2, initialDelayMillis = 10, maxDelayMillis = 10)))
         runtime.close()

@@ -15,6 +15,7 @@ import com.fixcode.intellij.lua.debug.engine.fake.EventRecorder
 import com.fixcode.intellij.lua.debug.engine.transport.TcpConnector
 import com.fixcode.intellij.lua.debug.protocol.Capabilities
 import com.fixcode.intellij.lua.debug.protocol.EvalModes
+import com.fixcode.intellij.lua.debug.protocol.HelperScript
 import com.fixcode.intellij.lua.debug.protocol.PauseReasons
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -219,6 +220,71 @@ class NativeRuntimeE2eTest {
         val (second, secondEvents) = session()
         assertEquals(SessionState.RUNNING, second.state)
         secondEvents.assertNone<DebugEvent.Paused>(300)
+    }
+
+    /**
+     * 用户场景：游戏一直开着，IDE 停止调试、再附加，反复几次都要能正常调试。
+     * 轮流覆盖「停在断点上时停止」「运行中停止」「单步途中停止」「关掉会话不发 disconnect（IDE 崩溃 / 强杀）」。
+     */
+    @Test
+    fun `游戏不重启 停止调试再附加 反复多次都能正常断点和看变量`() {
+        // 和 IDE 一样每次附加都下发类型显示脚本，反复加载不能出错
+        val helperDir = generateSequence(File("").absoluteFile) { it.parentFile }
+            .map { File(it, "src/main/resources/debugger/emmy/v3") }.firstOrNull { it.isDirectory }
+        val helpers = helperDir?.let { dir -> listOf("emmy", "emmy_ue", "emmy_main").map { HelperScript(it, File(dir, "$it.lua").readText()) } }.orEmpty()
+        repeat(4) { round ->
+            val (session, events) = session { it.copy(helpers = helpers, helperMain = "emmy_main") }
+            assertEquals("第 ${round + 1} 次附加", SessionState.RUNNING, session.state)
+            // 上一轮留下的断点、单步状态不能带过来：没下断点前不应该停
+            events.assertNone<DebugEvent.Paused>(300)
+
+            val id = session.addBreakpoint(BreakpointRequest(script.path, LINE_LOCAL_R)).await()
+            val pause = events.pause()
+            assertEquals("第 ${round + 1} 次附加", PauseReasons.BREAKPOINT, pause.reason)
+            assertEquals(BreakpointVerification.VERIFIED, session.breakpoints().single { it.id == id }.verification)
+            val frame = session.stackTrace(pause).await().frames.first()
+            val locals = session.scopes(frame).await().single { it.name == "locals" }
+            assertTrue(session.variables(locals).await().variables.any { it.variable.name == "i" })
+
+            when (round) {
+                0 -> session.stop().await()
+                1 -> {
+                    session.removeBreakpoint(id).await()
+                    session.resume(pause.vmId).await()
+                    session.stop().await()
+                }
+                2 -> {
+                    session.stepOver(pause.vmId).await()
+                    session.stop().await()
+                }
+                // 不打招呼直接断开 TCP（IDE 被强杀、网络断了）：runtime 也要恢复游戏、清掉断点
+                else -> session.close()
+            }
+        }
+        val (last, lastEvents) = session { it.copy(helpers = helpers, helperMain = "emmy_main") }
+        lastEvents.assertNone<DebugEvent.Paused>(300)
+        last.addBreakpoint(BreakpointRequest(script.path, LINE_ADD_BODY)).await()
+        assertEquals(LINE_ADD_BODY, lastEvents.pause().top!!.line)
+    }
+
+    /** 旧会话还连着时再附加：先收到 BUSY 自动重试，旧会话一停就连上，断点照常生效。 */
+    @Test
+    fun `上一个会话还没停时再附加 等它停了自动连上`() {
+        val (first, _) = session()
+        val config = SessionConfig(
+            name = "e2e-2", requestTimeoutMillis = 5_000, handshakeTimeoutMillis = 5_000,
+            heartbeatIntervalMillis = 0, reconnect = ReconnectPolicy.NONE, busyRetryDelayMillis = 200
+        )
+        val second = DebugSession(config, TcpConnector("127.0.0.1", port), SourceMapper(listOf(MappingRule("game", File(root, "game").path))))
+        sessions += second
+        val events = EventRecorder(second)
+        val started = second.start()
+        Thread.sleep(600)
+        assertTrue("旧会话还连着，新会话不应该已经连上", !started.isDone)
+        first.stop().await()
+        started.get(10, TimeUnit.SECONDS)
+        second.addBreakpoint(BreakpointRequest(script.path, LINE_LOCAL_R)).await()
+        assertEquals(LINE_LOCAL_R, events.pause().top!!.line)
     }
 
     @Test
