@@ -1,5 +1,7 @@
 // 端到端测试：进程内起一个「游戏线程」跑 Lua，测试客户端扮演 IDE 走完整的协议 v3。
 #include "check.h"
+#include "core.h"
+#include "vm.h"
 #include "emmy/emmy_core.h"
 #include "emmy/emmy_host_value.h"
 #include "frame.h"
@@ -1217,6 +1219,57 @@ TEST_CASE("session.unlua_object_view") {
 	CHECK(Ok(Continue(c, pz)));
 	c.Request("disconnect");
 	Emmy_UnregisterHostValueProviderV2(pid);
+}
+
+TEST_CASE("session.internal_fault_disables_vm_only") {
+	// 调试器内部出错（这里注入一个 C++ 异常）时：只停掉出错的那个 VM 的钩子并报告，宿主照常跑，别的 VM 不受影响
+	TestClient c;
+	CHECK(c.Connect("127.0.0.1", g_port));
+	CHECK(Ok(Hello(c)));
+	CHECK(Ok(c.Request("configurationDone")));
+	g_rev = 0;
+	CHECK(Ok(SetBps(c, json::array({Bp("never", 100)})))); // 有断点才挂钩子
+	lua_State* L = luaL_newstate();
+	luaL_openlibs(L);
+	Emmy_RegisterLuaVm(L, "fault");
+	const char* src = "function f(n) local s = 0 for i = 1, n do s = s + i end return s end";
+	lua::LoadBuffer(L, src, std::strlen(src), "@game/fault.lua");
+	lua_call(L, 0, 0);
+	auto run = [L] {
+		lua_getglobal(L, "f");
+		lua_pushinteger(L, 5000);
+		const int rc = lua_pcall(L, 1, 1, 0);
+		lua_pop(L, 1);
+		return rc;
+	};
+	CHECK_EQ(run(), LUA_OK);
+	std::shared_ptr<Vm> vm = Core::Get().FindVmByState(L);
+	CHECK(vm != nullptr);
+	if (vm) {
+		vm->Kick();
+		CHECK_EQ(run(), LUA_OK);
+		CHECK(lua_gethook(L) != nullptr);
+		vm->mux().InjectFaultForTest();
+		CHECK_EQ(run(), LUA_OK);
+		CHECK(vm->mux().faulted());
+		CHECK(lua_gethook(L) == nullptr);
+		json out = c.WaitEvent("output", 3000, [](const json& b) {
+			return b.value("text", std::string()).find("调试器内部错误") != std::string::npos;
+		});
+		CHECK(out.is_object());
+		vm->Kick(); // 出过错的 VM 不再挂钩子
+		CHECK_EQ(run(), LUA_OK);
+		CHECK(lua_gethook(L) == nullptr);
+	}
+	// 游戏线程上的 VM 照常可以断下
+	CHECK(Ok(SetBps(c, json::array({Bp("ok", 9)}))));
+	json pz = c.WaitEvent("paused");
+	CHECK(pz.is_object());
+	CHECK(Ok(SetBps(c, json::array())));
+	if (pz.is_object()) CHECK(Ok(Continue(c, pz)));
+	c.Request("disconnect");
+	Emmy_UnregisterLuaVm(L);
+	lua_close(L);
 }
 
 int main() {

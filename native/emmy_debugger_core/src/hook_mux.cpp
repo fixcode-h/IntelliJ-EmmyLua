@@ -1,8 +1,16 @@
 #include "hook_mux.h"
 
+#include "core.h"
 #include "lua_internal.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <exception>
+#include <stdexcept>
+
+#if defined(_WIN32)
+#include <windows.h>
+#endif
 
 namespace emmy {
 
@@ -71,6 +79,10 @@ HookMux::~HookMux() = default;
 
 void HookMux::LuaHookEntry(lua_State* L, lua_Debug* ar) {
 	HookMux* mux = FindMux(lua::GlobalStateOf(L));
+	if (mux && mux->faulted()) {
+		mux->DropHook(L);
+		return;
+	}
 	if (mux) {
 		MuxDebugger* dbg = mux->debugger();
 		bool timedOut = false;
@@ -81,9 +93,89 @@ void HookMux::LuaHookEntry(lua_State* L, lua_Debug* ar) {
 			}
 			return;
 		}
-		mux->Dispatch(L, ar);
+		mux->GuardedDispatch(L, ar);
 	} else {
 		// VM 已经注销但钩子还在（协程上残留）：摘掉
+		lua_sethook(L, nullptr, 0, 0);
+	}
+}
+
+bool HookMux::DispatchCatchingCxx(lua_State* L, lua_Debug* ar, std::string& what) {
+	// 只接 std::exception：Lua 按 C++ 编译时（UnLua）lua_error 抛的是 lua_longjmp 指针，不能在这里吞掉
+	try {
+		if (injectFault_.exchange(false, std::memory_order_acq_rel)) throw std::runtime_error("测试注入的内部错误");
+		Dispatch(L, ar);
+		return true;
+	} catch (const std::exception& e) {
+		what = e.what();
+		return false;
+	}
+}
+
+#if defined(_WIN32)
+namespace {
+// 只接硬件异常；C++ 异常（0xE06D7363）、longjmp 的展开（STATUS_LONGJUMP）照常往外走
+int FaultFilter(unsigned long code) {
+	switch (code) {
+	case EXCEPTION_ACCESS_VIOLATION:
+	case EXCEPTION_ARRAY_BOUNDS_EXCEEDED:
+	case EXCEPTION_DATATYPE_MISALIGNMENT:
+	case EXCEPTION_ILLEGAL_INSTRUCTION:
+	case EXCEPTION_IN_PAGE_ERROR:
+	case EXCEPTION_INT_DIVIDE_BY_ZERO:
+	case EXCEPTION_PRIV_INSTRUCTION:
+		return EXCEPTION_EXECUTE_HANDLER;
+	default:
+		return EXCEPTION_CONTINUE_SEARCH;
+	}
+}
+
+// __try 所在的函数里不能有要析构的 C++ 对象，所以字符串放在调用方
+bool SehGuard(HookMux* mux, lua_State* L, lua_Debug* ar, std::string* what, bool (HookMux::*fn)(lua_State*, lua_Debug*, std::string&),
+	unsigned long* code) {
+	__try {
+		return (mux->*fn)(L, ar, *what);
+	} __except (FaultFilter(*code = GetExceptionCode())) {
+		return false;
+	}
+}
+} // namespace
+#endif
+
+bool HookMux::GuardedDispatch(lua_State* L, lua_Debug* ar) {
+	std::string what;
+#if defined(_WIN32)
+	unsigned long code = 0;
+	if (SehGuard(this, L, ar, &what, &HookMux::DispatchCatchingCxx, &code)) return true;
+	if (what.empty()) {
+		char buf[64];
+		std::snprintf(buf, sizeof(buf), "硬件异常 0x%08lX", code);
+		what = buf;
+	}
+#else
+	if (DispatchCatchingCxx(L, ar, what)) return true;
+#endif
+	OnFault(L, what);
+	return false;
+}
+
+void HookMux::OnFault(lua_State* L, const std::string& what) {
+	if (faulted_.exchange(true, std::memory_order_acq_rel)) {
+		DropHook(L);
+		return;
+	}
+	DropHook(L);
+	// 其他协程上的钩子在它们下一次事件时由入口摘掉（faulted 检查）
+	Core::Get().Log("console", "error",
+		"调试器内部错误，已停止这个 Lua VM 的调试（游戏继续运行）：" + what +
+			"。断点、单步在这个 VM 上不再生效；重新附加可以恢复。请把这条信息和 IDE 日志（帮助 → 显示日志）反馈给我们。");
+}
+
+void HookMux::DropHook(lua_State* L) {
+	// 主线程上接管过的宿主钩子放回去，其余线程直接摘掉
+	if (L == mainL_ && adoptedHook_) {
+		lua_sethook(L, adoptedHook_, adoptedMask_, adoptedCount_);
+	} else {
 		lua_sethook(L, nullptr, 0, 0);
 	}
 }
@@ -151,6 +243,7 @@ int HookMux::EffectiveCount(int debuggerMask) const {
 }
 
 void HookMux::Kick() {
+	if (faulted()) return;
 	spreadPending_.store(true, std::memory_order_release);
 	int mask = staticMask_.load(std::memory_order_relaxed) | DebuggerBaseMask();
 	if (mask == 0 && !(debugger_ && debugger_->WantsHook() && debugger_->HasPendingWork())) {
@@ -162,6 +255,7 @@ void HookMux::Kick() {
 }
 
 void HookMux::EnsureHook(lua_State* L) {
+	if (faulted()) return;
 	if (lua_gethook(L) != nullptr) return; // 已经是我们的，或者宿主自己的钩子：不动
 	const int dbgMask = DebuggerBaseMask();
 	const int mask = staticMask_.load(std::memory_order_relaxed) | dbgMask;
