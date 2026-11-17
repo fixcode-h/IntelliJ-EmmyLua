@@ -287,8 +287,10 @@ int Vm::OnHook(lua_State* L, lua_Debug* ar) {
 			return 0;
 		}
 	}
+	bool refreshed = false;
 	if (pending_.load(std::memory_order_acquire) != 0) {
 		ProcessPending(L);
+		refreshed = true;
 	}
 	if (!active_.load(std::memory_order_relaxed)) {
 		return 0;
@@ -361,6 +363,13 @@ int Vm::OnHook(lua_State* L, lua_Debug* ar) {
 	}
 	// COUNT：保持当前的区域状态
 	AdaptCount();
+	if (refreshed && ev == LUA_HOOKCOUNT) {
+		// 断点刚变（或 VM 刚接入会话）：正在跑的函数没有 CALL 事件可等，当场判断它和它的调用者热不热。
+		// 否则模块顶层代码、主循环这类一直不返回的函数里新下的断点要等下次进入才生效
+		if (lua::HookFuncInfo(L, ar, false, f) && IsHotFunc(f)) return BaseMask() | region | LUA_MASKLINE;
+		lua_Debug self;
+		if (lua_getstack(L, 0, &self) && AnyHotFrame(L, &self)) return BaseMask() | region;
+	}
 	return BaseMask() | (curMask & (region | LUA_MASKLINE));
 }
 
@@ -586,7 +595,7 @@ void Vm::ProcessPending(lua_State* L) {
 		RefreshIndex();
 		bool wantCapture = active_.load() && core.options().captureOutput.load();
 		if (wantCapture != outputCaptured_) InstallOutputCapture(L, wantCapture);
-		bool wantWrap = active_.load() && core.options().exceptions.load() == 2;
+		bool wantWrap = active_.load() && core.options().WantCaughtErrors();
 		if (wantWrap != errorsWrapped_) InstallErrorWrappers(L, wantWrap);
 	}
 	if (!active_.load()) {
@@ -875,7 +884,7 @@ void Vm::InstallErrorWrappers(lua_State* L, bool enable) {
 }
 
 void Vm::SyncErrorWrappers(lua_State* L) {
-	const bool want = active_.load() && Core::Get().options().exceptions.load() == 2;
+	const bool want = active_.load() && Core::Get().options().WantCaughtErrors();
 	if (want != errorsWrapped_) InstallErrorWrappers(L, want);
 }
 
@@ -910,7 +919,10 @@ bool Vm::IsInsideLuaPcall(lua_State* L) {
 void Vm::OnLuaError(lua_State* L, int msgIdx, bool uncaught) {
 	Core& core = Core::Get();
 	const int mode = core.options().exceptions.load();
-	if (mode == 0 || (mode == 1 && !uncaught)) return;
+	const int collect = core.options().collectErrors.load();
+	const bool wantPause = mode == 2 || (mode == 1 && uncaught);
+	const bool wantCollect = collect == 2 || (collect == 1 && uncaught);
+	if (!wantPause && !wantCollect) return;
 	if (pending_.load() != 0) ProcessPending(L);
 	if (!active_.load() || inPauseLoop_ || inspector_.evaluating()) return;
 	msgIdx = lua::AbsIndex(L, msgIdx);
@@ -937,21 +949,39 @@ void Vm::OnLuaError(lua_State* L, int msgIdx, bool uncaught) {
 			break;
 		}
 	}
-	std::string traceback;
-	int lines = 0;
-	for (int level = skip; lua_getstack(L, level, &ar) && lines < 32; ++level, ++lines) {
-		lua_getinfo(L, "nSl", &ar);
-		if (ar.source && std::strcmp(ar.source, kWrapChunkName) == 0) continue;
-		traceback += "\t";
-		traceback += ar.short_src;
-		if (ar.currentline > 0) traceback += ":" + std::to_string(ar.currentline);
-		traceback += ": in ";
-		if (ar.name) traceback += std::string("function '") + ar.name + "'";
-		else if (ar.what && std::strcmp(ar.what, "main") == 0) traceback += "main chunk";
-		else traceback += "?";
-		traceback += "\n";
+	auto buildTraceback = [&]() {
+		std::string traceback;
+		int lines = 0;
+		lua_Debug fr;
+		for (int level = skip; lua_getstack(L, level, &fr) && lines < 32; ++level, ++lines) {
+			lua_getinfo(L, "nSl", &fr);
+			if (fr.source && std::strcmp(fr.source, kWrapChunkName) == 0) continue;
+			traceback += "\t";
+			traceback += fr.short_src;
+			if (fr.currentline > 0) traceback += ":" + std::to_string(fr.currentline);
+			traceback += ": in ";
+			if (fr.name) traceback += std::string("function '") + fr.name + "'";
+			else if (fr.what && std::strcmp(fr.what, "main") == 0) traceback += "main chunk";
+			else traceback += "?";
+			traceback += "\n";
+		}
+		return traceback;
+	};
+	if (wantCollect) {
+		// 错误聚合：位置取第一个 Lua 帧；同一条之后每秒最多推一次计数，取栈只在第一次
+		std::string chunkName;
+		int line = 0;
+		lua_Debug top;
+		if (lua_getstack(L, skip, &top)) {
+			lua_getinfo(L, "Sl", &top);
+			if (top.source) chunkName = top.source;
+			line = top.currentline;
+		}
+		json ev = core.errors().Record(id_, chunkName, line, message, uncaught, WallMs(), buildTraceback);
+		if (!ev.is_null()) core.Emit("luaError", std::move(ev));
 	}
-	json exc = {{"message", message}, {"traceback", traceback}, {"uncaught", uncaught}};
+	if (!wantPause) return;
+	json exc = {{"message", message}, {"traceback", buildTraceback()}, {"uncaught", uncaught}};
 	const std::string desc = (uncaught ? "未处理的错误：" : "出错（已被 pcall 接住）：") + message.substr(0, 200);
 	EnterPause(L, "exception", {}, desc.c_str(), std::move(exc), skip);
 }

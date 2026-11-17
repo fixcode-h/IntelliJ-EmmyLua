@@ -111,6 +111,7 @@ set(EMMY_CORE_SOURCES
     src/lua_internal.cpp
     src/hook_mux.cpp
     src/profiler.cpp
+    src/error_stats.cpp
     src/inspector.cpp
     src/host_value.cpp
     src/rich_view.cpp

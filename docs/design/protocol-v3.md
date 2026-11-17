@@ -26,6 +26,7 @@
 18. [实现要求](#18-实现要求)
 19. [变更记录](#19-变更记录)
 20. [采样性能分析（profile）](#20-采样性能分析profile)
+21. [错误聚合（errorReport）](#21-错误聚合errorreport)
 
 ---
 
@@ -643,6 +644,7 @@ v3 的懒加载：helper 生成的子项由 runtime 缓存在本次暂停里，`
 | --- | --- | --- |
 | `stopOnEntry` | `false` | `configurationDone` 后第一次执行 Lua 时暂停（`reason: "entry"`） |
 | `exceptions` | `none` | 能力 `exceptions`（runtime 没声明这个能力时，传 `none` 以外的值返回 `UNSUPPORTED`；`emmy_debugger_core` 已声明；「没被接住」要宿主在自己的错误处理函数里通知核心，见原生核心 README「出错即停」）。`none` / `uncaught`（错误没有被 `pcall`/`xpcall` 接住时暂停）/ `all`（任何错误都暂停，包括被 `pcall` 接住的） |
+| `collectErrors` | `none` | 能力 `errorReport`：错误聚合（第 21 节），只计数、不暂停。`none` / `uncaught` / `all`（含被 `pcall`/`xpcall` 接住的） |
 | `captureOutput` | `false` | 转发 `print`（11.1） |
 | `allowLuaEval` | `true` | `false` 时 `mode: "lua"` 的求值和 `setVariable` 回 `EVAL_FORBIDDEN`（MCP 未授权任意求值时由 IDE 设为 `false`） |
 | `valuePathInvokeIndex` | `false` | valuePath 是否触发 `__index` |
@@ -728,6 +730,7 @@ IDE 收到不认识的错误码按 `INTERNAL` 处理并展示 `message`。
 | `hookMux` | runtime 用 HookMux 与宿主其他钩子共存（诊断信息，IDE 不依赖） |
 | `terminate` | `disconnect { terminate: true }` |
 | `profiler` | `profile`（第 20 节）。没协商到时 IDE 不发 `profile`、不显示采样按钮 |
+| `errorReport` | `setOptions.collectErrors`、`errors` 命令、`luaError` 事件（第 21 节） |
 
 能力位只增不改义；新功能加新能力位，旧 IDE 看不到就不会用。
 
@@ -824,6 +827,7 @@ IDE                                           runtime
 | v3.0（revision 0） | 2026-11-16 | 首个定稿。采用 IDE 引擎线程提出的消息字段命名（`command`/`args`、`ok`/`body`/`error`、`seq`/`event`/`body`）与命令名 |
 | v3.0（revision 0） | 2026-11-16 | 按 `emmy_debugger_core` 实现补充说明（不改字段语义）：`loadHelpers` 立即返回 `{}`、失败走 `output`；helper 读写宿主 `_G`；父协程帧为可选；`exceptions` 能力未声明时 `setOptions.exceptions` 只接受 `none`。变量视图的字段扩展见 [variable-view.md](variable-view.md)，后续合进第 9 节 |
 | v3.0（revision 0） | 2026-11-16 | 新增能力 `profiler` 和命令 `profile`（第 20 节），向后兼容：老 runtime 不声明这个能力，IDE 就不发 |
+| v3.0（revision 0） | 2026-11-17 | 新增能力 `errorReport`：`setOptions.collectErrors`、命令 `errors`、事件 `luaError`（第 21 节）。宿主 `lua_pcall` 自带错误处理函数（如 UnLua）时，核心把自己的处理函数串在它前面，`exceptions` 和 `collectErrors` 都能收到这类错误 |
 
 ---
 
@@ -879,3 +883,34 @@ IDE                                           runtime
 - 采样不改变游戏状态（不暂停、不改变量）。IDE 断开时 runtime 停掉所有 VM 的采样。
 - 样本按执行的 Lua 指令数分布，不按墙钟时间：COUNT 钩子只在执行 Lua 指令时计数，花在 C 函数（引擎接口、`string` 库等）里的时间不计入任何样本。看「哪段 Lua 逻辑执行得最多」很准，看「Lua 调了哪个慢的引擎接口」要配合引擎自己的分析器。
 - 错误：`action` / 范围不对回 `INVALID_ARGS`，`vmId` 不存在或进程里还没有 VM 回 `VM_NOT_FOUND`。
+
+---
+
+## 21. 错误聚合（errorReport）
+
+能力 `errorReport`。被 `pcall` 接住的错误常常每帧一次，逐条转发会刷屏、拖慢游戏，所以 runtime 先按「VM + 第一个 Lua 帧的位置 + 消息 + 是否被接住」去重计数，IDE 的「Lua 错误」页和 MCP `lua_debug_inspect action=errors` 用它。
+
+- 打开：`setOptions { "collectErrors": "all" }`（`uncaught` 只收没被 Lua 代码接住的）。和 `exceptions` 独立：可以只计数不停，也可以两个都开。`all` 时 runtime 包装 VM 的 `pcall` / `xpcall`（和 `exceptions: "all"` 同一套包装）。
+- 新会话（`hello`）清空聚合；最多 500 条，之后的新错误只计入 `dropped`。消息超过 1024 字节截断。
+
+### 21.1 事件 `luaError`
+
+```json
+{ "event": "luaError", "body": { "id": 3, "vmId": 1, "message": "main.lua:12: attempt to index a nil value",
+  "chunkName": "@main.lua", "line": 12, "uncaught": true, "count": 1, "firstMs": 1763390000000, "lastMs": 1763390000000,
+  "traceback": "\tmain.lua:12: in function 'tick'\n" } }
+```
+
+- 某条错误第一次出现时马上推一条，带 `traceback`（最多 32 帧）；之后同一条（同一个 `id`）每秒最多推一次，只带新的 `count` / `lastMs`，不带 `traceback`。
+- 推送是限流的，计数以 `errors` 命令为准。`uncaught`、`chunkName`、`line` 为默认值（`false` / 空 / 0）时省略。
+
+### 21.2 `errors`
+
+```json
+{ "command": "errors", "args": { "action": "list" } }
+→ { "items": [ { "id": 3, "vmId": 1, "message": "...", "chunkName": "@main.lua", "line": 12, "count": 120,
+                 "firstMs": 1763390000000, "lastMs": 1763390004000, "traceback": "..." } ], "dropped": 0 }
+```
+
+- `action`：`list`（默认，按 `lastMs` 倒序的全部条目，都带 `traceback`）/ `clear`（清空，回 `{}`）。`dropped` 为 0 时省略。
+

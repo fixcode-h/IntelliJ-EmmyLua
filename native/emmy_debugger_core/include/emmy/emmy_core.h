@@ -58,6 +58,9 @@ EMMY_API void Emmy_Stop(void);
 
 /* 阻塞当前线程直到 IDE 发出 configurationDone 或超时；返回 1 表示 IDE 已就绪。 */
 EMMY_API int Emmy_WaitIDE(int timeoutMs);
+/* 同 Emmy_WaitIDE，再让 L（已登记的 VM、当前线程正要执行它）在下一条指令就用上 IDE 刚下的断点。
+   注入方式在新 VM 跑第一段 Lua 前调用，模块顶层只执行一次的代码也能停住。 */
+EMMY_API int Emmy_WaitIDEForVm(lua_State* L, int timeoutMs);
 /* 阻塞到 IDE 握手完成（不等 configurationDone）；成功返回 0，超时返回 1。timeoutMs < 0 表示一直等。 */
 EMMY_API int Emmy_WaitForClient(int timeoutMs);
 EMMY_API int Emmy_IsConnected(void);
