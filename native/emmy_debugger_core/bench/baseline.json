@@ -1,0 +1,61 @@
+{
+  "lua": "5.4",
+  "note": "bench_hook --baseline 的基线：只用 ratio。2026-11-17 在云端 Linux x64 上 --repeat 7 生成；实现有意改变性能后用 --json 重新生成",
+  "scenarios": {
+    "registered": {
+      "fib_27": {
+        "ratio": 1.01
+      },
+      "loop_5m": {
+        "ratio": 1.01
+      },
+      "tables_300k": {
+        "ratio": 1.0
+      }
+    },
+    "connected": {
+      "fib_27": {
+        "ratio": 1.18
+      },
+      "loop_5m": {
+        "ratio": 1.01
+      },
+      "tables_300k": {
+        "ratio": 0.95
+      }
+    },
+    "bp_other_file": {
+      "fib_27": {
+        "ratio": 3.87
+      },
+      "loop_5m": {
+        "ratio": 1.13
+      },
+      "tables_300k": {
+        "ratio": 1.14
+      }
+    },
+    "bp_same_file": {
+      "fib_27": {
+        "ratio": 3.81
+      },
+      "loop_5m": {
+        "ratio": 12.11
+      },
+      "tables_300k": {
+        "ratio": 1.15
+      }
+    },
+    "profiling": {
+      "fib_27": {
+        "ratio": 2.85
+      },
+      "loop_5m": {
+        "ratio": 2.63
+      },
+      "tables_300k": {
+        "ratio": 1.15
+      }
+    }
+  }
+}

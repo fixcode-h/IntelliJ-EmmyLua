@@ -114,7 +114,8 @@ jobs:
           path: out/${{ matrix.arch }}
 
   bench:
-    # 共享 CI 机器抖动大，只出报告不卡门槛；本地用 bench_hook --check 对照目标
+    # 共享 CI 机器抖动大，不卡绝对目标（本地用 bench_hook --check 对照目标）；
+    # 卡相对基线的回退：同一次运行里相对「不挂调试器」的倍数比 bench/baseline.json 高出 25% 就失败
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -125,8 +126,11 @@ jobs:
       - name: Run
         run: |
           echo '```' >> "$GITHUB_STEP_SUMMARY"
-          ./build/bench/bench_hook --repeat 7 --json bench_hook.json | tee -a "$GITHUB_STEP_SUMMARY"
+          set -o pipefail
+          ./build/bench/bench_hook --repeat 7 --json bench_hook.json --baseline native/emmy_debugger_core/bench/baseline.json \
+            | tee -a "$GITHUB_STEP_SUMMARY" || rc=$?
           echo '```' >> "$GITHUB_STEP_SUMMARY"
+          exit ${rc:-0}
       - uses: actions/upload-artifact@v4
         with:
           name: bench_hook

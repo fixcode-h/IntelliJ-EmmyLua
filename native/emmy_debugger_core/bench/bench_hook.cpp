@@ -14,8 +14,10 @@
 //   legacy_line_hook  参照：常开 LINE|CALL|RET、回调什么都不做（旧架构的下限，旧实现每行还要加锁和复制断点表）
 // 另外单独量条件断点的单次判断耗时（目标 ≤ 2 µs）。
 //
-// 用法：bench_hook [--check] [--json out.json] [--repeat N]
-//   --check  超过目标（含 15% 余量，CI 机器有抖动）时返回非 0
+// 用法：bench_hook [--check] [--json out.json] [--repeat N] [--baseline baseline.json]
+//   --check     超过目标（含 15% 余量，CI 机器有抖动）时返回非 0
+//   --baseline  和基线比回退：kGated 里的场景，倍数比基线高出 25%（且至少 0.15x）就返回非 0。
+//               比的是同一次运行里相对「不挂调试器」的倍数，换机器、机器忙闲影响小；基线换了实现后用 --json 重新生成
 #include "emmy/emmy_core.h"
 #include "lua_shim.h"
 #include "test_client.h"
@@ -136,10 +138,12 @@ int main(int argc, char** argv) {
 	bool check = false;
 	int repeat = 7;
 	std::string jsonOut;
+	std::string baselinePath;
 	for (int i = 1; i < argc; ++i) {
 		if (!std::strcmp(argv[i], "--check")) check = true;
 		else if (!std::strcmp(argv[i], "--repeat") && i + 1 < argc) repeat = std::max(1, std::atoi(argv[++i]));
 		else if (!std::strcmp(argv[i], "--json") && i + 1 < argc) jsonOut = argv[++i];
+		else if (!std::strcmp(argv[i], "--baseline") && i + 1 < argc) baselinePath = argv[++i];
 	}
 
 	int port = 41000 + static_cast<int>(std::chrono::steady_clock::now().time_since_epoch().count() % 2000);
@@ -275,6 +279,40 @@ int main(int argc, char** argv) {
 	}
 	report["profile"] = profileStats;
 	if (check && condUs > 2.0 * 1.15) failed = true;
+
+	// 和基线比回退（只看倍数）。参照项也卡：它们本身降不下来，但不该变得更慢
+	if (!baselinePath.empty()) {
+		static const char* const kGated[] = {"registered", "connected", "bp_other_file", "bp_same_file", "profiling"};
+		json base;
+		try {
+			std::ifstream in(baselinePath);
+			in >> base;
+		} catch (const std::exception& e) {
+			std::printf("\n读不了基线 %s：%s\n", baselinePath.c_str(), e.what());
+			return 2;
+		}
+		const std::string luaVer = emmy::lua::VersionString();
+		if (base.value("lua", std::string()) != luaVer) {
+			std::printf("\n基线是 Lua %s 的，这次是 Lua %s，不比较\n", base.value("lua", std::string("?")).c_str(), luaVer.c_str());
+		} else {
+			std::printf("\n和基线比（倍数超过基线 25%% 且至少多 0.15x 算回退）：\n");
+			for (const char* name : kGated) {
+				for (const Workload& w : kWorkloads) {
+					const json* b = nullptr;
+					if (base.contains("scenarios") && base["scenarios"].contains(name) && base["scenarios"][name].contains(w.name)) {
+						b = &base["scenarios"][name][w.name];
+					}
+					if (!b || !b->contains("ratio")) continue;
+					const double was = (*b)["ratio"].get<double>();
+					const double now = ms[name][w.name] / ms["baseline"][w.name];
+					const double limit = std::max(was * 1.25, was + 0.15);
+					const bool regressed = now > limit;
+					std::printf("  %-16s %-12s 基线 %.2fx  这次 %.2fx  上限 %.2fx%s\n", name, w.name, was, now, limit, regressed ? "  回退" : "");
+					if (regressed) failed = true;
+				}
+			}
+		}
+	}
 
 	if (!jsonOut.empty()) {
 		std::ofstream(jsonOut) << report.dump(2) << "\n";
