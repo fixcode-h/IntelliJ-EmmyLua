@@ -74,7 +74,7 @@ object MessageCodec {
     fun decode(frame: Frame): ProtocolMessage {
         if (frame.cbor) throw ProtocolException("收到 CBOR 帧，但本端没有协商 cbor 能力")
         val root: JsonElement = try {
-            JsonParser().parse(String(frame.payload, StandardCharsets.UTF_8))
+            JsonParser.parseString(String(frame.payload, StandardCharsets.UTF_8))
         } catch (error: JsonParseException) {
             throw ProtocolException("帧内容不是合法 JSON：${error.message}", error)
         }

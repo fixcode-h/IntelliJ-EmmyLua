@@ -5,7 +5,10 @@ import com.intellij.execution.Executor
 import com.intellij.execution.configurations.RunProfile
 import com.intellij.execution.configurations.RunProfileState
 import com.intellij.execution.configurations.RunnerSettings
+import com.intellij.execution.ExecutionManager
 import com.intellij.execution.executors.DefaultDebugExecutor
+import com.intellij.execution.executors.DefaultRunExecutor
+import com.intellij.execution.runners.ExecutionEnvironmentBuilder
 import com.intellij.execution.runners.ExecutionEnvironment
 import com.intellij.execution.runners.GenericProgramRunner
 import com.intellij.execution.runners.ProgramRunner
@@ -34,15 +37,26 @@ internal object NoProcessState : RunProfileState {
 class LuaDebugRunner : GenericProgramRunner<RunnerSettings>() {
     override fun getRunnerId(): String = "EmmyLua.DebugRunner"
 
+    /**
+     * 也接 Run：Lua 附加配置没有「只运行」的意思，按「运行」等于开始调试。这样 IDE 自带 MCP 的
+     * execute_run_configuration（只走 Run 执行器）和工具栏的运行按钮也能开始 Lua 调试。
+     */
     override fun canRun(executorId: String, profile: RunProfile): Boolean =
-        executorId == DefaultDebugExecutor.EXECUTOR_ID && profile is LuaDebugTargetConfiguration
+        (executorId == DefaultDebugExecutor.EXECUTOR_ID || executorId == DefaultRunExecutor.EXECUTOR_ID) &&
+            profile is LuaDebugTargetConfiguration
 
     @Throws(ExecutionException::class)
-    override fun doExecute(state: RunProfileState, env: ExecutionEnvironment): RunContentDescriptor? {
+    override fun doExecute(state: RunProfileState, environment: ExecutionEnvironment): RunContentDescriptor? {
+        if (environment.executor.id != DefaultDebugExecutor.EXECUTOR_ID) {
+            // 换成 Debug 执行器重新启动，会话出现在「调试」工具窗口，和用户点调试按钮一样
+            val debugEnv = ExecutionEnvironmentBuilder(environment).executor(DefaultDebugExecutor.getDebugExecutorInstance()).runner(this).build()
+            ExecutionManager.getInstance(environment.project).restartRunProfile(debugEnv)
+            return null
+        }
         // 真机上没有本地文件，断点行号以磁盘内容为准，先保存
         FileDocumentManager.getInstance().saveAllDocuments()
-        val configuration = env.runProfile as LuaDebugTargetConfiguration
-        val target = configuration.resolveTarget(env)
-        return LuaDebugSessionStarter.start(env, target)
+        val configuration = environment.runProfile as LuaDebugTargetConfiguration
+        val target = configuration.resolveTarget(environment)
+        return LuaDebugSessionStarter.start(environment, target)
     }
 }

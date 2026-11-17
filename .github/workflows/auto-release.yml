@@ -50,9 +50,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit 1 }
       - name: Build cores (dynamic, one per Lua version)
         run: |
+          # runtime 版本带上提交号：IDE 连上后和插件自带的 runtime-version.txt 比，
+          # 目标进程里还是更新插件前注入的旧组件时提示重启游戏 / 编辑器
+          $coreVersion = "3.0.0+$($env:GITHUB_SHA.Substring(0, 7))"
           foreach ($v in "51", "52", "53", "54") {
             cmake -S native/emmy_debugger_core -B build/core-${{ matrix.arch }}-$v -A ${{ matrix.platform }} `
-              -DEMMY_CORE_LUA_MODE=dynamic "-DEMMY_CORE_LUA_VERSION=$v" -DEMMY_CORE_BUILD_SHARED=ON `
+              -DEMMY_CORE_LUA_MODE=dynamic "-DEMMY_CORE_LUA_VERSION=$v" -DEMMY_CORE_BUILD_SHARED=ON "-DEMMY_CORE_VERSION=$coreVersion" `
               -DEMMY_CORE_BUILD_TESTS=OFF -DEMMY_CORE_BUILD_BENCH=OFF
             if ($LASTEXITCODE -ne 0) { exit 1 }
             cmake --build build/core-${{ matrix.arch }}-$v --config Release --target emmy_debugger_core_shared --parallel 4
@@ -67,6 +70,7 @@ jobs:
             if (-not $file) { Write-Error "缺少 $name"; exit 1 }
             Copy-Item $file.FullName -Destination $out
           }
+          [System.IO.File]::WriteAllText("$PWD/$out/runtime-version.txt", "3.0.0+$($env:GITHUB_SHA.Substring(0, 7))")
           foreach ($v in "51", "52", "53", "54") {
             New-Item -ItemType Directory -Force "$out/lua$v" | Out-Null
             Copy-Item build/core-${{ matrix.arch }}-$v/Release/emmy_debugger_core.dll "$out/lua$v/"
@@ -116,14 +120,15 @@ jobs:
           path: out
           if-no-files-found: error
 
-  build-and-release:
-    needs: [tests-gate, native-windows, android-agent]
+  # 打包和测试门槛并行：包先打好，门槛通过后 release 只做发布，不再从头编一遍
+  package:
+    needs: [native-windows, android-agent]
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    outputs:
+      version: ${{ steps.versioning.outputs.version }}
+      changelog: ${{ steps.generate_notes.outputs.changelog }}
 
     steps:
-      # ... [前面的 checkout, setup-java, setup-gradle, versioning, generate_notes 步骤保持不变] ...
       - name: Checkout code
         uses: actions/checkout@v4
         with:
@@ -134,7 +139,7 @@ jobs:
           java-version: '21'
           distribution: 'temurin'
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
+        uses: gradle/actions/setup-gradle@v4
       - name: Calculate New Version
         id: versioning
         run: |
@@ -163,6 +168,7 @@ jobs:
           fi
           echo "最终版本号为: $NEW_VERSION"
           echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
+          echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
           echo "LAST_COMMIT_HASH=$LAST_COMMIT_HASH" >> $GITHUB_ENV
       - name: Generate Release Notes
         id: generate_notes
@@ -177,6 +183,9 @@ jobs:
             echo "$LOG_MD"
             echo 'EOF'
           } >> "$GITHUB_OUTPUT"
+          # 同一份提交列表也作为插件市场的更新说明（build.gradle.kts 读 -PchangeNotesFile）
+          mkdir -p build
+          echo "$LOG_MD" > build/change-notes.md
 
       # 把现编的原生二进制放进插件资源（覆盖仓库里旧的 Windows 二进制）
       - name: Download native binaries
@@ -218,7 +227,7 @@ jobs:
       # 第六步：执行 Gradle 打包命令
       # --- 核心修正点：在这里通过 -P 参数将版本号传递给 Gradle ----
       - name: Build with Gradle
-        run: ./gradlew buildPlugin -x buildSearchableOptions -PpluginVersion=${{ env.NEW_VERSION }}
+        run: ./gradlew buildPlugin -x buildSearchableOptions -PpluginVersion=${{ env.NEW_VERSION }} -PchangeNotesFile=build/change-notes.md
 
       # 没带上语言服务器的包不发布
       - name: Check emmylua_ls in plugin zip
@@ -234,6 +243,34 @@ jobs:
             unzip -l "$zip" | grep '/server/'
           done
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-package
+          path: |
+            build/distributions/*.zip
+            build/symbols/*.zip
+          if-no-files-found: error
+
+  release:
+    needs: [tests-gate, package]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      NEW_VERSION: ${{ needs.package.outputs.version }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Download package
+        uses: actions/download-artifact@v4
+        with:
+          name: release-package
+          path: build
+      - run: find build -type f | sort
+
       # 第七步：创建 GitHub Release 并上传构建产物
       - name: Create Release and Upload Asset
         uses: softprops/action-gh-release@v2
@@ -242,7 +279,7 @@ jobs:
             ## 自动构建产物 (v${{ env.NEW_VERSION }})
 
             **✨ 本次更新包含以下提交:**
-            ${{ steps.generate_notes.outputs.changelog }}
+            ${{ needs.package.outputs.changelog }}
           tag_name: v${{ env.NEW_VERSION }}
           name: Auto Build - v${{ env.NEW_VERSION }}
           prerelease: false
@@ -258,7 +295,6 @@ jobs:
           echo "LAST_RELEASE_DATE=$(date +'%Y-%m-%d')" >> version.properties
           git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git checkout -- src/main/resources/debugger/emmy/windows
           git add version.properties
           git commit -m "chore(release): 自动更新版本至 ${{ env.NEW_VERSION }}" -m "[skip ci]"
           git push
@@ -274,4 +310,45 @@ jobs:
           else
             git merge --abort || true
             echo "::warning::版本跟踪提交没能自动合回 dev，请手动 git merge origin/main"
+          fi
+
+  # 发布到 JetBrains 插件市场：上传和 GitHub Release 同一个 zip。
+  # 单独一个任务：市场上传失败（审核中、令牌过期）只标红这一项，不影响 GitHub Release 和版本跟踪提交。
+  # 没配 Secret JETBRAINS_MARKETPLACE_TOKEN 时跳过（插件第一次要在网站上手动上传并通过审核，之后才能用令牌发布）。
+  marketplace:
+    needs: [package, release]
+    runs-on: ubuntu-latest
+    env:
+      MARKETPLACE_TOKEN: ${{ secrets.JETBRAINS_MARKETPLACE_TOKEN }}
+      PLUGIN_XML_ID: com.fixcode.emmylua.enhanced
+    steps:
+      - name: Check token
+        id: token
+        run: |
+          if [ -z "$MARKETPLACE_TOKEN" ]; then
+            echo "::notice::没有配置 Secret JETBRAINS_MARKETPLACE_TOKEN，跳过发布到 JetBrains 插件市场"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Download package
+        if: steps.token.outputs.skip != 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: release-package
+          path: build
+      - name: Upload to JetBrains Marketplace
+        if: steps.token.outputs.skip != 'true'
+        run: |
+          set -e
+          zips=(build/distributions/*.zip)
+          [ "${#zips[@]}" -eq 1 ] && [ -f "${zips[0]}" ] || { echo "::error::应该正好有一个插件 zip：${zips[*]}"; exit 1; }
+          echo "上传 ${zips[0]}（v${{ needs.package.outputs.version }}）"
+          code=$(curl -sS --retry 3 -o response.txt -w '%{http_code}' \
+            -H "Authorization: Bearer $MARKETPLACE_TOKEN" \
+            -F "xmlId=$PLUGIN_XML_ID" \
+            -F "file=@${zips[0]}" \
+            https://plugins.jetbrains.com/plugin/uploadPlugin)
+          cat response.txt; echo
+          if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then
+            echo "::error::插件市场返回 HTTP $code（见上面的返回内容）。401/403 多半是令牌失效或没有这个插件的权限，400 看返回里的原因"
+            exit 1
           fi

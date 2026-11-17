@@ -11,12 +11,16 @@ import com.intellij.openapi.options.BoundSearchableConfigurable
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogPanel
 import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.dsl.builder.AlignX
+import com.intellij.ui.dsl.builder.Cell
 import com.intellij.ui.dsl.builder.bindItem
 import com.intellij.ui.dsl.builder.bindSelected
 import com.intellij.ui.dsl.builder.bindText
 import com.intellij.ui.dsl.builder.panel
 import com.intellij.ui.dsl.builder.rows
+import com.intellij.ui.dsl.builder.selected
+import com.intellij.ui.layout.and
 import java.io.IOException
 import java.nio.file.Files
 import javax.swing.JCheckBox
@@ -35,7 +39,9 @@ class LuaSettingsConfigurable(private val project: Project) :
     private var libraries = proj.additionalSourcesRoot.joinToString("\n")
     private var declStatus: JLabel? = null
     private var declCheck: JCheckBox? = null
+    private var blueprintsCheck: JCheckBox? = null
     private var unrealLuaDecl = proj.unrealLuaDecl
+    private var unrealLuaDeclBlueprints = proj.unrealLuaDeclBlueprints
 
     override fun createPanel(): DialogPanel = panel {
         row {
@@ -67,20 +73,33 @@ class LuaSettingsConfigurable(private val project: Project) :
                     .bindSelected(::detectUnreal)
                     .comment(describeUnreal())
             }
+            lateinit var declCell: Cell<JBCheckBox>
+            lateinit var blueprintsCell: Cell<JBCheckBox>
             row {
-                declCheck = checkBox("让 UE 编辑器后台生成反射声明（需要 UEKit 的 UELink 2.5+）")
+                declCell = checkBox("让 UE 编辑器后台生成反射声明（需要 UEKit 的 UELink 2.5+）")
                     .bindSelected(::unrealLuaDecl)
                     .comment(
-                        "默认不生成。勾上后 UE 编辑器在后台把 C++ 类和蓝图生成 Lua 声明到 Intermediate/UELink/LuaDecl，" +
-                            "蓝图编译、资源保存、Live Coding 后只更新变了的文件；IDE 有这个目录时优先用它。UE 编辑器后开的也会自动打开"
-                    ).component
+                        "默认不生成。勾上后 UE 编辑器在后台把 C++ 反射类型生成 Lua 声明到 Intermediate/UELink/LuaDecl，" +
+                            "Live Coding 后只更新变了的文件；IDE 有这个目录时优先用它。UE 编辑器后开的也会自动打开"
+                    )
+                declCheck = declCell.component
+            }
+            indent {
+                row {
+                    blueprintsCell = checkBox("${UnrealDecl.BLUEPRINTS_LABEL}（含用户定义结构体 / 枚举，需要 UELink 2.7+）")
+                        .bindSelected(::unrealLuaDeclBlueprints)
+                        .enabledIf(declCell.selected)
+                        .comment("默认不生成，只出 C++ 类型。勾上后蓝图编译、资源保存 / 改名 / 删除时增量更新；取消后下次整遍比对时删掉已生成的蓝图声明")
+                    blueprintsCheck = blueprintsCell.component
+                }
             }
             row("主动刷新：") {
                 for (mode in UnrealDecl.Refresh.entries) {
-                    button(mode.label) { refreshUnrealDecl(mode) }
+                    val b = button(mode.label) { refreshUnrealDecl(mode) }
+                    if (mode == UnrealDecl.Refresh.LOAD_BLUEPRINTS) b.enabledIf(declCell.selected.and(blueprintsCell.selected))
                 }
                 declStatus = label("").component
-            }.comment("也在 工具 菜单里。「补全全部蓝图」在 UE 后台逐个加载没打开过的蓝图；「全部重写」不看清单重写所有文件")
+            }.comment("也在 工具 菜单里。「补全全部蓝图」在 UE 后台逐个加载没打开过的蓝图（要先勾上蓝图）；「全部重写」不看清单重写所有文件")
             row {
                 label("额外库目录（每行一个，可写相对项目目录的路径）：")
             }
@@ -114,25 +133,16 @@ class LuaSettingsConfigurable(private val project: Project) :
         proj.detectUnrealProject = detectUnreal
         proj.additionalSourcesRoot = newLibraries
         if (changed) EmmyLuaServer.restart(project)
-        if (unrealLuaDecl != proj.unrealLuaDecl) {
-            proj.unrealLuaDecl = unrealLuaDecl
-            val enabled = unrealLuaDecl
-            UnrealDeclWatcher.getInstance(project).resetSync()
-            // UE 编辑器没开时只记下开关，编辑器打开后自动补开
-            UnrealDecl.runInBackground(project) {
-                try {
-                    UnrealDecl.setEnabled(project, enabled)
-                } catch (e: IOException) {
-                    if (enabled) "已记下，UE 编辑器打开后自动开始生成（${e.message}）" else throw e
-                }
-            }
-        }
+        // 总开关关着时只记下蓝图开关，不碰 UE 那边
+        val declChanged = unrealLuaDecl != proj.unrealLuaDecl || (unrealLuaDecl && unrealLuaDeclBlueprints != proj.unrealLuaDeclBlueprints)
+        proj.unrealLuaDeclBlueprints = unrealLuaDeclBlueprints
+        if (declChanged) UnrealDecl.setEnabledFromIde(project, unrealLuaDecl, unrealLuaDeclBlueprints)
     }
 
     override fun isModified(): Boolean =
         super.isModified() || serverPath != app.languageServerPath || level != app.languageLevel ||
             detectUnreal != proj.detectUnrealProject || libraries != proj.additionalSourcesRoot.joinToString("\n") ||
-            unrealLuaDecl != proj.unrealLuaDecl
+            unrealLuaDecl != proj.unrealLuaDecl || unrealLuaDeclBlueprints != proj.unrealLuaDeclBlueprints
 
     override fun reset() {
         serverPath = app.languageServerPath
@@ -140,18 +150,11 @@ class LuaSettingsConfigurable(private val project: Project) :
         detectUnreal = proj.detectUnrealProject
         libraries = proj.additionalSourcesRoot.joinToString("\n")
         unrealLuaDecl = proj.unrealLuaDecl
+        unrealLuaDeclBlueprints = proj.unrealLuaDeclBlueprints
         super.reset()
     }
 
-    private fun describeServer(): String {
-        val located = EmmyLuaServerLocator.locate() ?: return "没找到"
-        val source = when (located.source) {
-            EmmyLuaServerLocator.Source.SETTINGS -> "设置"
-            EmmyLuaServerLocator.Source.BUNDLED -> "插件自带"
-            EmmyLuaServerLocator.Source.PATH -> "PATH"
-        }
-        return "${located.path}（$source）"
-    }
+    private fun describeServer(): String = EmmyLuaServerLocator.describe() ?: "没找到"
 
     private fun describeUnreal(): String {
         val root = EmmyLuaWorkspaceConfig.projectRoot(project) ?: return ""
@@ -166,10 +169,11 @@ class LuaSettingsConfigurable(private val project: Project) :
 
     private fun refreshUnrealDecl(mode: UnrealDecl.Refresh) {
         val checked = declCheck?.isSelected
+        val blueprints = blueprintsCheck?.isSelected
         declStatus?.text = "正在连 UE 编辑器…"
         ApplicationManager.getApplication().executeOnPooledThread {
             val text = try {
-                UnrealDecl.refresh(project, mode, checked).also { UnrealDecl.watchInBackground(project, it) }
+                UnrealDecl.refresh(project, mode, checked, blueprints).also { UnrealDecl.watchInBackground(project, it) }
             } catch (e: IOException) {
                 e.message ?: "失败"
             }

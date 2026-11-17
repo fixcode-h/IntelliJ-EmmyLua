@@ -30,6 +30,25 @@ interface LuaDebugBackend {
 
     fun stopSession(sessionId: String): CompletableFuture<Unit>
 
+    // ---- IDE 运行配置（IDE 自带 MCP 的 execute_run_configuration 只能 Run，调试要从这里启动）----
+
+    /** 项目里的运行配置；[RunConfigInfo.running] 表示正在运行或调试。 */
+    fun listRunConfigurations(): List<RunConfigInfo> = emptyList()
+
+    /**
+     * 用 IDE 的 Debug（或 Run）执行器启动一个运行配置，和用户点调试按钮一样。
+     * Lua 调试配置等到会话连上再完成，返回带 sessionId 的结果；其他配置启动后就完成。
+     */
+    fun launchConfiguration(request: LaunchRequest): CompletableFuture<LaunchResult> =
+        CompletableFuture.failedFuture(LuaDebugBackendException(ErrorCode.NOT_SUPPORTED, "这个 IDE 版本的插件不支持启动运行配置。"))
+
+    /**
+     * 重启调试会话：用运行配置启动的按配置重新执行（会重新找进程），Agent 直接附加的按原目标重新附加。
+     * 完成时返回新会话的 sessionId。
+     */
+    fun restartSession(sessionId: String): CompletableFuture<String> =
+        CompletableFuture.failedFuture(LuaDebugBackendException(ErrorCode.NOT_SUPPORTED, "这个 IDE 版本的插件不支持重启会话。"))
+
     fun listVms(sessionId: String): List<VmInfo>
 
     /** 运行时能力位（协议 v3 welcome.caps），例如 "luaEval"、"valuePath"、"logpoint"。 */
@@ -77,6 +96,13 @@ interface LuaDebugBackend {
     fun getVariables(request: VariablesRequest): CompletableFuture<VariablesPage>
 
     fun evaluate(request: EvaluateRequest): CompletableFuture<VariableInfo>
+
+    /**
+     * 改一个变量（协议 v3 setVariable）。[SetVariableRequest.path] 是值路径：只有名字时改局部变量 / 上值（或按 scope 指定），
+     * 带 `.x` / `[3]` 时改它前面那个 table 的字段。返回改后的值。默认不支持。
+     */
+    fun setVariable(request: SetVariableRequest): CompletableFuture<VariableInfo> =
+        CompletableFuture.failedFuture(LuaDebugBackendException(ErrorCode.NOT_SUPPORTED, "这个调试引擎不支持修改变量。"))
 
     /** 调试器日志、print 输出、Lua 错误；seq 单调递增，sessionId 为空表示所有会话。 */
     fun getOutput(sessionId: String?, sinceSeq: Long, limit: Int): OutputPage
@@ -157,6 +183,36 @@ enum class ErrorCode {
 }
 
 enum class TargetKind { PROCESS, DEVICE }
+
+data class RunConfigInfo(
+    val name: String,
+    /** 配置类型的显示名，例如「Lua 附加」「Application」。 */
+    val type: String,
+    /** 新调试链路的 Lua 配置：Debug 启动后会出现在 lua_debug_session 的会话里。 */
+    val lua: Boolean,
+    /** 有能以 Debug 方式运行它的 runner。 */
+    val canDebug: Boolean,
+    val running: Boolean = false,
+    /** IDE 工具栏当前选中的配置。 */
+    val selected: Boolean = false,
+    /** 多项目时所属的项目名（由 Composite 填）。 */
+    val project: String? = null,
+)
+
+data class LaunchRequest(
+    val name: String,
+    /** false = 用 Run 执行器（只对非 Lua 配置有意义）。 */
+    val debug: Boolean = true,
+    /** 多项目时指定项目名；省略时按配置名在各项目里找。 */
+    val project: String? = null,
+)
+
+data class LaunchResult(
+    val name: String,
+    /** Lua 配置启动后连上的会话；非 Lua 配置为空。 */
+    val sessionId: String? = null,
+    val executor: String = "debug",
+)
 
 enum class SessionKind { ATTACH, DEVICE, ADDRESS }
 
@@ -331,6 +387,58 @@ data class EvaluateRequest(
     val expression: String,
     val mode: EvalMode,
 )
+
+data class SetVariableRequest(
+    val frameId: String,
+    /** 要改的变量，值路径：hp、self.hp、items[3]、cfg["key"]。 */
+    val path: String,
+    /** 新值：value_path 模式下是字面量（1、"a"、true、nil）或另一个值路径；lua 模式下是任意 Lua 表达式。 */
+    val value: String,
+    val mode: EvalMode,
+    /** 只有名字时在哪个作用域找；null 表示先局部变量后上值。 */
+    val scope: VariableScope? = null,
+)
+
+/** 值路径拆成「父路径 + 最后一段」，最后一段写成 runtime setVariable 认的名字（`x`、`[3]`、`[key]`）。 */
+object ValuePaths {
+    /** 拆不开（空、括号或引号不配对）时返回 null。父路径为 null 表示整个路径就是一个名字。 */
+    fun splitLast(path: String): Pair<String?, String>? {
+        val p = path.trim()
+        if (p.isEmpty()) return null
+        var depth = 0
+        var quote: Char? = null
+        var lastSep = -1
+        var i = 0
+        while (i < p.length) {
+            val c = p[i]
+            if (quote != null) {
+                if (c == '\\') i++ else if (c == quote) quote = null
+            } else when (c) {
+                '"', '\'' -> quote = c
+                '[' -> { if (depth == 0) lastSep = i; depth++ }
+                ']' -> { depth--; if (depth < 0) return null }
+                '.' -> if (depth == 0) lastSep = i
+            }
+            i++
+        }
+        if (depth != 0 || quote != null) return null
+        if (lastSep < 0) return if (isName(p)) null to p else null
+        val parent = p.substring(0, lastSep).trim().takeIf { it.isNotEmpty() } ?: return null
+        val tail = p.substring(lastSep)
+        val leaf = if (tail.startsWith(".")) {
+            tail.substring(1).trim().takeIf(::isName) ?: return null
+        } else {
+            val inner = tail.removePrefix("[").removeSuffix("]").trim()
+            if (!tail.endsWith("]") || inner.isEmpty()) return null
+            val key = if (inner.length >= 2 && (inner[0] == '"' || inner[0] == '\'') && inner.last() == inner[0]) inner.substring(1, inner.length - 1)
+            else inner.takeIf { it.toDoubleOrNull() != null } ?: return null
+            "[$key]"
+        }
+        return parent to leaf
+    }
+
+    private fun isName(s: String) = s.isNotEmpty() && (s[0].isLetter() || s[0] == '_') && s.all { it.isLetterOrDigit() || it == '_' }
+}
 
 enum class OutputCategory { STDOUT, STDERR, ERROR, DEBUGGER }
 

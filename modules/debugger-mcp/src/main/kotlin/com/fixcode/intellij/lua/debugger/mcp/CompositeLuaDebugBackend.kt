@@ -49,6 +49,36 @@ class CompositeLuaDebugBackend(private val members: () -> List<Member>) : LuaDeb
 
     override fun stopSession(sessionId: String) = bySession(sessionId).stopSession(sessionId)
 
+    override fun listRunConfigurations(): List<RunConfigInfo> {
+        val members = all()
+        return members.flatMap { m ->
+            m.backend.listRunConfigurations().map { if (members.size > 1) it.copy(project = m.name) else it }
+        }
+    }
+
+    /** 按项目名或配置名找项目；同名配置出现在多个项目里时要 Agent 给 project。 */
+    override fun launchConfiguration(request: LaunchRequest): CompletableFuture<LaunchResult> {
+        val members = all()
+        if (members.isEmpty()) return CompletableFuture.failedFuture(LuaDebugBackendException(ErrorCode.NO_SESSION, "IDE 没有打开项目。"))
+        val candidates = if (request.project != null) {
+            members.filter { it.name == request.project }.ifEmpty {
+                return CompletableFuture.failedFuture(LuaDebugBackendException(ErrorCode.INVALID_ARGUMENT,
+                    "没有打开的项目 '${request.project}'，打开的是：${members.joinToString { it.name }}。"))
+            }
+        } else {
+            members.filter { m -> m.backend.listRunConfigurations().any { it.name == request.name } }
+        }
+        return when {
+            candidates.isEmpty() -> CompletableFuture.failedFuture(LuaDebugBackendException(ErrorCode.TARGET_NOT_FOUND,
+                "没有名为 '${request.name}' 的运行配置：先 lua_debug_session action=configs 列出现有配置。"))
+            candidates.size > 1 -> CompletableFuture.failedFuture(LuaDebugBackendException(ErrorCode.INVALID_ARGUMENT,
+                "多个项目里都有 '${request.name}'（${candidates.joinToString { it.name }}），请用 project 指定。"))
+            else -> candidates[0].backend.launchConfiguration(request)
+        }
+    }
+
+    override fun restartSession(sessionId: String) = bySession(sessionId).restartSession(sessionId)
+
     override fun listVms(sessionId: String) = bySession(sessionId).listVms(sessionId)
 
     override fun capabilities(sessionId: String) = bySession(sessionId).capabilities(sessionId)
@@ -99,6 +129,9 @@ class CompositeLuaDebugBackend(private val members: () -> List<Member>) : LuaDeb
 
     override fun evaluate(request: EvaluateRequest): CompletableFuture<VariableInfo> =
         firstSucceeding { it.evaluate(request) }
+
+    override fun setVariable(request: SetVariableRequest): CompletableFuture<VariableInfo> =
+        firstSucceeding { it.setVariable(request) }
 
     /**
      * frameId / ref 不带项目信息：只有一个项目时直接发；多个时依次试，跳过报 STALE_REFERENCE / NO_SESSION 的。

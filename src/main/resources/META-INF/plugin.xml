@@ -1,27 +1,60 @@
 <idea-plugin xmlns:xi="http://www.w3.org/2001/XInclude">
     <id>com.fixcode.emmylua.enhanced</id>
     <name>EmmyLua Enhanced</name>
-    <vendor url="https://github.com/fixcode-h/IntelliJ-EmmyLua">FixCode</vendor>
+    <vendor email="hi1778750163@gmail.com" url="https://github.com/fixcode-h/IntelliJ-EmmyLua">fixcode</vendor>
     <category>Custom Languages</category>
     <resource-bundle>messages.LuaBundle</resource-bundle>
+    <!-- 插件市场的介绍页取这一段：英文在前（市场按英文审核），中文附后 -->
     <description><![CDATA[
-    <p>Lua support for Unreal Engine (UnLua) projects, based on EmmyLua.</p>
+    <p>Lua language support and debugging for IntelliJ-based IDEs, tuned for Unreal Engine (UnLua) projects.
+    A fork of EmmyLua whose language features are powered by the official EmmyLua language server
+    (<a href="https://github.com/EmmyLuaLs/emmylua-analyzer-rust">emmylua_ls</a>) and whose debugger was rewritten
+    for attaching to running games and for AI agents.</p>
+
+    <h3>Language support</h3>
     <ul>
-        <li>Language support powered by the official EmmyLua language server (emmylua_ls, via LSP4IJ):
-            go to definition, completion, find usages, rename, diagnostics, formatting, semantic highlighting.</li>
-        <li>UE / UnLua: picks up UnLua IntelliSense or UELink-generated declarations automatically.</li>
-        <li>Debugging: attach to a local process (Windows), attach to an Android device without changing the package,
-            and Lua debug tools for the IDE's built-in MCP server so AI agents can debug Lua.</li>
+        <li>Completion, go to definition / implementation, find usages, rename, hover docs, parameter and inlay hints,
+            diagnostics with quick fixes, formatting, semantic highlighting, folding, workspace symbols and call hierarchy,
+            provided by emmylua_ls through <a href="https://plugins.jetbrains.com/plugin/23257-lsp4ij">LSP4IJ</a>.
+            No Lua index is built inside the IDE, so large projects stay fast.</li>
+        <li>EmmyLua / LuaLS annotations: generics, <code>---@enum</code>, <code>---@overload</code> and more,
+            behaving the same as EmmyLua in VS Code and Neovim. Configure with <code>.emmyrc.json</code> or <code>.luarc.json</code>.</li>
+        <li>emmylua_ls binaries for Windows, macOS and Linux (x64 / arm64) are bundled; nothing else to install.</li>
+        <li>Editor helpers: auto-inserted <code>end</code> / <code>until</code>, Surround With, postfix templates,
+            "Generate function annotation", live templates, Lua-aware spell checking.</li>
+        <li>Unreal Engine / UnLua: finds the <code>.uproject</code> and adds UnLua IntelliSense or UELink-generated
+            declarations as libraries automatically.</li>
     </ul>
+
+    <h3>Debugging</h3>
+    <ul>
+        <li>Attach to a running local process (Windows) without changing game code.</li>
+        <li>Attach to a game on an Android device over adb; nothing is added to the package.</li>
+        <li>Conditional, hit-count and log breakpoints, probes that record values without stopping, break on Lua errors,
+            coroutine stacks, editable variables, debug console.</li>
+        <li>Sampling Lua profiler with flame graph export.</li>
+        <li>One-key hot reload of Lua into a running Unreal Editor or game through UELink.</li>
+        <li>MCP tools on the IDE's built-in MCP server (2025.2+): AI agents such as Claude Code, Cursor and Codex can set
+            breakpoints, step, inspect stacks and variables, and search Lua code.</li>
+    </ul>
+
+    <p><b>Note:</b> this plugin registers the same Lua language as the original EmmyLua plugin, so the two cannot be enabled together;
+    the IDE offers to disable the other one on install. Requires LSP4IJ, which the IDE installs on request.
+    Source and issues: <a href="https://github.com/fixcode-h/IntelliJ-EmmyLua">GitHub</a>.</p>
+
+    <hr/>
     <p>基于 EmmyLua 的 Lua 插件，面向 UE（UnLua）项目：</p>
     <ul>
-        <li>语言支持基于 EmmyLua 官方语言服务器 emmylua_ls（经 LSP4IJ）：跳转、补全、查找引用、重命名、诊断、格式化、语义高亮</li>
+        <li>语言支持基于 EmmyLua 官方语言服务器 emmylua_ls（经 LSP4IJ）：补全、跳转、查找引用、重命名、悬停、诊断、格式化、语义高亮</li>
         <li>UE / UnLua：自动加入 UnLua IntelliSense 或 UELink 后台生成的声明</li>
-        <li>Lua 调试：附加本机进程（Windows）、Android 真机附加（包体零改动）、给 AI Agent 用的 MCP 调试工具（注册到 IDE 自带的 MCP 服务器）</li>
+        <li>Lua 调试：附加本机进程（Windows）、Android 真机附加（包体零改动）、条件 / 日志断点、Probe、采样性能分析、经 UELink 热重载</li>
+        <li>给 AI Agent 用的 MCP 调试和代码查找工具（注册到 IDE 自带的 MCP 服务器）</li>
+        <li>和上游 EmmyLua 插件不能同时启用</li>
     </ul>
     ]]></description>
+    <!-- 出包时 build.gradle.kts 用本次提交列表覆盖这一段（插件市场的「What's New」）；本地构建保持这句 -->
     <change-notes><![CDATA[
-    每个版本的更新内容见 <a href="https://github.com/fixcode-h/IntelliJ-EmmyLua/releases">GitHub Releases</a>。
+    See <a href="https://github.com/fixcode-h/IntelliJ-EmmyLua/releases">GitHub Releases</a> for the changes in each version.
     ]]></change-notes>
     <!-- since-build / until-build 由 build.gradle.kts 写入（2025.2 起，不设上限） -->
     <!-- 上游 EmmyLua 和本插件注册同一个语言 ID「Lua」、文件类型「lua」，同时启用会互相覆盖；IDE 安装时会提示停用其中一个。

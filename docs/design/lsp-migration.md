@@ -66,7 +66,8 @@ IDE 里只保留不需要语义的东西，全部基于一个**手写的 Kotlin 
 | 格式化 | 自写 FormattingModel | LSP `formatting` / `rangeFormatting`（emmylua_ls 内置 EmmyLuaCodeStyle，读 `.editorconfig`） |
 | 语义高亮、彩虹变量 | Annotator + RainbowVisitor | LSP `semanticTokens`（彩虹变量不再提供） |
 | 代码折叠 | FoldingBuilder | LSP `foldingRange` |
-| 结构视图、面包屑、粘性行 | StructureViewFactory | LSP `documentSymbol` |
+| 结构视图 | StructureViewFactory | IDE 侧词法大纲 `structure/LuaOutline`（只列顶层的类/模块表、函数、方法、表字段，函数显示为「名字(参数)」，参数和函数体里的东西不作为子项）。不用 `documentSymbol`：emmylua_ls 会把函数里的局部变量、`if` 块、`...` 都列出来，LSP4IJ 也只在打开时取一次，服务器没准备好就一直空着 |
+| 面包屑、粘性行 | StructureViewFactory | LSP `documentSymbol` |
 | 转到符号 / 类（Ctrl+Alt+Shift+N） | goto contributors | LSP `workspace/symbol` |
 | 参数提示（Ctrl+P） | ParameterInfoHandler | LSP `signatureHelp` |
 | 参数名 / 类型内联提示 | ParameterHintsProvider | LSP `inlayHint` |
@@ -125,7 +126,8 @@ UnLua 的 Generate IntelliSense 要手动点、整遍生成。UEKit 的 UELink 2
 - `UnrealIntelliSenseRoots.find`：这个目录有清单时**只用它**，不再加 UnLua 生成的目录（同名类型重复定义会让跳转出现两个目标）；没有时照旧。
 - 文件增删改由 emmylua_ls 自己监听库目录（库目录在工作区外时它用 notify 监听），不用重启；只有库目录本身变了（第一次生成完、删掉目录退回 UnLua）才要重启，`UnrealDeclWatcher` 每 15 秒看一眼几个路径，变了就重启。
 - 开关在 IDE 设置里（项目设置 `unrealLuaDecl`，默认关）：勾上 / 取消时按名片 `Saved/UELink/instances/*.json` 找开着的编辑器调 `/rpc` 的 `luadecl.enable`（`UELinkClient`）；UE 那边也记在本机个人配置里。勾着时 `UnrealDeclWatcher` 发现新开的编辑器（PID 变了）还没开就补开；没勾时不动 UE 那边（可能是在 UE 控制台开的）。
-- 主动刷新：工具菜单「UE 反射声明（EmmyLua）」和设置页按钮，`luadecl.run`：刷新（只写变了的）、补全全部蓝图（`loadBlueprints`）、全部重写（`force`）。
+- 蓝图单独一个开关（项目设置 `unrealLuaDeclBlueprints`「蓝图也生成声明」，默认关，用户 2026-11-17 定）：关着时只生成 C++ 反射类型（`Native/`、`UE.lua`），不扫蓝图、用户定义结构体 / 枚举，也不响应蓝图编译 / 保存 / 改名 / 删除；整遍比对时删掉之前生成的 `Blueprint/`。经 `luadecl.enable` 的 `blueprints` 下发（UELink 2.7+，UE 那边也记在个人配置 `[UELink.LuaDecl] Blueprints`；老版本忽略这个参数、照旧生成蓝图）。`luadecl.status` 回报的 `blueprints` 和 IDE 不一致时，`UnrealDeclWatcher` 和主动刷新按 IDE 的改过来。总开关关着时只记下蓝图开关，不碰 UE。
+- 主动刷新：工具菜单「UE 反射声明（EmmyLua）」和设置页按钮，`luadecl.run`：刷新（只写变了的）、补全全部蓝图（`loadBlueprints`，蓝图开关关着时置灰）、全部重写（`force`）。
 
 ## 4. 调试链路
 

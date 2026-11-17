@@ -42,9 +42,9 @@ class IdeMcpConfirmer : McpConfirmer {
     override fun confirmLaunch(description: String, clientName: String?): Boolean {
         val agent = clientName?.takeIf { it.isNotBlank() } ?: "Agent"
         return ask(
-            title = "$agent 请求附加调试器",
-            content = "$agent 想附加到「$description」开始调试。",
-            options = listOf("附加" to true, "拒绝" to false),
+            title = "$agent 请求开始调试",
+            content = "$agent 想$description。",
+            options = listOf("允许" to true, "拒绝" to false),
             type = NotificationType.WARNING,
         ) == true
     }

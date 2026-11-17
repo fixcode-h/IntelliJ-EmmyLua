@@ -56,13 +56,30 @@ class NativeRuntimeE2eTest {
             parentFile.mkdirs()
             writeText(SCRIPT)
         }
+        launchHost()
+    }
+
+    private fun launchHost(vararg extra: String) {
+        val binary = File(System.getProperty("emmy.core.host"))
         port = ServerSocket(0).use { it.localPort }
-        host = ProcessBuilder(binary!!.path, port.toString(), script.path, "@game/main.lua")
+        host = ProcessBuilder(listOf(binary.path, port.toString(), script.path, "@game/main.lua") + extra)
             .redirectError(ProcessBuilder.Redirect.INHERIT)
             .start()
         hostOut = host.inputStream.bufferedReader()
         val ready = CompletableFuture.supplyAsync { hostOut.readLine() }.get(10, TimeUnit.SECONDS)
         assertEquals("READY", ready)
+    }
+
+    private fun stopHostProcess() {
+        host.outputStream.close()
+        if (!host.waitFor(5, TimeUnit.SECONDS)) host.destroyForcibly()
+    }
+
+    /** 让宿主关掉当前 lua_State（有的话）、新建一个，等它跑起来。 */
+    private fun rebuildVm() {
+        host.outputStream.write("rebuild\n".toByteArray())
+        host.outputStream.flush()
+        assertEquals("REBUILT", CompletableFuture.supplyAsync { hostOut.readLine() }.get(10, TimeUnit.SECONDS))
     }
 
     @After
@@ -337,6 +354,33 @@ class NativeRuntimeE2eTest {
             assertTrue("第 ${round + 1} 次重建应停在新 VM 上", seenVms.add(pause.vmId))
             assertEquals(BreakpointVerification.VERIFIED, session.breakpoints().single { it.id == id }.verification)
         }
+        session.resume(pause.vmId).await()
+    }
+
+    /**
+     * 用户场景：先附加编辑器（PIE 还没开始，进程里没有 lua_State），再开始 PIE；停掉 PIE 再开一次。
+     * 附加时下的断点要在每次新建的 VM 上命中。
+     */
+    @Test
+    fun `先附加再开始 PIE 停掉再开 断点都命中`() {
+        stopHostProcess()
+        launchHost("--no-vm")
+        val (session, events) = session()
+        assertEquals(emptyList<String>(), session.vms().map { it.name })
+        val id = session.addBreakpoint(BreakpointRequest(script.path, LINE_LOCAL_R)).await()
+        session.syncBreakpoints().await()
+        rebuildVm() // 开始 PIE
+        var pause = events.pause()
+        assertEquals(LINE_LOCAL_R, pause.top!!.line)
+        assertEquals(BreakpointVerification.VERIFIED, session.breakpoints().single { it.id == id }.verification)
+
+        // 停掉 PIE 再开：停着时发重建，继续后旧 VM 关掉、新 VM 起来
+        host.outputStream.write("rebuild\n".toByteArray())
+        host.outputStream.flush()
+        session.resume(pause.vmId).await()
+        assertEquals("REBUILT", CompletableFuture.supplyAsync { hostOut.readLine() }.get(10, TimeUnit.SECONDS))
+        pause = events.pause()
+        assertEquals(LINE_LOCAL_R, pause.top!!.line)
         session.resume(pause.vmId).await()
     }
 

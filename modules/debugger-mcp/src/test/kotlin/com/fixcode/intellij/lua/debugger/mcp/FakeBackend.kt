@@ -61,6 +61,26 @@ class FakeBackend : LuaDebugBackend {
         return CompletableFuture.completedFuture(Unit)
     }
 
+    val runConfigs = CopyOnWriteArrayList<RunConfigInfo>()
+
+    override fun listRunConfigurations(): List<RunConfigInfo> = runConfigs.toList()
+
+    override fun launchConfiguration(request: LaunchRequest): CompletableFuture<LaunchResult> {
+        commands += "launch ${request.name} debug=${request.debug}"
+        val c = runConfigs.first { it.name == request.name }
+        if (!c.lua) return CompletableFuture.completedFuture(LaunchResult(c.name, executor = if (request.debug) "debug" else "run"))
+        addSession("s-launch", "${c.name} (200)")
+        return CompletableFuture.completedFuture(LaunchResult(c.name, "s-launch"))
+    }
+
+    override fun restartSession(sessionId: String): CompletableFuture<String> {
+        commands += "restart $sessionId"
+        val old = sessions.first { it.sessionId == sessionId }
+        sessions.remove(old)
+        addSession("$sessionId-r", old.target)
+        return CompletableFuture.completedFuture("$sessionId-r")
+    }
+
     override fun listVms(sessionId: String) = listOf(VmInfo("vm-1", "GameLua", VmState.RUNNING, 1))
 
     override fun capabilities(sessionId: String) = setOf("valuePath", "luaEval")
@@ -147,6 +167,11 @@ class FakeBackend : LuaDebugBackend {
     override fun evaluate(request: EvaluateRequest): CompletableFuture<VariableInfo> {
         commands += "eval ${request.mode} ${request.expression}"
         return CompletableFuture.completedFuture(VariableInfo(request.expression, "number", "42"))
+    }
+
+    override fun setVariable(request: SetVariableRequest): CompletableFuture<VariableInfo> {
+        commands += "set ${request.mode} ${request.path}=${request.value}" + (request.scope?.let { " ${it.name}" } ?: "")
+        return CompletableFuture.completedFuture(VariableInfo(request.path, "number", request.value))
     }
 
     override fun getOutput(sessionId: String?, sinceSeq: Long, limit: Int) = OutputPage(

@@ -26,14 +26,14 @@ class MessageCodecTest {
     fun `request 的线上字段名`() {
         val frame = MessageCodec.encode(ProtocolMessage.Request(7, "continue", PauseTarget(1, 3).toJson()))
         assertEquals(
-            JsonParser().parse("""{"id":7,"command":"continue","args":{"vmId":1,"pauseId":3}}"""),
-            JsonParser().parse(String(frame.payload))
+            JsonParser.parseString("""{"id":7,"command":"continue","args":{"vmId":1,"pauseId":3}}"""),
+            JsonParser.parseString(String(frame.payload))
         )
     }
 
     @Test
     fun `解析文档里的 welcome 示例`() {
-        val body = JsonParser().parse(
+        val body = JsonParser.parseString(
             """
             {"protocol":3,"revision":0,"sessionId":"c1f0a9e2",
              "runtime":{"name":"emmy_debugger_core","version":"3.0.0","build":"a1b2c3d"},
@@ -55,7 +55,7 @@ class MessageCodecTest {
 
     @Test
     fun `解析文档里的 paused 和 breakpointHit 示例`() {
-        val paused = PausedEvent.fromJson(JsonParser().parse(
+        val paused = PausedEvent.fromJson(JsonParser.parseString(
             """{"vmId":1,"pauseId":4,"threadId":"t1","reason":"breakpoint","breakpointIds":["bp-12"],
                "description":"命中断点 bp-12",
                "top":{"frameId":101,"name":"BagPanel:OnItemClick","chunkName":"@Content/Script/UI/BagPanel.lua","line":120},
@@ -65,7 +65,7 @@ class MessageCodecTest {
         assertEquals(120, paused.top!!.line)
         assertEquals(listOf("bp-12"), paused.breakpointIds)
 
-        val hit = BreakpointHitEvent.fromJson(JsonParser().parse(
+        val hit = BreakpointHitEvent.fromJson(JsonParser.parseString(
             """{"id":"bp-12","vmId":1,"threadId":"t1","hitCount":3,"line":120,"timeMs":1763295300123,
                "captures":[{"expression":"index","value":"7","type":"number"}]}"""
         ).asJsonObject)

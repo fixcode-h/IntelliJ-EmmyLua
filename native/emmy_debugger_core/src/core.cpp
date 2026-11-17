@@ -48,6 +48,7 @@ void Options::Reset() {
 	viewMaxSortKeys = 10000;
 	viewToString = 0;
 	exceptions = 0;
+	collectErrors = 0;
 	viewHelperBudgetMs = 20;
 }
 
@@ -142,6 +143,7 @@ bool Core::Activate(const std::shared_ptr<Session>& session) {
 		connected_.store(true, std::memory_order_release);
 	}
 	ClearBreakpoints();
+	errors_.Clear(); // 错误聚合按会话算：新连上的 IDE 只看这之后的
 	{
 		std::lock_guard<std::mutex> lock(helperMutex_);
 		helpers_.reset();
@@ -476,6 +478,14 @@ int Emmy_WaitIDE(int timeoutMs) {
 	return Core::Get().WaitConfigured(timeoutMs) ? 1 : 0;
 }
 
+int Emmy_WaitIDEForVm(lua_State* L, int timeoutMs) {
+	const bool ready = Core::Get().WaitConfigured(timeoutMs);
+	if (L && Core::Get().FindVmByState(L)) {
+		if (emmy::HookMux* mux = emmy::FindMux(emmy::lua::GlobalStateOf(L))) mux->KickNow(L);
+	}
+	return ready ? 1 : 0;
+}
+
 int Emmy_WaitForClient(int timeoutMs) {
 	auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs < 0 ? 0 : timeoutMs);
 	while (!Core::Get().connected()) {
@@ -533,13 +543,33 @@ void Emmy_NotifyLuaError(lua_State* L, int msgIdx) {
 	if (vm) vm->OnLuaError(L, emmy::lua::AbsIndex(L, msgIdx), true);
 }
 
+namespace {
+// 宿主自己给了错误处理函数（UnLua 的 lua_pcall 都带一个打日志的）：先通知核心，再交给它原来的处理函数
+int ChainedHostErrorHandler(lua_State* L) {
+	auto vm = Core::Get().FindVmByState(L);
+	if (vm) vm->OnLuaError(L, 1, true);
+	lua_settop(L, 1);
+	lua_pushvalue(L, lua_upvalueindex(1));
+	lua_insert(L, 1);
+	lua_call(L, 1, 1);
+	return 1;
+}
+} // namespace
+
 int Emmy_PrepareHostPcall(lua_State* L, int nargs, int errfunc) {
-	if (errfunc != 0 || Core::Get().options().exceptions.load() == 0 || !Core::Get().connected()) return 0;
+	if (!Core::Get().options().WantHostErrors() || !Core::Get().connected()) return 0;
 	auto vm = Core::Get().FindVmByState(L);
 	if (!vm || vm->IsInsideLuaPcall(L)) return 0;
 	const int idx = lua_gettop(L) - nargs; // 被调用的函数的位置
 	if (idx < 1) return 0;
-	lua_pushcfunction(L, &Emmy_LuaErrorHandler);
+	if (errfunc != 0) {
+		// 原处理函数在被调函数下面，插到 idx 不影响它的位置；相对下标先在压栈前取值
+		if (lua_type(L, errfunc) != LUA_TFUNCTION) return 0;
+		lua_pushvalue(L, errfunc);
+		lua_pushcclosure(L, &ChainedHostErrorHandler, 1);
+	} else {
+		lua_pushcfunction(L, &Emmy_LuaErrorHandler);
+	}
 	lua_insert(L, idx);
 	return idx;
 }

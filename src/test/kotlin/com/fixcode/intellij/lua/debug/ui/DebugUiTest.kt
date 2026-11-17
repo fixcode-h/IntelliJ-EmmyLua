@@ -12,6 +12,86 @@ import org.w3c.dom.Element
 
 class DebugUiTest : BasePlatformTestCase() {
 
+    fun testFramesLocationFit() {
+        val w: (String) -> Int = { it.length }
+        val fit = com.fixcode.intellij.lua.debug.ui.session.LuaFramesListLayout::fit
+        assertEquals("  a/b/c.lua:3", fit("  a/b/c.lua:3", 100, w))
+        assertEquals("  …/c.lua:3", fit("  a/b/c.lua:3", 11, w))
+        assertEquals("  …c.lua:3", fit("  a/b/c.lua:3", 10, w))
+        assertNull("连文件名都放不下就不省略", fit("  a/b/c.lua:3", 5, w))
+    }
+
+    fun testFramesLocationRightAligned() {
+        val list = com.intellij.ui.components.JBList(listOf("f"))
+        list.setSize(600, 100)
+        val renderer = object : com.intellij.ui.ColoredListCellRenderer<String>() {
+            override fun customizeCellRenderer(l: javax.swing.JList<out String>, value: String, index: Int, selected: Boolean, focus: Boolean) {
+                append("main.update", com.intellij.ui.SimpleTextAttributes.REGULAR_ATTRIBUTES)
+                append("  Scripts/Game/Main.lua:12", com.intellij.ui.SimpleTextAttributes.GRAY_ATTRIBUTES)
+            }
+        }
+        val c = renderer.getListCellRendererComponent(list, "f", 0, false, false)
+        com.fixcode.intellij.lua.debug.ui.session.LuaFramesListLayout.alignLocation(list, c)
+        assertTrue("右对齐后首选宽度撑到列表右边", renderer.preferredSize.width >= 500)
+        assertEquals("  Scripts/Game/Main.lua:12", renderer.getCharSequence(false).toString().removePrefix("main.update"))
+
+        list.setSize(renderer.getFontMetrics(renderer.font).stringWidth("main.update  …Main.lua:12") + 40, 100)
+        val c2 = renderer.getListCellRendererComponent(list, "f", 0, false, false)
+        com.fixcode.intellij.lua.debug.ui.session.LuaFramesListLayout.alignLocation(list, c2)
+        val text = renderer.getCharSequence(false).toString()
+        assertTrue("窄的时候从左边省略路径: $text", text.startsWith("main.update  …") && text.endsWith("Main.lua:12"))
+    }
+
+    /** 2025.3 起帧在前端由序列化的样式重建（FrontendXStackFrame），灰色不再是 GRAY_ATTRIBUTES 本身，也要右对齐。 */
+    fun testFramesLocationRightAlignedWithRebuiltAttributes() {
+        val list = com.intellij.ui.components.JBList(listOf("f"))
+        list.setSize(600, 100)
+        val rebuilt = com.intellij.ui.SimpleTextAttributes(com.intellij.ui.SimpleTextAttributes.STYLE_PLAIN, java.awt.Color(0x80, 0x80, 0x80))
+        val renderer = object : com.intellij.ui.ColoredListCellRenderer<String>() {
+            override fun customizeCellRenderer(l: javax.swing.JList<out String>, value: String, index: Int, selected: Boolean, focus: Boolean) {
+                append("M:ReceiveBeginPlay", com.intellij.ui.SimpleTextAttributes(com.intellij.ui.SimpleTextAttributes.STYLE_PLAIN, null))
+                append("  Player/BP_PlayerCharacter_C.lua:32", rebuilt)
+            }
+        }
+        val c = renderer.getListCellRendererComponent(list, "f", 0, false, false)
+        com.fixcode.intellij.lua.debug.ui.session.LuaFramesListLayout.alignLocation(list, c)
+        assertTrue("重建的样式也右对齐", renderer.preferredSize.width >= 500)
+    }
+
+    /** 平台真的帧列表（匿名子类、异步取帧文字、新 UI 渲染器）里也右对齐。 */
+    fun testFramesLocationRightAlignedInPlatformList() {
+        val frame = object : com.intellij.xdebugger.frame.XStackFrame() {
+            override fun customizePresentation(component: com.intellij.ui.ColoredTextContainer) {
+                component.append("M:ReceiveBeginPlay", com.intellij.ui.SimpleTextAttributes.REGULAR_ATTRIBUTES)
+                component.append("  Player/BP_PlayerCharacter_C.lua:32", com.intellij.ui.SimpleTextAttributes.GRAY_ATTRIBUTES)
+            }
+        }
+        // 平台在 XFramesView 里建的是匿名子类（XFramesView$2），按类名找会找不到
+        val list = object : com.intellij.xdebugger.impl.frame.XDebuggerFramesList(project) {}
+        @Suppress("UNCHECKED_CAST")
+        (list.model as com.intellij.ui.CollectionListModel<Any?>).add(frame)
+        val scroll = com.intellij.ui.components.JBScrollPane(list)
+        val root = javax.swing.JPanel(java.awt.BorderLayout()).apply { add(scroll) }
+        root.setSize(600, 200)
+        root.doLayout(); scroll.doLayout(); scroll.viewport.doLayout()
+        assertTrue("找到帧列表", com.fixcode.intellij.lua.debug.ui.session.LuaFramesListLayout.install(root, testRootDisposable))
+        list.setSize(scroll.viewport.extentSize.width, 100)
+        val deadline = System.currentTimeMillis() + 5000
+        var text = ""
+        var width = 0
+        while (System.currentTimeMillis() < deadline) {
+            com.intellij.testFramework.PlatformTestUtil.dispatchAllEventsInIdeEventQueue()
+            val c = list.cellRenderer.getListCellRendererComponent(list, frame, 0, false, false)
+            val colored = c as? com.intellij.ui.SimpleColoredComponent ?: com.intellij.util.ui.UIUtil.findComponentOfType(c as javax.swing.JComponent, com.intellij.ui.SimpleColoredComponent::class.java)!!
+            text = colored.getCharSequence(false).toString()
+            width = colored.preferredSize.width
+            if (text.startsWith("M:")) break
+            Thread.sleep(50)
+        }
+        assertTrue("文字: $text", text.startsWith("M:ReceiveBeginPlay"))
+        assertTrue("右对齐后宽度撑满: $width", width >= 500)
+    }
+
     fun testParseTasklistCsv() {
         val out = """
             "UnrealEditor.exe","1234","lua54.dll,luasocket.dll"
@@ -105,7 +185,7 @@ class DebugUiSmokeTest : BasePlatformTestCase() {
         assertTrue(com.intellij.execution.configurations.ConfigurationTypeUtil.findConfigurationType("EmmyLua.Device")
             is com.intellij.execution.configurations.VirtualConfigurationType)
         val conf = luaType.configurationFactories[1].createTemplateConfiguration(project) as com.fixcode.intellij.lua.debug.ui.device.LuaDeviceConfiguration
-        val editor = conf.configurationEditor as com.intellij.openapi.options.SettingsEditor<com.fixcode.intellij.lua.debug.ui.device.LuaDeviceConfiguration>
+        val editor = conf.configurationEditor
         editor.component
         conf.options.packageName = "com.x.y"
         editor.resetFrom(conf)
@@ -113,7 +193,7 @@ class DebugUiSmokeTest : BasePlatformTestCase() {
         assertEquals("com.x.y", conf.options.packageName)
         com.intellij.openapi.util.Disposer.dispose(editor)
         val a = luaType.configurationFactories[0].createTemplateConfiguration(project) as com.fixcode.intellij.lua.debug.ui.attach.LuaAttachConfiguration
-        val ae = a.configurationEditor as com.intellij.openapi.options.SettingsEditor<com.fixcode.intellij.lua.debug.ui.attach.LuaAttachConfiguration>
+        val ae = a.configurationEditor
         ae.component
         a.options.onlyLuaProcesses = false
         ae.resetFrom(a); ae.applyTo(a)

@@ -165,6 +165,8 @@ class EmmyLuaCodeBackend(private val project: Project) : LuaCodeBackend {
         }
     }
 
+    // 服务器可能按旧格式回 SymbolInformation（LSP4J 把它的字段标了废弃，但协议里没有别的类型可换），只能照读
+    @Suppress("DEPRECATION")
     override fun workspaceSymbols(query: String): CompletableFuture<List<WorkspaceSymbolHit>> = withServer { item ->
         item.server.workspaceService.symbol(WorkspaceSymbolParams(query)).thenApply { either ->
             when {
@@ -239,6 +241,8 @@ class EmmyLuaCodeBackend(private val project: Project) : LuaCodeBackend {
         )
     }
 
+    /** documentSymbol 的旧格式回包；同 [workspaceSymbols]，字段废弃但没有替代。 */
+    @Suppress("DEPRECATION")
     private fun convert(s: SymbolInformation): DocSymbol {
         val start = s.location.range.start
         val name = s.containerName?.takeIf { it.isNotBlank() }?.let { "$it.${s.name}" } ?: s.name

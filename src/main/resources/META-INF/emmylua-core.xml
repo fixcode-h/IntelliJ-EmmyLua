@@ -36,8 +36,9 @@
                              implementationClass="com.redhat.devtools.lsp4ij.features.foldingRange.LSPFoldingRangeBuilder"/>
         <codeInsight.parameterInfo language="Lua" order="first"
                                    implementationClass="com.redhat.devtools.lsp4ij.features.signatureHelp.LSPParameterInfoHandler"/>
+        <!-- 结构窗口不用 LSP4IJ 的 documentSymbol 版：它只在打开时取一次，服务器没准备好就一直是空的 -->
         <lang.psiStructureViewFactory language="Lua" order="first"
-                                      implementationClass="com.redhat.devtools.lsp4ij.features.documentSymbol.LSPDocumentSymbolStructureViewFactory"/>
+                                      implementationClass="com.fixcode.intellij.lua.structure.LuaStructureViewFactory"/>
         <callHierarchyProvider language="Lua" order="first"
                                implementationClass="com.redhat.devtools.lsp4ij.features.callHierarchy.LSPCallHierarchyProvider"/>
         <typeHierarchyProvider language="Lua" order="first"

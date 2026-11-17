@@ -127,7 +127,25 @@ class LuaV3DebugProcess(
             val lua = welcome.lua?.displayName ?: "Lua"
             val process = welcome.process?.let { " · ${it.name} (${it.pid})" } ?: ""
             print("[EmmyLua] 已连接：$lua$process · runtime ${welcome.runtime.version}\n", ConsoleViewContentType.SYSTEM_OUTPUT)
+            warnIfStaleRuntime(welcome.runtime.version)
         }
+    }
+
+    /** 本次附加时插件自带的 runtime 版本（Windows 附加填，其他目标为空）。 */
+    @Volatile
+    var expectedRuntimeVersion: String? = null
+
+    /**
+     * 注入的调试组件第一次附加后一直留在目标进程里，之后再附加直接复用。更新插件后不重启游戏 / 编辑器，
+     * 跑的还是旧组件，新版修掉的问题（例如 Lua 环境重建后断点不触发）都还在，要明确告诉用户。
+     */
+    private fun warnIfStaleRuntime(actual: String) {
+        val expected = expectedRuntimeVersion ?: return
+        if (expected == actual) return
+        val message = "目标进程里的调试组件是更新插件前注入的旧版（runtime $actual，插件自带 $expected），" +
+            "新版修复的问题在它上面不会生效。请关掉并重新打开游戏或 UE 编辑器后再附加。"
+        print("[EmmyLua] $message\n", ConsoleViewContentType.LOG_WARNING_OUTPUT)
+        session.reportMessage(message, MessageType.WARNING)
     }
 
     // ---------- 执行控制 ----------
@@ -206,6 +224,10 @@ class LuaV3DebugProcess(
                 // runtime 的「断点下发后没匹配上」报告：记下执行过的 chunk，没对上的断点马上变灰
                 if (diagnostics.recordOutput(event.output.category, event.output.text, event.output.vmId)) refreshUnmatched()
             }
+            is DebugEvent.VmAdded -> if (!event.vm.placeholder) printAt(LuaDebugLogLevel.VERBOSE,
+                "[EmmyLua] 发现 Lua VM：${event.vm.name}\n", ConsoleViewContentType.LOG_DEBUG_OUTPUT)
+            is DebugEvent.VmClosed -> printAt(LuaDebugLogLevel.VERBOSE,
+                "[EmmyLua] Lua VM #${event.vmId} 已关闭（${event.reason ?: "closed"}），断点会在新建的 VM 上重新生效\n", ConsoleViewContentType.LOG_DEBUG_OUTPUT)
             is DebugEvent.Disconnected -> print("[EmmyLua] 连接断开：${event.reason}，正在重连…\n", ConsoleViewContentType.LOG_WARNING_OUTPUT)
             is DebugEvent.Connected -> {
                 if (event.reconnect) {
@@ -574,7 +596,7 @@ class LuaV3DebugProcess(
 
     override fun profilerSupported(): Boolean = engine.state.isConnected && engine.supportsProfiler
 
-    override fun startProfiling(): CompletableFuture<Unit> = engine.profileStart().thenApply { }
+    override fun startProfiling(): CompletableFuture<Unit> = engine.profileStart().thenApply { profileNames.clear() }
 
     // 停止时要完整的函数表和尽量完整的折叠栈（导出用），runtime 那边还有约 8 MiB 的总长度上限
     override fun stopProfiling(): CompletableFuture<LuaProfileSnapshot> =
@@ -583,20 +605,30 @@ class LuaV3DebugProcess(
     override fun profileSnapshot(): CompletableFuture<LuaProfileSnapshot> =
         engine.profileResult(limit = 1000, stackLimit = 10000).thenApply(::toSnapshot)
 
-    private fun toSnapshot(result: ProfileResult) = LuaProfileSnapshot(
-        running = result.running,
-        samples = result.samples,
-        durationMs = result.durationMs,
-        rows = result.functions.map {
-            LuaProfileRow(
-                it.fn, it.source, it.line, if (it.isC) null else engine.localPathOfChunk(it.source),
-                it.selfSamples, it.totalSamples, it.selfPercent, it.totalPercent
-            )
-        },
-        folded = result.folded(),
-        totalStacks = result.totalStacks,
-        stacksTruncated = result.stacksTruncated,
-    )
+    // 推断出的函数名：「本地文件\n定义行」→ 名字（推断不出是 <匿名>）。采样中每 2 秒刷新一次，不每次都读文件
+    private val profileNames = ConcurrentHashMap<String, String>()
+
+    private fun toSnapshot(result: ProfileResult): LuaProfileSnapshot {
+        val renames = HashMap<String, String>()
+        val rows = result.functions.map {
+            val localPath = if (it.isC) null else engine.localPathOfChunk(it.source)
+            val name = if (localPath == null || it.fn != LuaProfileNames.ANONYMOUS || it.line <= 0) it.fn
+            else profileNames.getOrPut("$localPath\n${it.line}") { LuaProfileNames.functionName(it.fn, it.line) { line -> LuaProfileNames.fileLine(localPath, line) } }
+            if (!it.isC && (name != it.fn || LuaProfileNames.isStringChunk(it.source))) {
+                renames[LuaProfileNames.runtimeLabel(it.fn, it.source, it.line)] = LuaProfileNames.label(name, it.source, it.line)
+            }
+            LuaProfileRow(name, it.source, it.line, localPath, it.selfSamples, it.totalSamples, it.selfPercent, it.totalPercent)
+        }
+        return LuaProfileSnapshot(
+            running = result.running,
+            samples = result.samples,
+            durationMs = result.durationMs,
+            rows = rows,
+            folded = LuaProfileNames.rewriteFolded(result.folded(), renames),
+            totalStacks = result.totalStacks,
+            stacksTruncated = result.stacksTruncated,
+        )
+    }
 
     /** 接口约定监听器在 EDT 上收到通知。 */
     private fun fireModel(action: (LuaDebugSessionModel.Listener) -> Unit) {

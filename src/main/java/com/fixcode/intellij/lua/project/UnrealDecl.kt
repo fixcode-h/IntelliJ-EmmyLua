@@ -13,11 +13,13 @@ import java.nio.file.Path
 
 /**
  * IDE 这边控制 UE 编辑器里的「后台生成 UE 反射的 Lua 声明」（UELink 2.5+ 的 luadecl.*）：开关、主动刷新。
- * 开关记在 IDE 的项目设置里（[LuaProjectSettings.unrealLuaDecl]）；UE 编辑器后开的，[UnrealDeclWatcher] 发现后自动补开。
+ * 开关记在 IDE 的项目设置里（[LuaProjectSettings.unrealLuaDecl]，蓝图另有 [LuaProjectSettings.unrealLuaDeclBlueprints]，都默认关）；
+ * UE 编辑器后开的，[UnrealDeclWatcher] 发现后自动补开。蓝图开关经 `luadecl.enable` 的 `blueprints` 下发（UELink 2.7+，更老的版本忽略它、照旧生成蓝图）。
  * 都是阻塞调用（本机 HTTP），在后台线程里用；失败抛 IOException，消息是给人看的中文。
  */
 object UnrealDecl {
     const val NOTIFICATION_GROUP = "EmmyLua UE Declarations"
+    const val BLUEPRINTS_LABEL = "蓝图也生成声明"
 
     enum class Refresh(val label: String) {
         /** 再比对一遍，只写变了的 */
@@ -37,28 +39,68 @@ object UnrealDecl {
             ?: throw IOException("没找到开着的 UE 编辑器（或项目里没装 UELink 2.5+）：先打开 UE 编辑器")
     }
 
-    fun setEnabled(project: Project, enabled: Boolean): String {
-        val result = UELinkClient.call(editor(project), "luadecl.enable", JsonObject().apply { addProperty("enabled", enabled) })
+    fun enableArgs(enabled: Boolean, blueprints: Boolean) = JsonObject().apply {
+        addProperty("enabled", enabled)
+        addProperty("blueprints", blueprints)
+    }
+
+    /** UE 那边的蓝图开关和 IDE 的不一致（老版 UELink 不报这个字段时不算不一致） */
+    fun blueprintsDiffer(status: JsonObject, blueprints: Boolean): Boolean =
+        status.get("blueprints")?.takeIf { it.isJsonPrimitive }?.asBoolean?.let { it != blueprints } ?: false
+
+    fun setEnabled(project: Project, enabled: Boolean, blueprints: Boolean = LuaProjectSettings.getInstance(project).unrealLuaDeclBlueprints): String {
+        val result = UELinkClient.call(editor(project), "luadecl.enable", enableArgs(enabled, blueprints))
         return if (enabled) {
             UnrealDeclWatcher.getInstance(project).checkSoon()
-            "UE 编辑器已开始后台生成 Lua 声明（${result.get("dir")?.asString ?: ""}），第一次要几十秒，生成完 IDE 自动换用"
+            val what = if (blueprints) "C++ 类和蓝图" else "C++ 反射类型，不含蓝图"
+            "UE 编辑器已开始后台生成 Lua 声明（$what，${result.get("dir")?.asString ?: ""}），第一次要几十秒，生成完 IDE 自动换用"
         } else {
             "UE 编辑器已停止生成；已生成的声明留着照样能用"
         }
     }
 
     /**
-     * UE 那边还没开时：IDE 里勾了开关就先打开再刷新，没勾就报错让先勾上。
-     * 设置页里勾了还没点「应用」时按界面上的勾选算（[enabledInUi]）。
+     * IDE 里打开 / 关掉后台生成：记进项目设置，再通知 UE 编辑器。设置页「应用」和上手检查共用。
+     * UE 编辑器没开时只记下开关，[UnrealDeclWatcher] 发现编辑器打开后自动补开。
      */
-    fun refresh(project: Project, mode: Refresh, enabledInUi: Boolean? = null): String {
+    fun setEnabledFromIde(
+        project: Project,
+        enabled: Boolean,
+        blueprints: Boolean = LuaProjectSettings.getInstance(project).unrealLuaDeclBlueprints,
+    ) {
+        val settings = LuaProjectSettings.getInstance(project)
+        settings.unrealLuaDecl = enabled
+        settings.unrealLuaDeclBlueprints = blueprints
+        UnrealDeclWatcher.getInstance(project).resetSync()
+        runInBackground(project) {
+            try {
+                setEnabled(project, enabled, blueprints)
+            } catch (e: IOException) {
+                if (enabled) "已记下，UE 编辑器打开后自动开始生成（${e.message}）" else throw e
+            }
+        }
+    }
+
+    /**
+     * UE 那边还没开时：IDE 里勾了开关就先打开再刷新，没勾就报错让先勾上。
+     * 设置页里勾了还没点「应用」时按界面上的勾选算（[enabledInUi]、[blueprintsInUi]）。
+     * UE 那边的蓝图开关和 IDE 不一致时先按 IDE 的改过来。
+     */
+    fun refresh(project: Project, mode: Refresh, enabledInUi: Boolean? = null, blueprintsInUi: Boolean? = null): String {
+        val settings = LuaProjectSettings.getInstance(project)
+        val blueprints = blueprintsInUi ?: settings.unrealLuaDeclBlueprints
+        if (mode == Refresh.LOAD_BLUEPRINTS && !blueprints) {
+            throw IOException("没打开蓝图声明：先在 设置 → EmmyLua → 库目录 勾选「$BLUEPRINTS_LABEL」")
+        }
         val editor = editor(project)
         val status = UELinkClient.call(editor, "luadecl.status")
         if (status.get("active")?.asBoolean != true) {
-            if (!(enabledInUi ?: LuaProjectSettings.getInstance(project).unrealLuaDecl)) {
+            if (!(enabledInUi ?: settings.unrealLuaDecl)) {
                 throw IOException("还没打开后台生成：先在 设置 → EmmyLua → 库目录 勾选「让 UE 编辑器后台生成反射声明」")
             }
-            UELinkClient.call(editor, "luadecl.enable", JsonObject().apply { addProperty("enabled", true) })
+            UELinkClient.call(editor, "luadecl.enable", enableArgs(true, blueprints))
+        } else if (blueprintsDiffer(status, blueprints)) {
+            UELinkClient.call(editor, "luadecl.enable", enableArgs(true, blueprints))
         }
         val args = JsonObject().apply {
             if (mode == Refresh.FORCE) addProperty("force", true)
