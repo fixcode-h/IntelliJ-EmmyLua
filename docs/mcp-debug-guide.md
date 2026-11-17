@@ -1,35 +1,27 @@
 # 让 Agent 调试 Lua（MCP）
 
-插件在 IDE 里内置了一个 MCP 服务，Claude Code、Cursor、VS Code（Copilot）、Gemini CLI、Codex 等 Agent 连上后可以直接调试 Lua：下断点、等暂停、看栈和变量、单步。原来的命令行工具 `emmy-debug` 已删除，由它代替。
+插件把 Lua 调试工具注册到 **IDE 自带的 MCP 服务器**（IntelliJ 2025.2 起内置的 MCP Server 插件）。Claude Code、Cursor、VS Code（Copilot）、Codex 等 Agent 连上 IDE 的 MCP 服务器后，除了 IDE 自己的工具，还能直接调试 Lua：下断点、等暂停、看栈和变量、单步、采样性能。插件不再自己起 MCP 服务，也不再往项目里写配置文件。
 
-## 安装到项目
+## 开启
 
-打开含 Lua 的项目时，如果还没装，右下角会提示「EmmyLua 调试 MCP 未安装到本项目」，点「安装」即可。也可以在 **Tools > EmmyLua 调试 > 安装 MCP 到项目** 里随时安装、更新或卸载。
+1. 打开 **设置 → 工具 → MCP 服务器**，勾选「启用 MCP 服务器」。
+2. 在同一页用「自动配置」把 IDE 加到你用的 Agent（Claude Code、Cursor、VS Code、Codex……），或者照页面上给的地址手动配置。地址和端口由 IDE 管理。
+3. 在「MCP 服务器 → 公开的工具」里能看到 `lua_debug_session`、`lua_debug_breakpoints`、`lua_debug_inspect` 三个工具（类别 LuaDebug），可以按需关掉。开了「仅路由器模式」的 IDE 版本里，Lua 调试工具和 IDE 自己的工具一样处理。
 
-- 配置写在项目的**版本管理根目录**（`.git` / `.svn` / `.hg` / `.plastic` / Perforce 工作区根）。IDE 只打开了 UE 项目里的 `Content/Script` 这类目录时也一样往上找；没有版本管理的 UE 项目写在含 `.uproject` 的目录，都没有时写在项目目录。
-- 按检测到的客户端写入（默认勾选已经有对应目录的）：
+第一次启动 Lua 调试会话时，如果 IDE 的 MCP 服务器还没开，右下角会提示一次，点「打开 MCP 服务器设置」即可。**设置 → 工具 → EmmyLua 调试** 和 **Tools → EmmyLua 调试 → MCP 状态** 里能看到服务器是否在运行。
 
-  | 客户端 | 文件 |
-  | --- | --- |
-  | Claude Code | `.mcp.json` |
-  | Cursor | `.cursor/mcp.json` |
-  | VS Code / Copilot | `.vscode/mcp.json` |
-  | Gemini CLI | `.gemini/settings.json` |
-  | Codex | `~/.codex/config.toml`（用户级，只在勾选时写） |
+MCP Server 插件被禁用时，Lua 调试本身照常可用，只是 Agent 用不了这些工具。
 
-- 只增改 `emmylua-debug` 这一项，别的配置原样保留；文件里有注释等非严格 JSON 时不会改动，会给出要手动粘贴的片段。
-- 配置里只有本机地址 `http://127.0.0.1:9330/mcp`，没有密钥，可以提交进版本库给全组用。写完不会自动加入版本管理，由你决定。
-
-端口在 **设置 > 工具 > EmmyLua 调试** 里改（默认 9330，被占用时自动顺延）；端口变了以后，安装状态会提示一键更新配置。
+从旧版本升级：旧版写进项目的 `.mcp.json`、`.cursor/mcp.json` 等文件里的 `emmylua-debug` 项（`http://127.0.0.1:9330/mcp`）已经连不上，删掉这一项，改用 IDE 的 MCP 服务器。
 
 ## 安全
 
-- 服务只监听 `127.0.0.1`，并校验请求来源，别的机器和网页连不上。
+- 监听地址、来源校验由 IDE 的 MCP 服务器负责（只听本机）。
 - Agent 只读（看会话、栈、变量、输出）不需要确认。
 - Agent 第一次控制某个调试会话（下断点、继续、单步）时，右下角会弹出确认：「本次会话总是允许 / 允许一次 / 拒绝」，60 秒不处理按拒绝。
 - Agent 每次附加进程都要确认。
 - Agent 热重载 UE 里的 Lua（`reload`）按控制处理：第一次弹确认，「本次会话总是允许」后不再问。
-- 执行任意 Lua 表达式默认关闭，需要在设置里打开「允许 Agent 执行任意 Lua」；默认只能读变量路径（如 `self.items[3].id`）。
+- 执行任意 Lua 表达式默认关闭，需要在 **设置 → 工具 → EmmyLua 调试** 里打开「允许 Agent 执行任意 Lua 表达式」；默认只能读变量路径（如 `self.items[3].id`）。
 - 调试窗口的「Agent」页能看到 Agent 的每一次调用，可以一键「撤销 Agent 控制」「清除 Agent 断点」。
 
 ## Agent 能用的工具
@@ -38,7 +30,7 @@
 
 | 工具 | 动作 |
 | --- | --- |
-| `lua_debug_session` | `status` 会话状态 · `targets` 可附加的进程/设备 · `attach` 附加 · `stop` 结束 · `pause` / `continue` / `step` · `wait` 等下一次暂停 · `reload` 把改过的 Lua 热重载到开着的 UE 编辑器 / 游戏（`files` / `modules` / `changed=true`，经 UELink，不需要调试会话） |
+| `lua_debug_session` | `help` 完整用法 · `status` 会话状态 · `targets` 可附加的进程/设备 · `attach` 附加 · `stop` 结束 · `pause` / `continue` / `step` · `wait` 等下一次暂停 · `reload` 把改过的 Lua 热重载到开着的 UE 编辑器 / 游戏（`files` / `modules` / `changed=true`，经 UELink，不需要调试会话） |
 | `lua_debug_breakpoints` | `list` · `add`（条件、命中次数、日志点、capture + auto_continue 的 Probe）· `remove` · `enable` · `clear`（默认只删 Agent 下的） |
 | `lua_debug_inspect` | `stack` · `vms` · `locals` · `eval` · `output`（print 和 Lua 错误）· `probes` · `profile`（采样 `duration_ms`，默认 3 秒、最多 60 秒，返回最耗时的 Lua 函数，`sort` = self / total，`limit` 默认 30） |
 

@@ -63,10 +63,6 @@
                                  key="settings.title"
                                  instance="com.fixcode.intellij.lua.debug.ui.settings.LuaDebugConfigurable"/>
 
-        <statusBarWidgetFactory id="EmmyLuaDebugMcp"
-                                implementation="com.fixcode.intellij.lua.debug.ui.mcp.LuaMcpStatusBarWidgetFactory"
-                                order="after positionWidget"/>
-        <postStartupActivity implementation="com.fixcode.intellij.lua.debug.ui.mcp.LuaMcpInstallPromptActivity"/>
         <notificationGroup id="EmmyLua Debug" displayType="BALLOON" bundle="messages.LuaDebugBundle" key="notification.group"/>
     </extensions>
 
@@ -97,8 +93,8 @@
 
     <actions>
         <group id="EmmyLua.Debug.Tools" popup="true" text="EmmyLua 调试">
-            <action id="EmmyLua.Debug.InstallMcp"
-                    class="com.fixcode.intellij.lua.debug.ui.mcp.InstallMcpAction"/>
+            <action id="EmmyLua.Debug.OpenMcpSettings"
+                    class="com.fixcode.intellij.lua.debug.ui.mcp.OpenMcpServerSettingsAction"/>
             <action id="EmmyLua.Debug.McpStatus"
                     class="com.fixcode.intellij.lua.debug.ui.mcp.ShowMcpStatusAction"/>
             <action id="EmmyLua.Debug.OpenSettings"

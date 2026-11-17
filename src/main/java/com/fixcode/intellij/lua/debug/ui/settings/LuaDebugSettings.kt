@@ -11,16 +11,14 @@ import com.intellij.openapi.project.Project
 /**
  * 调试的全局设置（Settings > Tools > EmmyLua 调试）。
  *
- * MCP、设备、引擎实现都直接读这里，不各自存一份：端口只有一个真相，
- * 设置页改了以后调 LuaMcpService.applySettings() 让服务跟上。
+ * MCP 工具、设备、引擎实现都直接读这里，不各自存一份。MCP 的端口和开关归 IDE 自带的 MCP 服务器
+ * （设置 → 工具 → MCP 服务器），这里不再存。
  */
 @Service(Service.Level.APP)
 @State(name = "EmmyLuaDebugSettings", storages = [Storage("emmylua-debug.xml")])
 class LuaDebugSettings : SimplePersistentStateComponent<LuaDebugSettings.State>(State()) {
 
     class State : BaseState() {
-        var mcpEnabled by property(true)
-        var mcpPort by property(DEFAULT_MCP_PORT)
         /** 允许 Agent 用 mode=lua 执行任意表达式；默认只允许读变量路径（设计文档 6.2）。 */
         var allowAgentLuaEval by property(false)
         /** 空 = 自动找（ANDROID_HOME / PATH）。 */
@@ -47,14 +45,6 @@ class LuaDebugSettings : SimplePersistentStateComponent<LuaDebugSettings.State>(
         /** 相对项目根；空 = 默认 .emmylua/debug-view.json。 */
         var viewRulesFile by string(VariableViewSettings.DEFAULT_RULES_FILE)
     }
-
-    var mcpEnabled: Boolean
-        get() = state.mcpEnabled
-        set(value) { state.mcpEnabled = value }
-
-    var mcpPort: Int
-        get() = state.mcpPort
-        set(value) { state.mcpPort = value }
 
     var allowAgentLuaEval: Boolean
         get() = state.allowAgentLuaEval
@@ -128,7 +118,6 @@ class LuaDebugSettings : SimplePersistentStateComponent<LuaDebugSettings.State>(
     }
 
     companion object {
-        const val DEFAULT_MCP_PORT = 9330
         const val DEFAULT_SYMBOL_DIRS = "\$PROJECT_DIR\$/Binaries/Android;\$PROJECT_DIR\$/Intermediate/Android"
 
         fun getInstance(): LuaDebugSettings = service()
@@ -202,7 +191,7 @@ data class VariableViewSettings(
     }
 }
 
-/** 按项目记住的东西：未安装提示是否不再弹、最近附加过的进程。 */
+/** 按项目记住的东西：「IDE 的 MCP 服务器没开」提示是否不再弹、最近附加过的进程。 */
 @Service(Service.Level.PROJECT)
 @State(name = "EmmyLuaDebugProjectState", storages = [Storage("emmylua-debug.xml")])
 class LuaDebugProjectState : SimplePersistentStateComponent<LuaDebugProjectState.State>(State()) {

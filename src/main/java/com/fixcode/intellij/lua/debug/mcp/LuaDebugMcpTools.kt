@@ -1,40 +1,33 @@
 package com.fixcode.intellij.lua.debug.mcp
 
-import com.intellij.ide.plugins.PluginManagerCore
 import com.intellij.openapi.Disposable
+import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
 import com.intellij.openapi.diagnostic.Logger
-import com.intellij.openapi.extensions.PluginId
-import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.project.ProjectManager
 import com.intellij.openapi.roots.ProjectRootManager
 import com.intellij.openapi.vfs.VfsUtilCore
-import com.fixcode.intellij.lua.debug.ui.settings.LuaDebugSettings
 import com.fixcode.intellij.lua.debugger.mcp.CompositeLuaDebugBackend
-import com.fixcode.intellij.lua.debugger.mcp.EmmyLuaMcpServer
+import com.fixcode.intellij.lua.debugger.mcp.EmmyLuaDebugMcp
 import com.fixcode.intellij.lua.debugger.mcp.LuaDebugBackend
 import com.fixcode.intellij.lua.debugger.mcp.protocol.McpLogger
-import java.io.IOException
 import java.nio.file.Path
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
- * 应用级：整个 IDE 一个 MCP 端口（配置文件里写的就是这个地址），多个打开的项目合成一个引擎（[CompositeLuaDebugBackend]）。
- * 第一个项目打开时启动（[LuaMcpStartupActivity]），IDE 退出时随服务销毁而停止。
+ * 应用级：Lua 调试工具的唯一一份状态（授权、调用记录、各客户端看过的暂停）。
+ * 工具由 [com.fixcode.intellij.lua.debug.mcp.ide.LuaMcpToolsProvider] 注册到 IDE 自带的 MCP 服务器，
+ * 调用都转到这里的 [mcp]；多个打开的项目合成一个引擎（[CompositeLuaDebugBackend]）。
  */
 @Service(Service.Level.APP)
-class LuaMcpServer : Disposable {
-    private val log = Logger.getInstance(LuaMcpServer::class.java)
+class LuaDebugMcpTools : Disposable {
+    private val log = Logger.getInstance(LuaDebugMcpTools::class.java)
     private val listeners = CopyOnWriteArrayList<() -> Unit>()
 
-    @Volatile
-    private var lastError: String? = null
-
-    val mcp: EmmyLuaMcpServer = EmmyLuaMcpServer(
+    val mcp: EmmyLuaDebugMcp = EmmyLuaDebugMcp(
         backend = ::compositeBackend,
         confirmer = IdeMcpConfirmer(),
-        version = pluginVersion(),
         logger = McpLogger { level, event, message, fields, error ->
             val line = buildString {
                 append(event)
@@ -52,47 +45,10 @@ class LuaMcpServer : Disposable {
     )
 
     init {
-        // 客户端连接、调用、授权变化都通知 UI（状态栏、Agent 页）
-        mcp.protocol.addListener(::fireChanged)
-        mcp.callLog.addListener { fireChanged() }
+        // 调用、授权变化都通知 UI（Agent 页）
+        mcp.dispatcher.addListener(::fireChanged)
         mcp.policy.addListener(::fireChanged)
     }
-
-    val isRunning: Boolean get() = mcp.isRunning
-    val port: Int get() = if (mcp.isRunning) mcp.port else LuaDebugSettings.getInstance().mcpPort
-    val error: String? get() = lastError
-
-    /** 按设置启停：启用且没在跑就启动；端口变了就重启；关闭就停。 */
-    @Synchronized
-    fun applySettings() {
-        val settings = LuaDebugSettings.getInstance()
-        if (!settings.mcpEnabled) {
-            if (mcp.isRunning) {
-                mcp.stop()
-                log.info("mcp.server.stopped reason=disabled")
-            }
-            lastError = null
-            fireChanged()
-            return
-        }
-        val wanted = settings.mcpPort
-        // 已经在跑：设置的端口没变（含被占用顺延的情况）就不动
-        if (mcp.isRunning && (mcp.port == wanted || startedFrom == wanted)) return
-        try {
-            val actual = mcp.start(wanted)
-            startedFrom = wanted
-            lastError = null
-            log.info("mcp.server.started port=$actual" + if (actual != wanted) " requested=$wanted" else "")
-        } catch (e: IOException) {
-            lastError = e.message
-            log.warn("mcp.server.failed port=$wanted", e)
-        }
-        fireChanged()
-    }
-
-    /** 实际端口是从设置里哪个端口顺延来的。 */
-    @Volatile
-    private var startedFrom: Int = -1
 
     fun addListener(listener: () -> Unit): AutoCloseable {
         listeners += listener
@@ -103,7 +59,7 @@ class LuaMcpServer : Disposable {
 
     private fun compositeBackend(): LuaDebugBackend? {
         if (LuaMcpBackendProvider.EP.extensionList.isEmpty()) return null
-        val composite = CompositeLuaDebugBackend {
+        return CompositeLuaDebugBackend {
             ProjectManager.getInstance().openProjects
                 .filter { !it.isDisposed && !it.isDefault }
                 .mapNotNull { project ->
@@ -120,21 +76,16 @@ class LuaMcpServer : Disposable {
                 }
                 .sortedByDescending { it.name == focusedProjectName() }
         }
-        return composite
     }
 
     private fun focusedProjectName(): String? =
         com.intellij.openapi.wm.IdeFocusManager.getGlobalInstance().lastFocusedFrame?.project?.name
 
     override fun dispose() {
-        mcp.stop()
         listeners.clear()
     }
 
     companion object {
-        fun getInstance(): LuaMcpServer = service()
-
-        private fun pluginVersion(): String =
-            PluginManagerCore.getPlugin(PluginId.getId("com.fixcode.emmylua.enhanced"))?.version ?: "dev"
+        fun getInstance(): LuaDebugMcpTools = service()
     }
 }

@@ -14,22 +14,22 @@
 
 ## MCP 工具规范
 
-插件在 IDE 里内置 MCP Server（`modules/debugger-mcp` + 主插件的宿主），让 Agent 调试 Lua。工具的形状**照 UEToVS 的 MCP**（`fixcode-h/UEToVS` 的 `docs/design/MCP.md`、`docs/design/VS-调试控制.md`、`src/UEToVS.Mcp/Tools/`），同一个 Agent 同时挂着 UEToVS 和 EmmyLua 时用法一致。加工具、改参数或返回前先读完本节。
+插件把 Lua 调试工具注册到 **IDE 自带的 MCP 服务器**（2025.2 起内置的 MCP Server 插件，`com.intellij.mcpServer`），让 Agent 调试 Lua；工具逻辑在 `modules/debugger-mcp`，主插件只做适配。工具的形状**照 UEToVS 的 MCP**（`fixcode-h/UEToVS` 的 `docs/design/MCP.md`、`docs/design/VS-调试控制.md`、`src/UEToVS.Mcp/Tools/`），同一个 Agent 同时挂着 UEToVS 和 EmmyLua 时用法一致。加工具、改参数或返回前先读完本节。
 
 ### 命名
 
 - 工具名 `lua_debug_<领域>`，snake_case。按领域合并成少数几个工具，用 `action` 区分动作（对应 UEToVS 的 `debug_session` / `debug_breakpoints` / `debug_inspect`），不为每个动作单开一个工具：工具多了 Agent 选不准，延迟加载工具说明时也更贵。
 - 现有三个：
-  - `lua_debug_session`：`status` / `targets` / `attach` / `stop` / `pause` / `continue` / `step` / `wait` / `reload`（经 UELink 热重载 UE 里的 Lua，不需要会话）
+  - `lua_debug_session`：`status` / `targets` / `attach` / `stop` / `pause` / `continue` / `step` / `wait` / `reload`（经 UELink 热重载 UE 里的 Lua，不需要会话）/ `help`（完整用法）
   - `lua_debug_breakpoints`：`list` / `add` / `remove` / `enable` / `clear`
   - `lua_debug_inspect`：`stack` / `vms` / `locals` / `eval` / `output` / `probes` / `profile`
 - `lua_` 前缀是为了和 UEToVS 的 `debug_*`、面板的 `ue_*` 不撞名。工具名一旦发布就不改：Agent 和用户的提示词里写死了它。改名或删掉时，旧名字保留一版，调用时返回「改用哪个」的错误。
-- 配置文件里的服务器名、`serverInfo.name` 都是 `emmylua-debug`。
+- IDE 的 MCP 服务器里所有插件的工具在同一个列表，所以前缀必须带 `lua_`；设置页里我们的类别是 `LuaDebug`，工具全名 `com.fixcode.intellij.lua.debug.mcp.LuaDebugToolset.<工具名>`（用户在「公开的工具」里的开关按全名记，不改）。
 
 ### 参数
 
 - 参数名 snake_case（`session_id`、`wait_ms`、`timeout_ms`、`hit_count`、`auto_continue`、`max_chars`）。
-- 每个工具的 inputSchema 是 `additionalProperties: false`，`action` 必填并给出 `enum`；每个参数的 description 用英文写清楚哪些 action 用它、默认值是多少（例：`"step: over (default) / into / out / toLine"`）。
+- 每个工具的 inputSchema 写 `additionalProperties: false`（IDE 的 MCP 服务器生成 schema 时只取 properties 和 required，所以未知参数靠下一条拒绝），`action` 必填并给出 `enum`；每个参数的 description 用英文写清楚哪些 action 用它、默认值是多少（例：`"step: over (default) / into / out / toLine"`）。
 - **未知参数直接报错**并列出合法的名字（`JsonArgs(raw, allowed)`）：拼错的过滤条件被悄悄忽略比报错更糟。类型宽松：`"20"` 当整数、`"a, b"` 当字符串数组；超范围报错并写出范围。
 - 行号从 1 开始；帧号 `frame` 从 0（栈顶）开始。
 - 列表分页用 `limit` / `offset`（默认 30–50，最大 200）；日志类增量读取用 `cursor`，值是上次返回的 `next`。
@@ -49,15 +49,15 @@
 
 - 出错返回 `isError: true` + `{"error": "<code>", "message": "<中文说明>"}`。`message` 原样给用户和 Agent 看，要写清楚**怎么办**（例：「游戏已继续运行，引用失效：先 lua_debug_session action=wait 或 lua_debug_inspect action=stack 取新的。」）。
 - 错误码（snake_case，加新的要在这里登记）：`invalid_argument`、`unknown_tool`、`engine_unavailable`、`no_session`、`no_vm`、`not_paused`、`stale_reference`、`permission_denied`、`eval_forbidden`、`not_supported`、`timeout`、`attach_failed`、`target_not_found`、`cancelled`、`internal_error`。
-- 参数错和权限拒绝是工具错误（`isError`），不是 JSON-RPC 协议错误；协议错误只用于报文本身不合法、方法不存在。
+- 参数错和权限拒绝是工具错误（`isError`），不是 JSON-RPC 协议错误；协议层的错误由 IDE 的 MCP 服务器处理。
 
 ### 说明文字
 
 - 每个工具的 description 用 `ToolGuide` 的固定结构（英文，给模型看）：`What` + `USE FIRST WHEN:` + `INSTEAD OF:` + `NOT FOR:` + 可选 `Results:`，总长不超过 1200 字。`UseWhen` 写具体场景和典型调用顺序，`InsteadOf` 写它比通用办法（加 print、读代码猜）好在哪，`NotFor` 写不能做什么、该用什么。
 - `title` 是英文显示名，`_meta.titles` 带 `{"zh", "en"}`，客户端按自己的界面语言选。
 - `annotations`：只读工具 `readOnlyHint: true`；会结束进程或丢数据的 `destructiveHint: true`。
-- `initialize` 的 `instructions` 控制在 2000 字以内（Claude Code 会截断更长的），写调试循环和工具选择；更长的用法放资源 `emmylua-debug://guide`。
-- 单测会检查：三段结构齐全、长度上限、参数名 snake_case、instructions 长度（`LuaDebugToolsTest`、`McpProtocolTest`）。
+- IDE 的 MCP 服务器没有给单个插件的 `instructions` 和资源：调试循环写进 `lua_debug_session` 的说明（典型调用顺序），完整用法放 `EmmyLuaDebugMcp.GUIDE`，由 `lua_debug_session action=help` 返回。
+- 单测会检查：三段结构齐全、长度上限、参数名 snake_case（`LuaDebugToolsTest`）、`help` 能返回用法（`McpDispatcherTest`）。
 
 ### 权限
 
@@ -66,22 +66,15 @@
 - `attach` 每次都确认。
 - `profile`（采样性能分析）按只读处理、不弹确认：它不暂停、不改变量、不改执行路径，和 `output` / `probes` 一样只观察；代价是采样期间 Lua 变慢（约 2 倍），所以限时（`duration_ms` ≤ 60000）并由 runtime 到点自动停，IDE 断开也会停。
 - `eval` 默认 `mode=value_path`（只读变量路径）；`mode=lua` 执行任意 Lua，要用户在设置里打开，并且按控制处理。runtime 侧的 `allowLuaEval` 也由引擎按设置下发，作为第二道保险。
-- 不要求、也不写任何令牌：只绑 `127.0.0.1`，校验 `Host` / `Origin` 头防 DNS rebinding 和网页跨站调用。
+- 监听地址、来源校验、客户端连接由 IDE 的 MCP 服务器负责，插件不碰。
 
-### 传输和安装（和 UEToVS 的差别）
+### 传输和接入（和 UEToVS 的差别）
 
-- UEToVS 用 stdio（每个 Agent 会话一个进程，读磁盘索引）。我们用 **IDE 内置的 Streamable HTTP**：`http://127.0.0.1:<端口>/mcp`，默认端口 9330，被占用时顺延。原因：调试状态（会话、断点、暂停）只在 IDE 进程里，stdio 还要再起一个转发进程，并且要在共享配置里写本机路径。
-- 安装位置和 UEToVS 一致：项目目录往上找**版本管理根目录**（`.git` 目录或文件、`.hg`、`.svn` 取连续的最外层、`.plastic`、P4CONFIG 文件；都没有时问 `p4 info` 的 client root，包含项目才用），找不到就往上找 UE 项目根（含 `.uproject` 的目录），再没有才用项目目录（`install/VcsRoot.kt`）。IDE 常常只打开 UE 项目里的 `Content/Script`，所以一定要往上找；脚本目录自己是嵌套仓库时以 UE 项目为准。
-- 写入规则和 UEToVS 一致：**只合并 `emmylua-debug` 这一项**，别的服务器、未知字段、用户在这一项里加的字段原样保留；文件不是严格 JSON（有注释、尾逗号）时不写，给出手动粘贴的片段；跟随原文件的缩进和换行符；临时文件 + 原子替换。配置里只有回环地址，可以提交进版本库。
-- 每个客户端一个 `McpClientConfigWriter`，格式变了只改对应的那个：
-
-  | 客户端 | 文件 | 内容 |
-  | --- | --- | --- |
-  | Claude Code | `<根>/.mcp.json` | `mcpServers.emmylua-debug = {type: "http", url}` |
-  | Cursor | `<根>/.cursor/mcp.json` | `mcpServers.emmylua-debug = {url}` |
-  | VS Code / Copilot | `<根>/.vscode/mcp.json` | `servers.emmylua-debug = {type: "http", url}` |
-  | Gemini CLI | `<根>/.gemini/settings.json` | `mcpServers.emmylua-debug = {httpUrl}` |
-  | Codex | `~/.codex/config.toml`（用户级） | `[mcp_servers.emmylua-debug]` `url = "..."`，只在用户勾选时写 |
+- UEToVS 用 stdio（每个 Agent 会话一个进程，读磁盘索引）。我们**不自己开 MCP 服务**：工具经扩展点 `com.intellij.mcpServer.mcpToolsProvider` 注册到 IDE 自带的 MCP 服务器（`src/main/resources/META-INF/emmylua-mcp.xml`，plugin.xml 里 `optional depends com.intellij.mcpServer`）。调试状态（会话、断点、暂停）只在 IDE 进程里，挂在 IDE 的服务器上最直接；端口、开关、客户端配置（「自动配置」）都归 IDE，插件不写任何 MCP 配置文件、不占端口。
+- 用户要在 **设置 → 工具 → MCP 服务器** 里打开 IDE 的 MCP 服务器；没开时第一次启动 Lua 调试会话提示一次（`LuaMcpEnablePrompt`），设置页「EmmyLua 调试」显示状态和入口。MCP Server 插件被禁用时，只是没有这些工具，调试照常。
+- IDE 的 MCP 服务器接口 2025.2–2026.3 每版都在变：只有 `McpTool`、`McpToolsProvider`、`McpToolCallResultContent.Text` 稳定，`McpToolDescriptor`、输入 schema（2025.2 `McpToolInputSchema`，之后 `McpToolSchema`）、`McpToolCallResult`、客户端信息（2025.3 起 `McpCallInfo`）**一律经 `ide/IdeMcpCompat` 反射构造或读取**，不要在代码里直接调它们的构造函数。新版 IDE 改了接口时，在 `IdeMcpCompat` 的版本表里加一行，并用 `McpCompatTest` 验证（见「测试」）。
+- `McpTool.call` 是挂起函数；工具会阻塞（`wait` 最长 2 分钟、等用户确认），在 `runInterruptible(Dispatchers.IO)` 里跑，客户端取消时中断等待并返回 `cancelled`。
+- 旧版的独立 HTTP 服务（端口 9330）和「安装 MCP 到项目」已删除；用户项目里旧的 `emmylua-debug` 配置项要自己删掉（`docs/mcp-debug-guide.md` 有说明）。
 
 ### 日志
 
@@ -89,5 +82,6 @@
 
 ### 测试
 
-- `modules/debugger-mcp` 不依赖 IntelliJ，工具层用 `FakeBackend`（假引擎）单测，HTTP 宿主用真端口测。改工具时同步改 `LuaDebugToolsTest`。
+- `modules/debugger-mcp` 不依赖 IntelliJ，工具层用 `FakeBackend`（假引擎）单测，分发器（参数校验、错误格式、日志、调用记录）用 `McpDispatcherTest`。改工具时同步改 `LuaDebugToolsTest`。
+- IDE 适配用主插件的 `McpCompatTest`：编译用的 2025.2 总是测；其他版本把各版本 IDE 的 `plugins/mcpserver*/lib` 里的 MCP 服务器 jar（2026.2 起加 MCP Kotlin SDK 的 jar）放进 `EMMY_MCPSERVER_JARS/<版本>/` 再跑。2026.2 起的 jar 是 Java 25 字节码，在 Java 21 上测时先把类文件主版本号改成 65（只为验证构造参数，不进包）。
 - 云端拉不下 IntelliJ SDK 时，可以只用 kotlinc 编这个模块跑单测；主插件交给 CI。

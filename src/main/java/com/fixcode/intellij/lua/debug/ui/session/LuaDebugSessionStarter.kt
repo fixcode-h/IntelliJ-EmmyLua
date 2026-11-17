@@ -12,7 +12,7 @@ import com.intellij.xdebugger.XDebuggerManager
 import com.fixcode.intellij.lua.debug.api.LuaDebugProcessFactory
 import com.fixcode.intellij.lua.debug.api.LuaDebugTarget
 import com.fixcode.intellij.lua.debug.ui.LuaDebugBundle
-import com.fixcode.intellij.lua.debug.ui.mcp.LuaMcpInstallPrompt
+import com.fixcode.intellij.lua.debug.ui.mcp.LuaMcpEnablePrompt
 
 /**
  * 运行配置、Attach to Process、MCP 的 attach_* 三个入口都从这里起会话，
@@ -64,7 +64,7 @@ object LuaDebugSessionStarter {
         ApplicationManager.getApplication().invokeLater({
             if (!project.isDisposed && !session.isStopped) LuaDebugSessionTabs.install(project, session)
         }, project.disposed)
-        // 设计文档 6.5：第一次启动 Lua 调试会话时也检查一次 MCP 是否装到了本项目。
-        LuaMcpInstallPrompt.maybeShow(project, LuaMcpInstallPrompt.Trigger.SESSION_START)
+        // 第一次启动 Lua 调试会话时检查 IDE 的 MCP 服务器开没开（Lua 调试工具挂在它上面）。
+        LuaMcpEnablePrompt.maybeShow(project)
     }
 }

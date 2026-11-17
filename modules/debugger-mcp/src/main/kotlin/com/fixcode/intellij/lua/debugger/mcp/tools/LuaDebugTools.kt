@@ -27,6 +27,8 @@ class LuaDebugTools(
     private val backend: () -> LuaDebugBackend?,
     private val policy: McpPermissionPolicy,
     private val timeouts: Timeouts = Timeouts(),
+    /** `lua_debug_session action=help` 返回的完整用法（Markdown）。 */
+    private val guide: String? = null,
 ) {
     class Timeouts(
         /** 普通请求（取栈、变量、下断点）等引擎回包的上限。 */
@@ -39,7 +41,7 @@ class LuaDebugTools(
 
     // ======================================================================= lua_debug_session
 
-    private val sessionActions = arrayOf("status", "targets", "attach", "stop", "pause", "continue", "step", "wait", "reload")
+    private val sessionActions = arrayOf("status", "targets", "attach", "stop", "pause", "continue", "step", "wait", "reload", "help")
 
     private fun sessionTool() = McpTool(
         name = SESSION,
@@ -54,9 +56,9 @@ class LuaDebugTools(
                 "After editing UnLua scripts: reload files=[...] or changed=true instead of restarting PIE.",
             insteadOf = "adding print() calls to guess values: breakpoints show the real state without editing scripts.",
             notFor = "C++ or Blueprint (use the VS debugger tools). attach, reload and the first control of a session ask the user in " +
-                "the IDE; on permission_denied ask the user. A stopped VM freezes the game thread.",
+                "the IDE; on permission_denied ask the user. A stopped VM freezes the game.",
             results = "status: sessions + stop location; pause/step/wait: event = break / probe / resumed / exited / timeout / idle, " +
-                "break has location, stack, locals; reload: targets[{pid,kind,items[{module,ok|error}]}].",
+                "break: location, stack, locals; reload: targets[{pid,kind,items[{module,ok|error}]}]; help: guide.",
         ).render(),
         inputSchema = schema {
             string("action", "What to do.", required = true, enum = sessionActions.toList())
@@ -95,6 +97,7 @@ class LuaDebugTools(
             "step" -> step(requireBackend(b), call)
             "wait" -> wait(b, call)
             "reload" -> reload(requireBackend(b), call)
+            "help" -> obj("guide" to guide)
             else -> throw ToolArgumentException("缺少参数 'action'")
         }
         }

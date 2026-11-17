@@ -1,10 +1,10 @@
 <!--
-  MCP 的注册（设计文档第 6 节）。
+  MCP 的注册（设计文档第 6 节）。工具本身注册在 IDE 自带的 MCP 服务器上，见 plugin.xml 里
+  可选依赖 com.intellij.mcpServer 的 emmylua-mcp.xml；这里只放不依赖它的部分。
 
   由 emmylua-debug.xml 的「MCP」段用
       <xi:include href="emmylua-debug-mcp.xml" xpointer="xpointer(/idea-plugin/*)"/>
-  引入；和 emmylua-debug.xml 一样，P8 切换之前不被 plugin.xml 引用。单独一个文件是为了
-  MCP 线程和 UI 线程改注册时不互相冲突。
+  引入。单独一个文件是为了 MCP 和 UI 改注册时不互相冲突。
 -->
 <idea-plugin>
     <extensionPoints>
@@ -15,9 +15,5 @@
 
     <extensions defaultExtensionNs="com.fixcode.intellij.lua">
         <debug.mcpService implementation="com.fixcode.intellij.lua.debug.mcp.LuaMcpServiceImpl"/>
-    </extensions>
-
-    <extensions defaultExtensionNs="com.intellij">
-        <postStartupActivity implementation="com.fixcode.intellij.lua.debug.mcp.LuaMcpStartupActivity"/>
     </extensions>
 </idea-plugin>

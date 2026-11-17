@@ -77,12 +77,11 @@ class ToolCall(
     val client: McpClientSession,
 )
 
-/** 一个 MCP 客户端连接（initialize 一次对应一个）。 */
+/** 一个 MCP 客户端（按 IDE MCP 服务器给的会话或客户端名区分，见 [McpToolDispatcher.client]）。 */
 class McpClientSession(
     val id: String,
     val clientName: String?,
     val clientVersion: String?,
-    val protocolVersion: String,
 ) {
     @Volatile
     var lastActiveMillis: Long = System.currentTimeMillis()

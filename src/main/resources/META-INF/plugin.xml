@@ -11,13 +11,13 @@
             go to definition, completion, find usages, rename, diagnostics, formatting, semantic highlighting.</li>
         <li>UE / UnLua: picks up UnLua IntelliSense or UELink-generated declarations automatically.</li>
         <li>Debugging: attach to a local process (Windows), attach to an Android device without changing the package,
-            and an MCP server so AI agents can debug Lua.</li>
+            and Lua debug tools for the IDE's built-in MCP server so AI agents can debug Lua.</li>
     </ul>
     <p>基于 EmmyLua 的 Lua 插件，面向 UE（UnLua）项目：</p>
     <ul>
         <li>语言支持基于 EmmyLua 官方语言服务器 emmylua_ls（经 LSP4IJ）：跳转、补全、查找引用、重命名、诊断、格式化、语义高亮</li>
         <li>UE / UnLua：自动加入 UnLua IntelliSense 或 UELink 后台生成的声明</li>
-        <li>Lua 调试：附加本机进程（Windows）、Android 真机附加（包体零改动）、给 AI Agent 用的 MCP 调试工具</li>
+        <li>Lua 调试：附加本机进程（Windows）、Android 真机附加（包体零改动）、给 AI Agent 用的 MCP 调试工具（注册到 IDE 自带的 MCP 服务器）</li>
     </ul>
     ]]></description>
     <change-notes><![CDATA[
@@ -27,6 +27,8 @@
     <!-- 可选：JSON 插件在时给 .emmyrc.json 挂 schema；拼写检查模块在时挂 Lua 词典 -->
     <depends optional="true" config-file="emmylua-json.xml">com.intellij.modules.json</depends>
     <depends optional="true" config-file="emmylua-spellchecker.xml">com.intellij.modules.spellchecker</depends>
+    <!-- 可选：Lua 调试的 MCP 工具注册到 IDE 自带的 MCP 服务器（2025.2 起内置；插件被禁用时只是没有工具） -->
+    <depends optional="true" config-file="emmylua-mcp.xml">com.intellij.mcpServer</depends>
     <xi:include href="emmylua-core.xml" xpointer="xpointer(/idea-plugin/*)"/>
     <!-- 调试链路（附加 / Android 真机 / MCP / 变量视图） -->
     <xi:include href="emmylua-debug.xml" xpointer="xpointer(/idea-plugin/*)"/>
