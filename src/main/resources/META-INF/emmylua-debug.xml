@@ -118,5 +118,12 @@
             <action id="EmmyLua.Debug.HideField" class="com.fixcode.intellij.lua.debug.xdebugger.LuaHideFieldAction" text="隐藏此字段"/>
             <add-to-group group-id="XDebugger.ValueGroup" anchor="last"/>
         </group>
+        <!-- 变量树右键：UE 对象经 UELink 的 object.reveal 在编辑器里选中 / 打开（UnrealObjectReveal） -->
+        <group id="EmmyLua.Debug.RevealInUnreal">
+            <separator/>
+            <action id="EmmyLua.Debug.SelectInUnreal" class="com.fixcode.intellij.lua.debug.xdebugger.LuaSelectInUnrealAction" text="在 UE 中选中"/>
+            <action id="EmmyLua.Debug.OpenInUnreal" class="com.fixcode.intellij.lua.debug.xdebugger.LuaOpenInUnrealAction" text="在 UE 中打开资产"/>
+            <add-to-group group-id="XDebugger.ValueGroup" anchor="last"/>
+        </group>
     </actions>
 </idea-plugin>
