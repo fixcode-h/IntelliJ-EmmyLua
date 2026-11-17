@@ -7,7 +7,7 @@
 设计见 `docs/design/lsp-migration.md`。
 
 - 语义（跳转、补全、引用、诊断、格式化、语义高亮……）全部由 emmylua_ls 提供，经 LSP4IJ 接入。**不要再往 IDE 里加 PSI 级的语义代码**；缺什么先看 emmylua_ls 是否支持、`.emmyrc.json` 怎么配。
-- IDE 侧只有 `lexer/LuaLexer.kt`（手写词法器）+ 扁平 PSI，用于高亮、括号、注释、调试器取名字。
+- IDE 侧只有 `lexer/LuaLexer.kt`（手写词法器）+ 扁平 PSI，用于高亮、括号、注释、调试器取名字，以及「结构」窗口的大纲（`structure/LuaOutline`，只认顶层声明，不做语义；不用 emmylua_ls 的 documentSymbol，原因见设计文档）。
 - 插件给 emmylua_ls 的配置只通过 `lsp/EmmyLuaWorkspaceConfig`（`workspace/configuration` 的 `emmylua` 段）下发；数组与用户 `.emmyrc.json` 取并集，标量会覆盖，所以用户有配置文件时不下发标量。
 - 版本：`gradle.properties` 的 `lsp4ijVersion`、`emmyLuaLsVersion`。出包用 `.github/scripts/fetch-emmylua-ls.sh` 下载各平台二进制到 `build/emmylua-ls/`，Gradle 放进插件的 `server/<平台>/`。
 - 包名 `com.fixcode.intellij.lua`。新文件不加文件头；从上游 EmmyLua 派生、仍保留上游代码的文件保留原 Apache 版权头。持久化名字（`@State` 名、存储文件、插件 ID、语言 ID `Lua`、文件类型名 `lua`、运行配置和断点类型 ID）不改。

@@ -66,7 +66,8 @@ IDE 里只保留不需要语义的东西，全部基于一个**手写的 Kotlin 
 | 格式化 | 自写 FormattingModel | LSP `formatting` / `rangeFormatting`（emmylua_ls 内置 EmmyLuaCodeStyle，读 `.editorconfig`） |
 | 语义高亮、彩虹变量 | Annotator + RainbowVisitor | LSP `semanticTokens`（彩虹变量不再提供） |
 | 代码折叠 | FoldingBuilder | LSP `foldingRange` |
-| 结构视图、面包屑、粘性行 | StructureViewFactory | LSP `documentSymbol` |
+| 结构视图 | StructureViewFactory | IDE 侧词法大纲 `structure/LuaOutline`（只列顶层的类/模块表、函数、方法、表字段，函数显示为「名字(参数)」，参数和函数体里的东西不作为子项）。不用 `documentSymbol`：emmylua_ls 会把函数里的局部变量、`if` 块、`...` 都列出来，LSP4IJ 也只在打开时取一次，服务器没准备好就一直空着 |
+| 面包屑、粘性行 | StructureViewFactory | LSP `documentSymbol` |
 | 转到符号 / 类（Ctrl+Alt+Shift+N） | goto contributors | LSP `workspace/symbol` |
 | 参数提示（Ctrl+P） | ParameterInfoHandler | LSP `signatureHelp` |
 | 参数名 / 类型内联提示 | ParameterHintsProvider | LSP `inlayHint` |
