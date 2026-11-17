@@ -49,6 +49,27 @@ class UnrealIntelliSenseRootsTest : TestCase() {
         assertEquals(listOf(decl.toAbsolutePath().normalize()), UnrealIntelliSenseRoots.find(script))
     }
 
+    fun `test adds unlua bundled scripts and intellisense`() {
+        Files.writeString(tmp.resolve("Game.uproject"), "{}")
+        val script = Files.createDirectories(tmp.resolve("Content/Script"))
+        val plugin = Files.createDirectories(tmp.resolve("Plugins/UnLua"))
+        Files.writeString(plugin.resolve("UnLua.uplugin"), "{}")
+        val bundled = Files.createDirectories(plugin.resolve("Content/Script/UnLua"))
+        val static = Files.createDirectories(plugin.resolve("Content/IntelliSense"))
+        // 别的插件的 Content/Script 不收
+        val other = Files.createDirectories(tmp.resolve("Plugins/Other"))
+        Files.writeString(other.resolve("Other.uplugin"), "{}")
+        Files.createDirectories(other.resolve("Content/Script"))
+        val norm = { p: Path -> p.toAbsolutePath().normalize() }
+
+        assertEquals(setOf(norm(static), norm(bundled.parent)), UnrealIntelliSenseRoots.find(script).toSet())
+
+        // 有 UELink 声明时 UnLua 的静态声明已经拷进去了，只再加脚本目录
+        val decl = Files.createDirectories(tmp.resolve("Intermediate/UELink/LuaDecl"))
+        Files.writeString(decl.resolve(".uelink-luadecl.json"), "{\"format\":1}")
+        assertEquals(listOf(norm(decl), norm(bundled.parent)), UnrealIntelliSenseRoots.find(script))
+    }
+
     fun `test parses uelink editor card`() {
         val card = tmp.resolve("123.json")
         Files.writeString(card, """{"pid":123,"kind":"editor","http":30110,"token":"t","startedAt":"2026-11-16T00:00:00Z"}""")
