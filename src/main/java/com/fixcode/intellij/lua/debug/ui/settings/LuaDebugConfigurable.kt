@@ -23,6 +23,7 @@ import com.intellij.ui.dsl.builder.toNullableProperty
 import com.fixcode.intellij.lua.debug.api.LuaMcpService
 import com.fixcode.intellij.lua.debug.ui.LuaDebugBundle
 import com.fixcode.intellij.lua.debug.ui.mcp.LuaMcpStatusText
+import com.fixcode.intellij.lua.project.SettingsJump
 
 /**
  * `Settings > Tools > EmmyLua 调试`（设计文档 10.5）：MCP、UE、设备、变量视图、日志。
@@ -33,6 +34,11 @@ class LuaDebugConfigurable : BoundConfigurable(LuaDebugBundle.message("settings.
     private val mcpState = JBLabel()
 
     override fun createPanel(): DialogPanel = panel {
+        row {
+            link(LuaDebugBundle.message("settings.languageLink")) {
+                SettingsJump.open(it.source as? java.awt.Component, SettingsJump.LANGUAGE_ID, "EmmyLua")
+            }
+        }
         group(LuaDebugBundle.message("settings.mcp")) {
             row { comment(LuaDebugBundle.message("settings.mcp.comment")) }
             row {

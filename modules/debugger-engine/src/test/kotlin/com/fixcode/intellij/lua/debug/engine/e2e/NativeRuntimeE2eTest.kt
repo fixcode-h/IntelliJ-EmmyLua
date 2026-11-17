@@ -90,6 +90,51 @@ class NativeRuntimeE2eTest {
 
     private fun EventRecorder.pause(): PauseInfo = await<DebugEvent.Paused>(10_000).pause
 
+    /**
+     * 交互延迟（设计文档 5.3「交互延迟（IDE 侧）」本机一栏）。CI 是共享机器，断言放宽到目标的 3 倍，实测值打印出来看趋势。
+     * 「修改断点 → 停下」包含等游戏执行到那一行（宿主每 2 毫秒 tick 一次）。
+     */
+    @Test
+    fun `交互延迟在目标以内`() {
+        val (session, events) = session()
+        fun ms(start: Long) = (System.nanoTime() - start) / 1_000_000.0
+
+        var t = System.nanoTime()
+        session.addBreakpoint(BreakpointRequest(script.path, LINE_LOCAL_R)).await()
+        session.syncBreakpoints().await()
+        val pause = events.pause()
+        val hitMs = ms(t)
+
+        t = System.nanoTime()
+        val frames = session.stackTrace(pause).await().frames
+        val scopes = session.scopes(frames.first()).await()
+        session.variables(scopes.single { it.name == "locals" }).await()
+        val localsMs = ms(t)
+
+        val upvalues = session.variables(scopes.single { it.name == "upvalues" }).await().variables.associateBy { it.variable.name }
+        val m = session.variables(upvalues.getValue("M").children()!!).await().variables.associateBy { it.variable.name }
+        val big = m.getValue("big").children()!!
+        t = System.nanoTime()
+        val page = session.variables(big, 0, 100).await()
+        val bigMs = ms(t)
+        assertEquals(10000, page.total)
+        assertEquals(100, page.variables.size)
+
+        session.removeBreakpoint(session.breakpoints().single().id).await()
+        t = System.nanoTime()
+        session.stepOver(pause.vmId).await()
+        events.pause()
+        val stepMs = ms(t)
+
+        println("交互延迟（毫秒）：断点生效到停下 %.1f，顶层帧局部变量 %.1f，1 万项表首页 %.1f，单步 %.1f".format(hitMs, localsMs, bigMs, stepMs))
+        // 目标：修改断点生效 30 + 高亮 50；局部变量 100；1 万项首页 100；单步 50
+        assertTrue("断点生效到停下 $hitMs ms", hitMs <= 80 * 3)
+        assertTrue("顶层帧局部变量 $localsMs ms", localsMs <= 100 * 3)
+        assertTrue("1 万项表首页 $bigMs ms", bigMs <= 100 * 3)
+        assertTrue("单步 $stepMs ms", stepMs <= 50 * 3)
+        session.resume().await()
+    }
+
     @Test
     fun `握手后看到宿主的 VM`() {
         val (session, _) = session()
@@ -327,6 +372,8 @@ class NativeRuntimeE2eTest {
               coroutine.yield()
             end)
             coroutine.resume(M.loader, "ui/bag")
+            M.big = {}
+            for k = 1, 10000 do M.big[k] = k end
             return M
         """.trimIndent() + "\n"
     }

@@ -109,6 +109,8 @@ end
 
 ### 调试配置
 
+详细说明：[附加调试（Windows）](docs/user/attach.md)、[Android 真机附加](docs/user/android.md)、[UE 声明](docs/user/ue-declarations.md)、[Agent 调试（MCP）](docs/mcp-debug-guide.md)。
+
 1. **附加本机进程（Windows）**
    - `Run` → `Attach to Process…`，在列表里选「Lua 附加」下的游戏进程；或新建运行配置「Lua 附加」
    - 不需要在游戏里加任何代码，插件自动选择 32 / 64 位和 Lua 版本

@@ -38,6 +38,11 @@ class LuaSettingsConfigurable(private val project: Project) :
     private var unrealLuaDecl = proj.unrealLuaDecl
 
     override fun createPanel(): DialogPanel = panel {
+        row {
+            link("调试相关的设置（MCP、热重载、真机、变量显示）在「工具 → EmmyLua 调试」") {
+                SettingsJump.open(it.source as? java.awt.Component, SettingsJump.DEBUG_ID, com.fixcode.intellij.lua.debug.ui.LuaDebugBundle.message("settings.title"))
+            }
+        }
         group("语言服务器（emmylua_ls）") {
             row("可执行文件：") {
                 textFieldWithBrowseButton(FileChooserDescriptorFactory.createSingleFileNoJarsDescriptor().withTitle("选择 emmylua_ls"))
