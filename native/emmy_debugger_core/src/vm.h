@@ -170,6 +170,7 @@ private:
 	bool diagMatched_ = false;
 	bool diagReported_ = false;
 	std::atomic<uint64_t> hookEvents_{0}; // 只有 VM 线程写
+	bool abiChecked_ = false;              // 只有 VM 线程读写：第一次钩子事件时做 ABI 自检
 	uint64_t diagEventsBase_ = 0;
 	static constexpr size_t kDiagMaxSources = 20;
 	void DiagRecordSource(const SourceEntry& e);

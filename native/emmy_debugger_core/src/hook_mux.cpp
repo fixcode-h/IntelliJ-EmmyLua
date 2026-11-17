@@ -155,20 +155,23 @@ bool HookMux::GuardedDispatch(lua_State* L, lua_Debug* ar) {
 #else
 	if (DispatchCatchingCxx(L, ar, what)) return true;
 #endif
-	OnFault(L, what);
+	OnFault(L, "调试器内部错误，已停止这个 Lua VM 的调试（游戏继续运行）：" + what +
+		"。断点、单步在这个 VM 上不再生效；重新附加可以恢复。请把这条信息和 IDE 日志（帮助 → 显示日志）反馈给我们。");
 	return false;
 }
 
-void HookMux::OnFault(lua_State* L, const std::string& what) {
+void HookMux::Disable(lua_State* L, const std::string& message) {
+	OnFault(L, message);
+}
+
+void HookMux::OnFault(lua_State* L, const std::string& message) {
 	if (faulted_.exchange(true, std::memory_order_acq_rel)) {
 		DropHook(L);
 		return;
 	}
 	DropHook(L);
 	// 其他协程上的钩子在它们下一次事件时由入口摘掉（faulted 检查）
-	Core::Get().Log("console", "error",
-		"调试器内部错误，已停止这个 Lua VM 的调试（游戏继续运行）：" + what +
-			"。断点、单步在这个 VM 上不再生效；重新附加可以恢复。请把这条信息和 IDE 日志（帮助 → 显示日志）反馈给我们。");
+	Core::Get().Log("console", "error", message);
 }
 
 void HookMux::DropHook(lua_State* L) {
@@ -304,6 +307,7 @@ void HookMux::Dispatch(lua_State* L, lua_Debug* ar) {
 	int dbgMask = 0;
 	if (debugger_) {
 		dbgMask = debugger_->OnHook(L, ar);
+		if (faulted()) return; // OnHook 里停掉了这个 VM（ABI 自检没过）
 	}
 	if (!clients_.empty()) DispatchClients(L, ar, eventMask);
 	Apply(L, dbgMask, debugger_ ? debugger_->CountInterval() : 0);

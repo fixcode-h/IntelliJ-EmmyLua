@@ -25,6 +25,93 @@ std::string ThreadIdOf(lua_State* L) {
 	return buf;
 }
 
+// ---- ABI 自检 ----
+// 注入方式下核心按标准 Lua 头文件编译，宿主的 Lua 可能是改过的分支（UnLua 二次开发、改了 LUA_IDSIZE、
+// 改了 lua_Debug 布局……）。布局不一致时 lua_getinfo 会写坏栈、读出乱码，表现为随机崩溃或断点永远不停。
+// 第一次钩子事件时跑一段已知的小代码，核对 getstack / getinfo / getlocal 的结果，不对就不调试这个 VM。
+
+constexpr const char kAbiChunk[] =
+	"local probe = ...\n"            // 1
+	"local function f(p1)\n"         // 2
+	"  local l1 = 7\n"               // 3
+	"  probe()\n"                    // 4
+	"  return l1\n"                  // 5
+	"end\n"                          // 6
+	"return f(42)\n";                // 7
+constexpr const char kAbiChunkName[] = "=emmy_abi_check";
+
+struct AbiProbe {
+	bool ran = false;
+	std::string why;
+};
+thread_local AbiProbe* t_abiProbe = nullptr;
+
+int AbiProbeFn(lua_State* L) {
+	AbiProbe* probe = t_abiProbe;
+	if (!probe) return 0;
+	probe->ran = true;
+	// lua_Debug 后面放一段哨兵：宿主的 lua_Debug 比我们的大时 getinfo 会写到这里
+	struct {
+		lua_Debug ar;
+		unsigned char guard[512];
+	} buf;
+	std::memset(&buf, 0, sizeof(buf));
+	std::memset(buf.guard, 0xA5, sizeof(buf.guard));
+	auto fail = [&](const std::string& what) {
+		if (probe->why.empty()) probe->why = what;
+		return 0;
+	};
+	if (!lua_getstack(L, 1, &buf.ar)) return fail("lua_getstack 取不到调用者");
+	if (!lua_getinfo(L, "Sl", &buf.ar)) return fail("lua_getinfo 失败");
+	for (unsigned char b : buf.guard) {
+		if (b != 0xA5) return fail("lua_getinfo 写出了 lua_Debug 的范围（宿主的 lua_Debug 结构更大）");
+	}
+	if (!buf.ar.source || std::strcmp(buf.ar.source, kAbiChunkName) != 0) return fail("lua_Debug.source 不对");
+	if (!std::memchr(buf.ar.short_src, 0, sizeof(buf.ar.short_src))) return fail("lua_Debug.short_src 没有结束符");
+	if (buf.ar.currentline != 4 || buf.ar.linedefined != 2 || buf.ar.lastlinedefined != 6) {
+		return fail("lua_Debug 的行号字段不对（currentline=" + std::to_string(buf.ar.currentline) + "，linedefined=" +
+			std::to_string(buf.ar.linedefined) + "，lastlinedefined=" + std::to_string(buf.ar.lastlinedefined) + "）");
+	}
+	const char* n1 = lua_getlocal(L, &buf.ar, 1);
+	if (!n1 || std::strcmp(n1, "p1") != 0 || lua_tonumber(L, -1) != 42) {
+		if (n1) lua_pop(L, 1);
+		return fail("lua_getlocal 取到的第 1 个局部变量不对");
+	}
+	lua_pop(L, 1);
+	const char* n2 = lua_getlocal(L, &buf.ar, 2);
+	if (!n2 || std::strcmp(n2, "l1") != 0 || lua_tonumber(L, -1) != 7) {
+		if (n2) lua_pop(L, 1);
+		return fail("lua_getlocal 取到的第 2 个局部变量不对");
+	}
+	lua_pop(L, 1);
+	return 0;
+}
+
+// 返回空串表示通过
+std::string RunAbiSelfCheck(lua_State* L) {
+	AbiProbe probe;
+	t_abiProbe = &probe;
+	const int top = lua_gettop(L);
+	std::string why;
+	if (lua::LoadBuffer(L, kAbiChunk, sizeof(kAbiChunk) - 1, kAbiChunkName) != LUA_OK) {
+		why = std::string("自检代码加载失败：") + (lua_tostring(L, -1) ? lua_tostring(L, -1) : "?");
+	} else {
+		lua_pushcfunction(L, &AbiProbeFn);
+		if (lua_pcall(L, 1, 1, 0) != LUA_OK) {
+			why = std::string("自检代码执行失败：") + (lua_tostring(L, -1) ? lua_tostring(L, -1) : "?");
+		} else if (!probe.ran) {
+			why = "自检函数没有被调用";
+		} else if (!probe.why.empty()) {
+			why = probe.why;
+		} else if (lua_tonumber(L, -1) != 7) {
+			why = "自检代码的返回值不对";
+		}
+	}
+	lua_settop(L, top);
+	t_abiProbe = nullptr;
+	return why;
+}
+
 } // namespace
 
 Vm::Vm(uint64_t id, lua_State* L, std::string discovery)
@@ -191,6 +278,15 @@ bool Vm::AnyHotFrame(lua_State* L, lua_Debug* ar) {
 int Vm::OnHook(lua_State* L, lua_Debug* ar) {
 	// 单写者计数：不用原子加，避免热路径上的锁总线指令
 	hookEvents_.store(hookEvents_.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed);
+	if (!abiChecked_) {
+		abiChecked_ = true;
+		std::string why = RunAbiSelfCheck(L);
+		if (!why.empty()) {
+			mux_.Disable(L, "这个 Lua VM 和调试器的 Lua 接口不一致，已停止调试它（游戏继续运行）：" + why +
+				"。通常是项目用了改过的 Lua（UnLua 二次开发、改了 LUA_IDSIZE 或 lua_Debug）。请把这条信息和 Lua 版本反馈给我们。");
+			return 0;
+		}
+	}
 	if (pending_.load(std::memory_order_acquire) != 0) {
 		ProcessPending(L);
 	}

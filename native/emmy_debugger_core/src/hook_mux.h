@@ -65,6 +65,8 @@ public:
 	// 出过一次内部错误（C++ 异常；Windows 上还有访问违例）后整个 VM 不再挂调试钩子：
 	// 调试器跑在用户的游戏进程里，宁可这个 VM 断开调试，也不能把游戏带崩。
 	bool faulted() const { return faulted_.load(std::memory_order_acquire); }
+	// 在 VM 线程调用：主动停掉这个 VM 的调试（ABI 自检没过等），message 原样报给 IDE
+	void Disable(lua_State* L, const std::string& message);
 	// 测试用：下一次 Dispatch 抛一个 C++ 异常
 	void InjectFaultForTest() { injectFault_.store(true, std::memory_order_release); }
 
@@ -86,7 +88,7 @@ private:
 	// Dispatch 外面包一层兜底；出错时置 faulted_、摘掉 L 上的钩子并报告。返回 false 表示这次出错了
 	bool GuardedDispatch(lua_State* L, lua_Debug* ar);
 	bool DispatchCatchingCxx(lua_State* L, lua_Debug* ar, std::string& what);
-	void OnFault(lua_State* L, const std::string& what);
+	void OnFault(lua_State* L, const std::string& message);
 	void DropHook(lua_State* L);
 
 	std::atomic<bool> faulted_{false};
