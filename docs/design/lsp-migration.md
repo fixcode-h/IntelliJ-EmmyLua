@@ -158,6 +158,8 @@ UnLua 的 Generate IntelliSense 要手动点、整遍生成。UEKit 的 UELink 2
 | 冷启动到第一次跳转可用 | 5 万行声明（UnLua IntelliSense 量级）< 10 秒 | emmylua_ls 并行索引；之后的跳转、补全 < 100 毫秒 |
 | 项目打开时 IDE 索引 | 不再出现 Lua 的「正在建索引」 | 去掉了 stub / 文件索引 |
 
+实测（2026-11-17，emmylua_ls 0.25.1，云端 Linux x64）：5 万行生成声明冷启动到第一次跳转 0.3 秒，20 万行 0.9 秒。CI 的 `Verify Plugin` 每次用 `.github/scripts/lsp-smoke.py` 跑一遍（UE 布局下的跳转 + 冷启动计时，超过 30 秒失败），结果在运行摘要里。
+
 ## 8. 风险
 
 - 用户要多装 LSP4IJ：本插件声明为必需依赖，IDE 安装本插件时会提示一起装；从磁盘装 zip 时也会提示下载缺的依赖。README 写清楚。
