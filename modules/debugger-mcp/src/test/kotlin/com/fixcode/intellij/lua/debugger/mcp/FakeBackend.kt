@@ -219,6 +219,18 @@ class FakeBackend : LuaDebugBackend {
         )
     }
 
+    /** 错误聚合：预置的全量。 */
+    var errorItems: List<LuaErrorInfo> = listOf(
+        LuaErrorInfo(2, "vm-1", "Bag.lua:20: attempt to index a nil value (field 'item')", "/proj/Bag.lua", 20, 300, 1000, 9000,
+            traceback = "\t/proj/Bag.lua:20: in function 'Refresh'\n\t/proj/Main.lua:5: in function 'tick'\n"),
+        LuaErrorInfo(1, "vm-1", "Main.lua:9: boom", "/proj/Main.lua", 9, 1, 500, 500, uncaught = true),
+    )
+
+    override fun getErrors(sessionId: String): CompletableFuture<ErrorReport> {
+        commands += "errors"
+        return CompletableFuture.completedFuture(ErrorReport(errorItems))
+    }
+
     override fun sourceSnippet(file: String, line: Int, radius: Int) =
         (line - radius..line + radius).map { SourceLine(it, "line $it") }
 }

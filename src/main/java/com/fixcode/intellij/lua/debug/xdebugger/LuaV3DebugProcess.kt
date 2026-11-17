@@ -21,6 +21,8 @@ import com.fixcode.intellij.lua.debug.api.LuaDebugTarget
 import com.fixcode.intellij.lua.debug.api.LuaMappingStatus
 import com.fixcode.intellij.lua.debug.api.LuaProfileRow
 import com.fixcode.intellij.lua.debug.api.LuaProfileSnapshot
+import com.fixcode.intellij.lua.debug.api.LuaErrorRow
+import com.fixcode.intellij.lua.debug.api.LuaErrorsModel
 import com.fixcode.intellij.lua.debug.api.LuaProfilerModel
 import com.fixcode.intellij.lua.debug.api.LuaSourceMappingEntry
 import com.fixcode.intellij.lua.debug.api.LuaVmInfo
@@ -35,6 +37,7 @@ import com.fixcode.intellij.lua.debug.engine.DebugSession
 import com.fixcode.intellij.lua.debug.engine.Initiator
 import com.fixcode.intellij.lua.debug.engine.PauseInfo
 import com.fixcode.intellij.lua.debug.engine.SourceResolution
+import com.fixcode.intellij.lua.debug.protocol.LuaErrorDto
 import com.fixcode.intellij.lua.debug.protocol.Capabilities
 import com.fixcode.intellij.lua.debug.protocol.ExceptionModes
 import com.fixcode.intellij.lua.debug.protocol.OutputCategories
@@ -65,13 +68,14 @@ class LuaV3DebugProcess(
     val target: LuaDebugTarget,
     /** 会话结束后要清理的建连资源（例如 adb 转发），在后台线程调用。 */
     private val onClosed: () -> Unit = {}
-) : XDebugProcess(session), LuaDebugSessionModel, LuaProfilerModel {
+) : XDebugProcess(session), LuaDebugSessionModel, LuaProfilerModel, LuaErrorsModel {
     private val editorsProvider = LuaDebuggerEditorsProvider()
     private val breakpointIds = ConcurrentHashMap<XLineBreakpoint<*>, CompletableFuture<String>>()
     private val subscription: AutoCloseable
     @Volatile
     private var stopping = false
     private val modelListeners = CopyOnWriteArrayList<LuaDebugSessionModel.Listener>()
+    private val errorListeners = CopyOnWriteArrayList<() -> Unit>()
     /** runtime 报过内容不一致的 chunk（热更新、没同步），「映射」页标成 HASH_MISMATCH。 */
     private val mismatchedChunks = ConcurrentHashMap.newKeySet<String>()
     /** 用户在 VM 页选的 VM；没有暂停时栈和变量为空，选择只是记下来。 */
@@ -536,6 +540,11 @@ class LuaV3DebugProcess(
     }
 
     private fun notifyModel(event: DebugEvent) {
+        if (errorListeners.isNotEmpty() && (event is DebugEvent.LuaError || event is DebugEvent.ErrorsCleared || event is DebugEvent.Connected)) {
+            ApplicationManager.getApplication().invokeLater {
+                if (!session.project.isDisposed) errorListeners.forEach { it() }
+            }
+        }
         if (modelListeners.isEmpty()) return
         when (event) {
             is DebugEvent.VmAdded, is DebugEvent.VmChanged, is DebugEvent.VmClosed,
@@ -550,6 +559,26 @@ class LuaV3DebugProcess(
             else -> Unit
         }
     }
+
+    // ---------- 调试窗口的「Lua 错误」页（LuaErrorsModel） ----------
+
+    override fun errorsSupported(): Boolean = engine.state.isConnected && engine.supportsErrorReport
+
+    override fun cachedErrors(): List<LuaErrorRow> = engine.cachedErrors().map(::toErrorRow)
+
+    override fun refreshErrors(): CompletableFuture<List<LuaErrorRow>> = engine.errors().thenApply { r -> r.items.map(::toErrorRow) }
+
+    override fun clearErrors(): CompletableFuture<Unit> = engine.clearErrors()
+
+    override fun addErrorsListener(listener: () -> Unit, parent: Disposable) {
+        errorListeners += listener
+        Disposer.register(parent) { errorListeners -= listener }
+    }
+
+    private fun toErrorRow(e: LuaErrorDto) = LuaErrorRow(
+        e.id, e.vmId, e.message, e.chunkName, e.line, e.chunkName?.let { engine.localPathOfChunk(it) },
+        e.count, e.firstMs, e.lastMs, e.uncaught, e.traceback,
+    )
 
     // ---------- 调试窗口的「Lua 采样」页（LuaProfilerModel） ----------
 

@@ -43,6 +43,8 @@ import com.fixcode.intellij.lua.debugger.mcp.BreakpointOrigin
 import com.fixcode.intellij.lua.debugger.mcp.BreakpointSpec
 import com.fixcode.intellij.lua.debugger.mcp.DebugEvent
 import com.fixcode.intellij.lua.debugger.mcp.ErrorCode
+import com.fixcode.intellij.lua.debugger.mcp.ErrorReport
+import com.fixcode.intellij.lua.debugger.mcp.LuaErrorInfo
 import com.fixcode.intellij.lua.debugger.mcp.EvalMode
 import com.fixcode.intellij.lua.debugger.mcp.EvaluateRequest
 import com.fixcode.intellij.lua.debugger.mcp.SetVariableRequest
@@ -787,6 +789,23 @@ class LuaEngineMcpBackend(private val project: Project) : LuaDebugBackend, Dispo
                 overheadMs = r.overheadMs,
                 pausedSkipped = r.pausedSkipped,
             )
+        }
+    }
+
+    override fun getErrors(sessionId: String): CompletableFuture<ErrorReport> {
+        val engine = engine(sessionId)
+        if (!engine.supportsErrorReport) {
+            return CompletableFuture.failedFuture(LuaDebugBackendException(ErrorCode.NOT_SUPPORTED,
+                "游戏里的调试 runtime 不支持错误聚合（缺少能力 errorReport），请升级插件后重新附加；先用 lua_debug_inspect action=output 看错误输出。"))
+        }
+        return mapErrors(engine.errors()).thenApply { r ->
+            ErrorReport(r.items.map { e ->
+                LuaErrorInfo(
+                    id = e.id, vmId = e.vmId.toString(), message = e.message,
+                    file = e.chunkName?.let { engine.localPathOfChunk(it) ?: LuaProfileNames.chunkDisplay(it) },
+                    line = e.line, count = e.count, firstMs = e.firstMs, lastMs = e.lastMs, uncaught = e.uncaught, traceback = e.traceback,
+                )
+            }, r.dropped)
         }
     }
 

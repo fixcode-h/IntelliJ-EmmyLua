@@ -61,6 +61,7 @@ class EmmyLuaDebugMcp(
             | Step | `lua_debug_session` action=`step` kind=over/into/out/toLine |
             | print output, Lua errors | `lua_debug_inspect` action=`output` (cursor = previous next) |
             | Which Lua functions are slow | `lua_debug_inspect` action=`profile` duration_ms (≤ 60000) sort=self/total limit; the game keeps running |
+            | Lua errors grouped by place, incl. ones swallowed by pcall every frame | `lua_debug_inspect` action=`errors` filter limit offset; count / first / last / traceback |
             | Clean up | `lua_debug_breakpoints` action=`clear` (only the agent's breakpoints) |
             | Hot-reload edited UnLua scripts into the open UE editor / game | `lua_debug_session` action=`reload` files=[...] / modules=[...] / changed=true |
 

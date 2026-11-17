@@ -134,7 +134,29 @@ interface LuaDebugBackend {
     /** 停止采样（已经到点自动停了也可以调）并取函数表，按 [sort] 排序取前 [limit] 个。 */
     fun stopProfile(sessionId: String, vmId: String?, sort: ProfileSort, limit: Int): CompletableFuture<ProfileReport> =
         CompletableFuture.failedFuture(LuaDebugBackendException(ErrorCode.NOT_SUPPORTED, "这个调试引擎不支持采样性能分析。"))
+
+    // ---- 错误聚合（协议 v3 第 21 节，能力 errorReport） ----
+
+    /** 本次会话里聚合过的 Lua 错误（按最近出现时间倒序，计数以 runtime 为准）。runtime 没有 errorReport 能力时抛 [ErrorCode.NOT_SUPPORTED]。 */
+    fun getErrors(sessionId: String): CompletableFuture<ErrorReport> =
+        CompletableFuture.failedFuture(LuaDebugBackendException(ErrorCode.NOT_SUPPORTED, "这个调试引擎不支持错误聚合。"))
 }
+
+data class LuaErrorInfo(
+    val id: Long,
+    val vmId: String,
+    val message: String,
+    /** 映射到的本地文件；没映射上时是 chunkName。 */
+    val file: String?,
+    val line: Int?,
+    val count: Long,
+    val firstMs: Long,
+    val lastMs: Long,
+    val uncaught: Boolean = false,
+    val traceback: String? = null,
+)
+
+data class ErrorReport(val items: List<LuaErrorInfo>, val dropped: Long = 0)
 
 enum class ProfileSort { SELF, TOTAL }
 

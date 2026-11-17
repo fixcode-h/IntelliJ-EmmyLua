@@ -419,6 +419,29 @@ class LuaDebugToolsTest {
     }
 
     @Test
+    fun `errors 不用确认 按位置聚合的错误 带计数和截短的栈 可按文件过滤`() {
+        backend.addSession()
+        val r = client.call(I, mapOf("action" to "errors"))
+        assertFalse(r.raw, r.isError)
+        assertTrue(confirmer.asked.isEmpty())
+        assertEquals(2L, r["total"])
+        val items = r["items"] as List<*>
+        val first = items[0] as Map<*, *>
+        assertEquals(300L, first["count"])
+        assertEquals("/proj/Bag.lua", first["file"])
+        assertEquals(2, (first["traceback"] as List<*>).size)
+        assertFalse(first.containsKey("uncaught"))
+        assertEquals(true, (items[1] as Map<*, *>)["uncaught"])
+        val filtered = client.call(I, mapOf("action" to "errors", "filter" to "main.lua"))
+        assertEquals(1L, filtered["count"])
+        val paged = client.call(I, mapOf("action" to "errors", "limit" to 1))
+        assertEquals(true, paged["hasMore"])
+        assertEquals(1L, paged["nextOffset"])
+        backend.errorItems = emptyList()
+        assertTrue((client.call(I, mapOf("action" to "errors"))["note"] as String).contains("还没有"))
+    }
+
+    @Test
     fun `profile 按 total 排序 参数越界报错`() {
         backend.addSession()
         val r = client.call(I, mapOf("action" to "profile", "duration_ms" to 100, "sort" to "total"))

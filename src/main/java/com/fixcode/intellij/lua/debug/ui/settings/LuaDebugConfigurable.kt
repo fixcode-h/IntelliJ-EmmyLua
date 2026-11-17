@@ -70,6 +70,13 @@ class LuaDebugConfigurable : BoundConfigurable(LuaDebugBundle.message("settings.
                     .comment(LuaDebugBundle.message("settings.mcp.allowLua.comment"))
             }
         }
+        group(LuaDebugBundle.message("settings.errors")) {
+            row {
+                checkBox(LuaDebugBundle.message("settings.errors.caught"))
+                    .bindSelected(settings::collectCaughtLuaErrors)
+                    .comment(LuaDebugBundle.message("settings.errors.caught.comment"))
+            }
+        }
         group(LuaDebugBundle.message("settings.ue")) {
             row {
                 checkBox(LuaDebugBundle.message("settings.ue.reloadOnSave"))

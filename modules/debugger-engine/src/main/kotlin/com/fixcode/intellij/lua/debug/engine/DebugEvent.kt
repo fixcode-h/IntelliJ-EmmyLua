@@ -1,6 +1,7 @@
 package com.fixcode.intellij.lua.debug.engine
 
 import com.fixcode.intellij.lua.debug.protocol.BreakpointHitEvent
+import com.fixcode.intellij.lua.debug.protocol.LuaErrorDto
 import com.fixcode.intellij.lua.debug.protocol.OutputEvent
 import com.fixcode.intellij.lua.debug.protocol.Welcome
 import java.util.concurrent.CopyOnWriteArrayList
@@ -35,6 +36,12 @@ sealed class DebugEvent {
     data class BreakpointHit(val seq: Long, val hit: BreakpointHitEvent, val localPath: String?) : DebugEvent()
 
     data class Output(val seq: Long, val output: OutputEvent) : DebugEvent()
+
+    /** 错误聚合（协议第 21 节）里新出现或计数变了的一条；[error] 已和本地缓存合并（保留第一次的 traceback）。 */
+    data class LuaError(val error: LuaErrorDto) : DebugEvent()
+
+    /** 错误聚合被清空。 */
+    data object ErrorsCleared : DebugEvent()
 
     /** runtime 报告的内容与本地文件不一致（热更新、没同步），断点行号可能不准。 */
     data class SourceMismatch(val breakpointId: String, val vmId: Long, val chunkName: String?, val message: String?) : DebugEvent()

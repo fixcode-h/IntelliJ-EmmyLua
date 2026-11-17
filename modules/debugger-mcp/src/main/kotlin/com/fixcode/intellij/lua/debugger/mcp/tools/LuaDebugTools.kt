@@ -557,7 +557,7 @@ class LuaDebugTools(
 
     // ======================================================================= lua_debug_inspect
 
-    private val inspectActions = arrayOf("stack", "vms", "locals", "eval", "set", "output", "probes", "profile")
+    private val inspectActions = arrayOf("stack", "vms", "locals", "eval", "set", "output", "probes", "profile", "errors")
 
     private fun inspectTool() = McpTool(
         name = INSPECT,
@@ -565,15 +565,16 @@ class LuaDebugTools(
         titleZh = "Lua 调试：栈和变量",
         description = ToolGuide(
             what = "Reads a stopped Lua VM in the IDE debugger: call stack with source lines, locals / upvalues / globals as a bounded tree, " +
-                "value paths (self.items[3].id, #list) and, if allowed, any Lua expression; also debug output (print, Lua errors, " +
-                "logpoints), probe records and a sampling profile, which work while the game runs.",
+                "value paths (self.items[3].id, #list) or, if allowed, Lua; also debug output (print, Lua errors, " +
+                "logpoints), probe records, a sampling profile and grouped Lua errors, which work while the game runs.",
             useWhen = "$SESSION reports event=break: see where and why, read variables and table fields (depth 1-3, ref to expand), " +
-                "evaluate value paths, set a value to test a fix (set), switch frames with frame=N; output / probes any time; profile while a slow scene runs.",
-            insteadOf = "guessing values or adding print / os.clock() timers: reads the live state without changing scripts.",
+                "evaluate value paths, set a value to try a fix (set), switch frames with frame=N; output / probes any time; profile while a slow scene runs; " +
+                "errors: failures pcall hid.",
+            insteadOf = "guessing values or adding print / os.clock() timers: reads live state without editing scripts.",
             notFor = "a running VM (stack / locals / eval need event=break). mode=lua needs a one-time user confirmation per session (the user may have turned it off): prefer value " +
-                "paths. Refs die when the VM continues. profile counts Lua instructions, not time in C/engine calls; Lua runs ~2x slower meanwhile.",
-            results = "stack: frames[{i,function,file,line}]; locals/eval: value nodes {n,t,v,c,more,ref,err}; output/probes: items + next; " +
-                "profile: samples + items[{fn,file,line,selfPct,totalPct}].",
+                "paths. Refs die when the VM continues. profile counts Lua instructions, not C/engine time.",
+            results = "stack: frames[{i,function,file,line}]; locals/eval: nodes {n,t,v,c,more,ref,err}; output/probes: items + next; " +
+                "profile: items[{fn,file,line,selfPct}]; errors: items[{message,file,line,count}].",
         ).render(),
         inputSchema = schema {
             string("action", "What to read.", required = true, enum = inspectActions.toList())
@@ -585,7 +586,7 @@ class LuaDebugTools(
             string("ref", "locals: expand this value (ref from a previous result) instead of a scope.")
             string("path", "locals: start from this value path inside the scope, e.g. self.items[3]. set: the variable to change (hp, self.hp, items[3]).")
             string("value", "set: new value; value_path mode: a literal (100, \"a\", true, nil) or another value path; mode=lua: any Lua expression.")
-            string("filter", "locals: keep variables whose name contains it; output: keep lines containing it.")
+            string("filter", "locals: keep variables whose name contains it; output: keep lines containing it; errors: keep errors whose message or file contains it.")
             integer("depth", "locals/eval: table levels to expand (0-3, default 1).", minimum = 0, maximum = 3)
             string("expr", "eval: value path (self.hp, items[3].id, #list) or, with mode=lua, a Lua expression.")
             stringArray("exprs", "eval: several expressions (watch list).", 10)
@@ -597,8 +598,8 @@ class LuaDebugTools(
             integer("duration_ms", "profile: how long to sample while the game keeps running (default 3000).", minimum = 100, maximum = 60000)
             string("sort", "profile: self (default, time in the function itself) / total (including callees).", enum = listOf("self", "total"))
             integer("limit", "stack: frames (default 20); locals: items per level (default 50); probes: records (default 50); " +
-                "profile: functions (default 30).", minimum = 1, maximum = 200)
-            integer("offset", "stack: frames to skip (use nextOffset).", minimum = 0)
+                "profile: functions (default 30); errors: errors (default 30).", minimum = 1, maximum = 200)
+            integer("offset", "stack / errors: items to skip (use nextOffset).", minimum = 0)
         },
         level = PermissionLevel.READ,
     ) { call ->
@@ -613,6 +614,7 @@ class LuaDebugTools(
             "output" -> output(b, call.args)
             "probes" -> probes(b, call.args)
             "profile" -> profile(b, call.args)
+            "errors" -> errors(b, call.args)
             else -> throw ToolArgumentException("缺少参数 'action'")
         }
         }
@@ -773,6 +775,35 @@ class LuaDebugTools(
         m["next"] = if (truncated) (page.hits[items.size - 1].seq) else page.nextSeq
         m["items"] = items
         return m
+    }
+
+    /**
+     * 错误聚合：按位置和消息去重后的 Lua 错误，最近出现的在前。runtime 侧计数，被 pcall 接住、每帧刷屏的错误也只占一条。
+     * 栈只给前 8 行（够定位），要更多就去调试窗口「Lua 错误」页看。
+     */
+    private fun errors(b: LuaDebugBackend, args: JsonArgs): Map<String, Any?> {
+        val s = resolveSession(b, args)
+        val filter = args.string("filter")?.takeIf { it.isNotBlank() }
+        val limit = args.int("limit", 30, 1, 200)
+        val offset = args.int("offset", 0, 0, Int.MAX_VALUE)
+        val report = await(b.getErrors(s.sessionId), timeouts.requestMillis)
+        val all = report.items.filter {
+            filter == null || it.message.contains(filter, ignoreCase = true) || it.file?.contains(filter, ignoreCase = true) == true
+        }
+        val slice = all.drop(offset).take(limit)
+        val result = obj("sessionId" to s.sessionId)
+        result.putAll(page(slice, offset, offset + slice.size < all.size, all.size) { e ->
+            val m = obj("id" to e.id, "message" to e.message, "file" to e.file, "line" to e.line, "count" to e.count, "vm" to e.vmId)
+            m["firstMs"] = e.firstMs
+            m["lastMs"] = e.lastMs
+            if (e.uncaught) m["uncaught"] = true
+            e.traceback?.lineSequence()?.filter { it.isNotBlank() }?.take(8)?.map { it.trim() }?.toList()?.takeIf { it.isNotEmpty() }
+                ?.let { m["traceback"] = it }
+            m
+        })
+        if (report.dropped > 0) result["dropped"] = report.dropped
+        if (report.items.isEmpty()) result["note"] = "本次会话还没有 Lua 错误（包括被 pcall 接住的）。"
+        return result
     }
 
     /**

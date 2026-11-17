@@ -7,6 +7,7 @@ import com.intellij.openapi.util.Disposer
 import com.intellij.xdebugger.XDebugSession
 import com.intellij.xdebugger.XDebugSessionListener
 import com.fixcode.intellij.lua.debug.api.LuaDebugSessionModel
+import com.fixcode.intellij.lua.debug.api.LuaErrorsModel
 import com.fixcode.intellij.lua.debug.api.LuaMcpService
 import com.fixcode.intellij.lua.debug.api.LuaProfilerModel
 import com.fixcode.intellij.lua.debug.ui.LuaDebugBundle
@@ -14,7 +15,7 @@ import com.fixcode.intellij.lua.debug.ui.LuaDebugIcons
 import javax.swing.JComponent
 
 /**
- * 在标准 Debug 工具窗口里加「VM」「映射」「Lua 采样」「Agent」页签（设计文档 10.4）。
+ * 在标准 Debug 工具窗口里加「VM」「映射」「Lua 采样」「Lua 错误」「Agent」页签（设计文档 10.4）。
  *
  * 页签由 UI 画，数据来自引擎 XDebugProcess 实现的 [LuaDebugSessionModel] 和 MCP 服务；
  * 引擎没实现这个接口时只加 Agent 页，MCP 没装时不加 Agent 页。
@@ -41,6 +42,11 @@ object LuaDebugSessionTabs {
         if (profiler != null) {
             add(ui, "EmmyLua.Profiler", LuaDebugBundle.message("tab.profiler"), AllIcons.Actions.Profile,
                 LuaProfilerPanel(project, profiler, disposable).component)
+        }
+        val errors = session.debugProcess as? LuaErrorsModel
+        if (errors != null) {
+            add(ui, "EmmyLua.Errors", LuaDebugBundle.message("tab.errors"), AllIcons.General.Error,
+                LuaErrorsPanel(project, errors, disposable).component)
         }
         val mcp = LuaMcpService.getInstance()
         if (mcp != null) {
