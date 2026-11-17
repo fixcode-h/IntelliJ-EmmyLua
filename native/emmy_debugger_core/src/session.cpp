@@ -30,7 +30,7 @@ namespace {
 
 const char* const kRuntimeCaps[] = {
 	"cbor", "valuePath", "luaEval", "setVariable", "condition", "hitCondition", "logpoint", "capture",
-	"runToLine", "coroutines", "output", "helpers", "sourceHash", "hookMux", "richVariables", "exceptions", "viewRules", "profiler",
+	"runToLine", "coroutines", "output", "helpers", "sourceHash", "hookMux", "richVariables", "exceptions", "viewRules", "profiler", "errorReport",
 };
 
 const char* PlatformName() {
@@ -254,6 +254,16 @@ void Session::Dispatch(uint64_t id, const std::string& command, const json& args
 		return CmdPaused(id, command, args);
 	}
 	if (command == "profile") return CmdProfile(id, args);
+	if (command == "errors") {
+		// 能力 errorReport：拉错误聚合的全量（luaError 事件是限流过的，计数以这里为准）
+		const std::string action = GetStr(args, "action");
+		if (action == "clear") {
+			core.errors().Clear();
+			return Reply(id, json::object());
+		}
+		if (!action.empty() && action != "list") return Fail(id, "INVALID_ARGS", "errors 的 action 只能是 list / clear。");
+		return Reply(id, core.errors().Snapshot());
+	}
 	if (command == "cancel") return Reply(id, json::object());
 	if (command == "disconnect") return CmdDisconnect(id, args);
 	Fail(id, "UNKNOWN_COMMAND", "runtime 不支持命令 " + command + "，请升级 runtime。");
@@ -482,7 +492,14 @@ void Session::CmdSetOptions(uint64_t id, const json& args) {
 		else if (m == "all") o.exceptions = 2;
 		else return Fail(id, "INVALID_ARGS", "exceptions 只能是 none / uncaught / all。");
 	}
-	if (args.contains("exceptions")) {
+	if (args.contains("collectErrors") && args["collectErrors"].is_string()) {
+		const std::string m = args["collectErrors"].get<std::string>();
+		if (m == "none") o.collectErrors = 0;
+		else if (m == "uncaught") o.collectErrors = 1;
+		else if (m == "all") o.collectErrors = 2;
+		else return Fail(id, "INVALID_ARGS", "collectErrors 只能是 none / uncaught / all。");
+	}
+	if (args.contains("exceptions") || args.contains("collectErrors")) {
 		for (auto& vm : core.Vms()) {
 			auto v = vm;
 			v->Post([v](lua_State* L) { v->SyncErrorWrappers(L); });

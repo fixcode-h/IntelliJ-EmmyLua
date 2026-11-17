@@ -32,7 +32,7 @@ function M.tick(i)
   local r = M.add(i, 1)
   counter = counter + r
   print("tick", i)
-  if FAIL then FAIL = nil; local x = nil; return x.y end; if FAIL2 then FAIL2 = nil; pcall(function() error("caught boom") end) end
+  if FAIL then FAIL = nil; local x = nil; return x.y end; if FAIL2 then FAIL2 = nil; pcall(function() error("caught boom") end) end; if REPEAT_ERR and REPEAT_ERR > 0 then REPEAT_ERR = REPEAT_ERR - 1; pcall(function() error("repeat boom") end) end
   return r
 end
 function M.counter() return counter end
@@ -856,6 +856,63 @@ TEST_CASE("session.exceptions") {
 	CHECK_EQ(caught["body"]["top"]["line"].get<int>(), 12);
 	CHECK(Ok(c.Request("setOptions", {{"exceptions", "none"}})));
 	CHECK(Ok(Continue(c, caught)));
+	c.Request("disconnect");
+}
+
+
+TEST_CASE("session.errorReport") {
+	TestClient c;
+	CHECK(c.Connect("127.0.0.1", g_port));
+	json hello = Hello(c, json::array({"valuePath", "luaEval", "errorReport"}));
+	bool cap = false;
+	for (auto& x : hello["body"]["caps"]) if (x == "errorReport") cap = true;
+	CHECK(cap);
+	g_rev = 0;
+	CHECK_EQ(c.Request("setOptions", {{"collectErrors", "bogus"}})["error"]["code"].get<std::string>(), std::string("INVALID_ARGS"));
+	CHECK(Ok(c.Request("setOptions", {{"collectErrors", "all"}})));
+	CHECK(Ok(SetBps(c, json::array({Bp("arm", 9)}))));
+	CHECK(Ok(c.Request("configurationDone")));
+	json pz = c.WaitEvent("paused");
+	CHECK(pz.is_object());
+	if (!pz.is_object()) return;
+	json stack = c.Request("stackTrace", {{"vmId", pz["body"]["vmId"]}, {"pauseId", pz["body"]["pauseId"]}});
+	uint64_t frameId = stack["body"]["frames"][0]["frameId"];
+	// 被 pcall 接住的错误连续 5 次 + 一次没接住的：只计数，不停
+	CHECK(Ok(c.Request("evaluate", {{"frameId", frameId}, {"mode", "lua"}, {"expression", "rawset(_G, 'REPEAT_ERR', 5)"}})));
+	CHECK(Ok(c.Request("evaluate", {{"frameId", frameId}, {"mode", "lua"}, {"expression", "rawset(_G, 'FAIL', true)"}})));
+	CHECK(Ok(SetBps(c, json::array())));
+	g_game->lastErrorExpected = true;
+	CHECK(Ok(Continue(c, pz)));
+	json first = c.WaitEvent("luaError");
+	CHECK(first.is_object());
+	if (!first.is_object()) return;
+	CHECK(first["body"].contains("traceback"));
+	CHECK_EQ(first["body"]["line"].get<int>(), 12);
+	std::this_thread::sleep_for(std::chrono::milliseconds(300));
+	json list = c.Request("errors", json::object());
+	CHECK(Ok(list));
+	bool sawRepeat = false, sawUncaught = false;
+	for (auto& it : list["body"]["items"]) {
+		const std::string m = it["message"].get<std::string>();
+		if (m.find("repeat boom") != std::string::npos) {
+			sawRepeat = true;
+			CHECK_EQ(it["count"].get<int>(), 5);
+			CHECK(!it.contains("uncaught"));
+			CHECK_EQ(it["chunkName"].get<std::string>(), std::string("@game/main.lua"));
+		}
+		if (m.find("index") != std::string::npos) {
+			sawUncaught = true;
+			CHECK(it.value("uncaught", false));
+			CHECK(it["traceback"].get<std::string>().find("main.lua:12") != std::string::npos);
+		}
+	}
+	CHECK(sawRepeat);
+	CHECK(sawUncaught);
+	// 没有暂停过
+	CHECK(!c.WaitEvent("paused", 200).is_object());
+	CHECK(Ok(c.Request("errors", {{"action", "clear"}})));
+	CHECK(c.Request("errors", json::object())["body"]["items"].empty());
+	CHECK(Ok(c.Request("setOptions", {{"collectErrors", "none"}})));
 	c.Request("disconnect");
 }
 
