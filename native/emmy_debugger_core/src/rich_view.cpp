@@ -207,6 +207,33 @@ std::string ChildEval(const std::string& parent, bool root, lua_State* L, int ke
 	return "";
 }
 
+// UnLua 把元表名写成资产路径（/Game/A/BP_X.BP_X_C）：显示短名，完整路径放悬停提示
+std::string ShortTypeName(const std::string& name) {
+	if (name.find('/') == std::string::npos) return name;
+	size_t p = name.find_last_of("./");
+	return p == std::string::npos ? name : name.substr(p + 1);
+}
+
+// UnLua 的类表 / 元表：有 lightuserdata 的 ClassDesc 和字符串 __name
+bool IsUnLuaClass(lua_State* L, int t) {
+	if (lua_type(L, t) != LUA_TTABLE) return false;
+	lua_pushstring(L, "ClassDesc");
+	lua_rawget(L, t);
+	const bool desc = lua_type(L, -1) == LUA_TLIGHTUSERDATA;
+	lua_pop(L, 1);
+	if (!desc) return false;
+	lua_pushstring(L, "__name");
+	lua_rawget(L, t);
+	const bool name = lua_type(L, -1) == LUA_TSTRING;
+	lua_pop(L, 1);
+	return name;
+}
+
+// UnLua 类表上给 UnLua 自己用的字段
+bool IsUnLuaInternalField(const std::string& f) {
+	return f == "ClassDesc" || f == "TypeHash" || (f.size() > 2 && f[0] == '_' && f[1] == '_');
+}
+
 // 只读 rawget 一个字符串字段，栈不变
 std::string RawGetString(lua_State* L, int t, const char* field) {
 	std::string out;
@@ -291,6 +318,7 @@ std::string Inspector::NestedSummary(lua_State* L, int idx) {
 	}
 	case LUA_TNUMBER: return FormatNumber(L, idx);
 	case LUA_TTABLE: {
+		if (IsUnLuaClass(L, idx)) return "class " + ShortTypeName(RawGetString(L, idx, "__name"));
 		std::string cn = ClassName(L, idx);
 		if (!cn.empty()) return cn + "{…}";
 		size_t n = lua::RawLen(L, idx);
@@ -299,7 +327,7 @@ std::string Inspector::NestedSummary(lua_State* L, int idx) {
 	}
 	case LUA_TFUNCTION: return "ƒ";
 	case LUA_TUSERDATA: {
-		std::string mn = MetaName(L, idx);
+		std::string mn = ShortTypeName(MetaName(L, idx));
 		return mn.empty() ? "userdata" : mn;
 	}
 	default: return Summarize(L, idx, 32);
@@ -471,7 +499,13 @@ void Inspector::RichTable(lua_State* L, int idx, VariableItem& item) {
 		out += "}";
 	};
 	std::string cn;
-	if (selfIndex || (!loaded.empty() && named > 0 && funcs * 2 >= named)) {
+	const bool unluaClass = IsUnLuaClass(L, idx);
+	if (unluaClass) {
+		// UnLua 的类表（例如字段里放的 UDamageType 类）：只显示类名，ClassDesc / TypeHash 这些收进「内部」
+		item.kind = "class";
+		cn = ShortTypeName(RawGetString(L, idx, "__name"));
+		item.value = "class " + cn;
+	} else if (selfIndex || (!loaded.empty() && named > 0 && funcs * 2 >= named)) {
 		item.kind = "class";
 		for (const char* f : kClassNameFields) {
 			if (!cn.empty()) break;
@@ -522,6 +556,7 @@ void Inspector::RichTable(lua_State* L, int idx, VariableItem& item) {
 		RefEntry& e = refs_[item.ref];
 		e.owner = item.kind == "module" ? LastSegment(cn) : cn;
 		e.ruleType = cn;
+		e.unluaClass = unluaClass;
 	}
 }
 
@@ -534,6 +569,13 @@ void Inspector::MakeItemRich(lua_State* L, int idx, VariableItem& item, const st
 	// 宿主（引擎）认领的对象：摘要和子项都听宿主的
 	if ((t == LUA_TUSERDATA || t == LUA_TTABLE) && host::HasProviders() && HostDescribe(L, idx, item, evaluateName)) {
 		if (item.objectId.empty()) item.objectId = PtrString(lua_topointer(L, idx));
+		// UnLua 实例表：对象名后面带几个 Lua 字段，不展开也能看到 Health 这类关键值
+		if (t == LUA_TTABLE && std::find(item.attrs.begin(), item.attrs.end(), "invalid") == item.attrs.end()) {
+			const TypeViewRule* rule = RuleFor(item.typeName);
+			std::string sample = rule && (rule->hasSummary || !rule->pin.empty()) ? RenderRuleSummary(L, idx, *rule) : FieldSample(L, idx, 4);
+			if (!sample.empty()) item.value += " " + sample;
+			Truncate(item.value, view_.maxValueLength);
+		}
 		return;
 	}
 	// 宿主不认领的再问 helper v2 formatter（11.2）；出错时退回默认显示并标 helperError
@@ -588,8 +630,10 @@ void Inspector::MakeItemRich(lua_State* L, int idx, VariableItem& item, const st
 	case LUA_TUSERDATA: {
 		item.kind = "userdata";
 		item.objectId = PtrString(lua_touserdata(L, idx));
-		std::string mn = MetaName(L, idx);
+		const std::string full = MetaName(L, idx);
+		const std::string mn = ShortTypeName(full);
 		item.typeName = mn;
+		if (mn != full) item.hint = full;
 		item.value = (mn.empty() ? std::string("userdata") : mn) + " " + item.objectId;
 		if (view_.toString == 1) {
 			// userdata 的 __tostring 默认不调：引擎对象失效后调它可能崩（第 12 节），只有选了「全部」才调
@@ -725,11 +769,18 @@ void Inspector::BuildTableKeys(RefEntry& entry, int obj) {
 	}
 	entry.arrayKeys = entry.keys.size();
 	// 字段段
-	std::vector<RichKey> data, funcs, builtins;
+	std::vector<RichKey> data, funcs, builtins, internals;
 	std::vector<std::string> ownKeys;
+	const bool unluaClass = !globals && IsUnLuaClass(L, obj);
 	CollectFields(L, obj, n, [&](int keyIdx, bool isFunc) {
-		RichKey k;
 		const int kt = lua_type(L, keyIdx);
+		// UnLua 实例表的 Object 就是「UE 对象」分组里的那个对象，不再单列一遍
+		if (entry.providerId && kt == LUA_TSTRING && lua_type(L, keyIdx + 1) == LUA_TUSERDATA) {
+			size_t kl;
+			const char* ks = lua_tolstring(L, keyIdx, &kl);
+			if (kl == 6 && std::memcmp(ks, "Object", 6) == 0) return;
+		}
+		RichKey k;
 		k.keySlot = Anchor(L, keyIdx);
 		k.name = RichKeyName(L, keyIdx);
 		k.nameType = lua_typename(L, kt);
@@ -739,6 +790,10 @@ void Inspector::BuildTableKeys(RefEntry& entry, int obj) {
 			const char* ks = lua_tolstring(L, keyIdx, &kl);
 			k.field.assign(ks, kl);
 			ownKeys.push_back(k.field);
+			if (unluaClass && IsUnLuaInternalField(k.field)) {
+				internals.push_back(std::move(k));
+				return;
+			}
 			if (globals && view_.hideStdGlobals && (InList(kBuiltinGlobals, ks, kl) || IsRuleBuiltinGlobal(ks, kl))) {
 				builtins.push_back(std::move(k));
 				return;
@@ -778,6 +833,77 @@ void Inspector::BuildTableKeys(RefEntry& entry, int obj) {
 		entry.groups.push_back(GroupItem("内置", "标准库和框架全局", ref, cnt));
 	}
 	BuildGroups(entry, obj, ownKeys);
+	FoldInternal(entry, std::move(internals));
+}
+
+std::string Inspector::FieldSample(lua_State* L, int idx, size_t maxFields) {
+	idx = lua::AbsIndex(L, idx);
+	// 只取标识符键、非函数的字段；Object 和 __ 开头的是 UnLua 自己的
+	std::vector<SortKey> keys;
+	lua_pushnil(L);
+	size_t seen = 0;
+	while (lua_next(L, idx)) {
+		if (lua_type(L, -2) == LUA_TSTRING && lua_type(L, -1) != LUA_TFUNCTION && keys.size() < 64) {
+			size_t kl;
+			const char* ks = lua_tolstring(L, -2, &kl);
+			std::string k(ks, kl);
+			if (IsIdentifier(ks, kl) && k != "Object" && !IsUnLuaInternalField(k)) {
+				SortKey sk;
+				sk.cat = 0;
+				sk.s = std::move(k);
+				sk.pos = keys.size();
+				keys.push_back(std::move(sk));
+			}
+		}
+		lua_pop(L, 1);
+		if (++seen >= 10000) {
+			lua_pop(L, 1);
+			break;
+		}
+	}
+	if (keys.empty()) return "";
+	std::sort(keys.begin(), keys.end(), [](const SortKey& a, const SortKey& b) { return SmartLess(a, b, 0); });
+	std::string out = "{";
+	size_t shown = 0;
+	for (const SortKey& k : keys) {
+		if (shown >= maxFields) break;
+		lua_pushlstring(L, k.s.data(), k.s.size());
+		lua_rawget(L, idx);
+		if (shown++) out += ", ";
+		out += k.s + "=" + NestedSummary(L, -1);
+		lua_pop(L, 1);
+	}
+	out += shown < keys.size() ? ", …}" : "}";
+	return out;
+}
+
+void Inspector::FoldInternal(RefEntry& entry, std::vector<RichKey> internals) {
+	std::vector<VariableItem> inner, kept;
+	for (VariableItem& g : entry.groups) {
+		const bool internal = g.name == "方法" || g.name == "__index 是函数" || g.name.rfind("元表", 0) == 0;
+		(internal ? inner : kept).push_back(std::move(g));
+	}
+	if (!internals.empty()) {
+		bool s = true;
+		SortKeys(pausedL_, internals, s);
+		const int64_t cnt = static_cast<int64_t>(internals.size());
+		uint64_t ref = NewGroup(entry.slot, std::move(internals), s);
+		inner.insert(inner.begin(), GroupItem("UnLua 字段", "ClassDesc、TypeHash 等", ref, cnt));
+	}
+	entry.groups = std::move(kept);
+	if (inner.empty()) return;
+	// 调试时很少看：收进一个分组，IntelliJ 里默认折叠
+	uint64_t ref = NewRef(RefKind::Static, 0, 0, "");
+	RefEntry& e = refs_[ref];
+	std::string summary;
+	for (const VariableItem& g : inner) {
+		if (!summary.empty()) summary += "、";
+		summary += g.name;
+	}
+	const int64_t cnt = static_cast<int64_t>(inner.size());
+	e.richChildren = std::move(inner);
+	e.richBuilt = true;
+	entry.groups.push_back(GroupItem("内部", summary, ref, cnt));
 }
 
 void Inspector::BuildGroups(RefEntry& entry, int obj, const std::vector<std::string>& ownKeys) {
@@ -1123,6 +1249,7 @@ bool Inspector::RichVariables(RefEntry& entry, int start, int count, const std::
 				entry.keysBuilt = true;
 				entry.groups.clear();
 				BuildGroups(entry, obj, {});
+				FoldInternal(entry, {});
 			}
 			groups = &entry.groups;
 			break;
