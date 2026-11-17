@@ -128,8 +128,17 @@ int EmmyTool::Launch() {
 	si.cb = sizeof(si);
 	PROCESS_INFORMATION pi{};
 	DWORD flags = DEBUG_ONLY_THIS_PROCESS;
-	if (_cmd.Get<bool>("create-new-window")) flags |= CREATE_NEW_CONSOLE;
-	// 不继承句柄：IDE 读 emmy_tool 的输出要等管道关闭，程序拿着管道句柄会让 IDE 一直等到程序退出
+	if (_cmd.Get<bool>("create-new-window")) {
+		flags |= CREATE_NEW_CONSOLE;
+	} else {
+		// 不把我们的标准输入输出给程序：IDE 读 emmy_tool 的输出要等管道关闭，控制台程序即使不继承句柄，
+		// 系统也会把父进程的标准句柄复制给它，程序就一直拿着管道，IDE 要等到程序退出才读完
+		si.dwFlags |= STARTF_USESTDHANDLES;
+		si.hStdInput = nullptr;
+		si.hStdOutput = nullptr;
+		si.hStdError = nullptr;
+	}
+	// 不继承其他句柄
 	if (!CreateProcessW(exe.c_str(), &commandLine[0], nullptr, nullptr, FALSE, flags, nullptr,
 		work.empty() ? nullptr : work.c_str(), &si, &pi)) {
 		return Fail(0, "启动程序失败：" + LastErrorText(GetLastError()));
