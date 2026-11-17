@@ -58,6 +58,40 @@ class DebugUiTest : BasePlatformTestCase() {
         assertTrue("重建的样式也右对齐", renderer.preferredSize.width >= 500)
     }
 
+    /** 平台真的帧列表（匿名子类、异步取帧文字、新 UI 渲染器）里也右对齐。 */
+    fun testFramesLocationRightAlignedInPlatformList() {
+        val frame = object : com.intellij.xdebugger.frame.XStackFrame() {
+            override fun customizePresentation(component: com.intellij.ui.ColoredTextContainer) {
+                component.append("M:ReceiveBeginPlay", com.intellij.ui.SimpleTextAttributes.REGULAR_ATTRIBUTES)
+                component.append("  Player/BP_PlayerCharacter_C.lua:32", com.intellij.ui.SimpleTextAttributes.GRAY_ATTRIBUTES)
+            }
+        }
+        // 平台在 XFramesView 里建的是匿名子类（XFramesView$2），按类名找会找不到
+        val list = object : com.intellij.xdebugger.impl.frame.XDebuggerFramesList(project) {}
+        @Suppress("UNCHECKED_CAST")
+        (list.model as com.intellij.ui.CollectionListModel<Any?>).add(frame)
+        val scroll = com.intellij.ui.components.JBScrollPane(list)
+        val root = javax.swing.JPanel(java.awt.BorderLayout()).apply { add(scroll) }
+        root.setSize(600, 200)
+        root.doLayout(); scroll.doLayout(); scroll.viewport.doLayout()
+        assertTrue("找到帧列表", com.fixcode.intellij.lua.debug.ui.session.LuaFramesListLayout.install(root, testRootDisposable))
+        list.setSize(scroll.viewport.extentSize.width, 100)
+        val deadline = System.currentTimeMillis() + 5000
+        var text = ""
+        var width = 0
+        while (System.currentTimeMillis() < deadline) {
+            com.intellij.testFramework.PlatformTestUtil.dispatchAllEventsInIdeEventQueue()
+            val c = list.cellRenderer.getListCellRendererComponent(list, frame, 0, false, false)
+            val colored = c as? com.intellij.ui.SimpleColoredComponent ?: com.intellij.util.ui.UIUtil.findComponentOfType(c as javax.swing.JComponent, com.intellij.ui.SimpleColoredComponent::class.java)!!
+            text = colored.getCharSequence(false).toString()
+            width = colored.preferredSize.width
+            if (text.startsWith("M:")) break
+            Thread.sleep(50)
+        }
+        assertTrue("文字: $text", text.startsWith("M:ReceiveBeginPlay"))
+        assertTrue("右对齐后宽度撑满: $width", width >= 500)
+    }
+
     fun testParseTasklistCsv() {
         val out = """
             "UnrealEditor.exe","1234","lua54.dll,luasocket.dll"

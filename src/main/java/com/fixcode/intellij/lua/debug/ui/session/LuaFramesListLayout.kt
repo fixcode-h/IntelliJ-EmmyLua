@@ -28,12 +28,17 @@ internal object LuaFramesListLayout {
 
     /** 在会话界面里找帧列表装上；没找到返回 false（界面还没建好，下次暂停再试）。 */
     fun install(root: JComponent, parent: Disposable): Boolean {
-        val lists = UIUtil.findComponentsOfType(root, JList::class.java)
-            .filter { it.javaClass.name.endsWith("XDebuggerFramesList") }
+        val lists = UIUtil.findComponentsOfType(root, JList::class.java).filter(::isFramesList)
         if (lists.isEmpty()) return false
         lists.forEach { install(it, parent) }
         return true
     }
+
+    /** 平台在 XFramesView 里建的是 XDebuggerFramesList 的匿名子类（XFramesView$2），所以沿父类链按名字找。 */
+    internal fun isFramesList(list: JList<*>): Boolean =
+        generateSequence<Class<*>>(list.javaClass) { it.superclass }.any { it.name == FRAMES_LIST_CLASS }
+
+    private const val FRAMES_LIST_CLASS = "com.intellij.xdebugger.impl.frame.XDebuggerFramesList"
 
     private fun install(list: JList<*>, parent: Disposable) {
         if (list.getClientProperty(MARK) != null) return
