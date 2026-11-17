@@ -168,6 +168,11 @@ class FakeBackend : LuaDebugBackend {
         return CompletableFuture.completedFuture(VariableInfo(request.expression, "number", "42"))
     }
 
+    override fun setVariable(request: SetVariableRequest): CompletableFuture<VariableInfo> {
+        commands += "set ${request.mode} ${request.path}=${request.value}" + (request.scope?.let { " ${it.name}" } ?: "")
+        return CompletableFuture.completedFuture(VariableInfo(request.path, "number", request.value))
+    }
+
     override fun getOutput(sessionId: String?, sinceSeq: Long, limit: Int) = OutputPage(
         listOf(OutputEntry(1, 0, "s1", OutputCategory.STDOUT, "hello")).filter { it.seq > sinceSeq }, 1,
     )

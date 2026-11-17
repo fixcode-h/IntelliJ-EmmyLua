@@ -218,6 +218,35 @@ class LuaDebugToolsTest {
     }
 
     @Test
+    fun `set 改变量按控制确认，参数不对直接报错`() {
+        backend.addSession()
+        backend.firePause()
+        assertEquals("invalid_argument", client.call(I, mapOf("action" to "set", "value" to "1")).code)
+        assertEquals("invalid_argument", client.call(I, mapOf("action" to "set", "path" to "self.", "value" to "1")).code)
+        confirmer.control = ControlDecision.DENY
+        assertEquals("permission_denied", client.call(I, mapOf("action" to "set", "path" to "self.hp", "value" to "100")).code)
+        confirmer.control = ControlDecision.ALLOW_ONCE
+        val ok = client.call(I, mapOf("action" to "set", "path" to "self.hp", "value" to "100"))
+        assertFalse(ok.isError)
+        assertEquals("100", (ok["value"] as Map<*, *>)["v"])
+        assertTrue(backend.commands.contains("set VALUE_PATH self.hp=100"))
+        client.call(I, mapOf("action" to "set", "path" to "Debug", "value" to "true", "scope" to "globals"))
+        assertTrue(backend.commands.contains("set VALUE_PATH Debug=true GLOBALS"))
+    }
+
+    @Test
+    fun `值路径拆成父路径和最后一段`() {
+        assertEquals(null to "hp", ValuePaths.splitLast("hp"))
+        assertEquals("self" to "hp", ValuePaths.splitLast("self.hp"))
+        assertEquals("self.items" to "[3]", ValuePaths.splitLast("self.items[3]"))
+        assertEquals("cfg" to "[a.b]", ValuePaths.splitLast("cfg[\"a.b\"]"))
+        assertEquals("a[\"x]\"]" to "y", ValuePaths.splitLast("a[\"x]\"].y"))
+        assertEquals(null, ValuePaths.splitLast("self."))
+        assertEquals(null, ValuePaths.splitLast("a[f()]"))
+        assertEquals(null, ValuePaths.splitLast("#list"))
+    }
+
+    @Test
     fun `clear 默认只删 Agent 断点`() {
         backend.addSession()
         backend.breakpoints += BreakpointInfo("u1", BreakpointOrigin.IDE, "/proj/A.lua", 1, true)

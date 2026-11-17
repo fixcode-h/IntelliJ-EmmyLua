@@ -19,7 +19,7 @@ import java.util.concurrent.TimeoutException
  *
  * - `lua_debug_session`：status / targets / attach / stop / pause / continue / step / wait / reload
  * - `lua_debug_breakpoints`：list / add / remove / enable / clear
- * - `lua_debug_inspect`：stack / vms / locals / eval / output / probes / profile
+ * - `lua_debug_inspect`：stack / vms / locals / eval / set / output / probes / profile
  *
  * [backend] 每次调用时取：IDE 没有打开项目、新引擎没装好时返回 null，工具报 engine_unavailable。
  */
@@ -557,7 +557,7 @@ class LuaDebugTools(
 
     // ======================================================================= lua_debug_inspect
 
-    private val inspectActions = arrayOf("stack", "vms", "locals", "eval", "output", "probes", "profile")
+    private val inspectActions = arrayOf("stack", "vms", "locals", "eval", "set", "output", "probes", "profile")
 
     private fun inspectTool() = McpTool(
         name = INSPECT,
@@ -568,7 +568,7 @@ class LuaDebugTools(
                 "value paths (self.items[3].id, #list) and, if allowed, any Lua expression; also debug output (print, Lua errors, " +
                 "logpoints), probe records and a sampling profile, which work while the game runs.",
             useWhen = "$SESSION reports event=break: see where and why, read variables and table fields (depth 1-3, ref to expand), " +
-                "evaluate value paths, switch frames with frame=N; output / probes any time; profile while a slow scene runs to find hot Lua functions.",
+                "evaluate value paths, set a value to test a fix (set), switch frames with frame=N; output / probes any time; profile while a slow scene runs.",
             insteadOf = "guessing values or adding print / os.clock() timers: reads the live state without changing scripts.",
             notFor = "a running VM (stack / locals / eval need event=break). mode=lua needs a one-time user confirmation per session (the user may have turned it off): prefer value " +
                 "paths. Refs die when the VM continues. profile counts Lua instructions, not time in C/engine calls; Lua runs ~2x slower meanwhile.",
@@ -580,14 +580,16 @@ class LuaDebugTools(
             string("session_id", "Session (optional when there is only one, or only one is stopped).")
             string("vm", "Lua VM id (default: the stopped VM).")
             integer("frame", "Stack frame, 0 = top (default 0).", minimum = 0)
-            string("scope", "locals: locals (default) / upvalues / globals.", enum = listOf("locals", "upvalues", "globals"))
+            string("scope", "locals: locals (default) / upvalues / globals. set: where a bare name lives (default: local, then upvalue).",
+                enum = listOf("locals", "upvalues", "globals"))
             string("ref", "locals: expand this value (ref from a previous result) instead of a scope.")
-            string("path", "locals: start from this value path inside the scope, e.g. self.items[3].")
+            string("path", "locals: start from this value path inside the scope, e.g. self.items[3]. set: the variable to change (hp, self.hp, items[3]).")
+            string("value", "set: new value; value_path mode: a literal (100, \"a\", true, nil) or another value path; mode=lua: any Lua expression.")
             string("filter", "locals: keep variables whose name contains it; output: keep lines containing it.")
             integer("depth", "locals/eval: table levels to expand (0-3, default 1).", minimum = 0, maximum = 3)
             string("expr", "eval: value path (self.hp, items[3].id, #list) or, with mode=lua, a Lua expression.")
             stringArray("exprs", "eval: several expressions (watch list).", 10)
-            string("mode", "eval: value_path (default, read-only) or lua (arbitrary Lua; needs the user's permission).",
+            string("mode", "eval/set: value_path (default) or lua (arbitrary Lua; needs the user's permission).",
                 enum = listOf("value_path", "lua"))
             integer("cursor", "output/probes: 'next' of the previous call, returns only newer items.", minimum = 0)
             integer("max_chars", "output: max characters (default 3000, newest kept).", minimum = 200, maximum = 10000)
@@ -607,6 +609,7 @@ class LuaDebugTools(
             "vms" -> vms(b, call.args)
             "locals" -> locals(b, call.args)
             "eval" -> eval(b, call)
+            "set" -> set(b, call)
             "output" -> output(b, call.args)
             "probes" -> probes(b, call.args)
             "profile" -> profile(b, call.args)
@@ -710,6 +713,34 @@ class LuaDebugTools(
         val (items, truncated) = ResultJson.fit(results, ResultJson.MAX_BUDGET) { it }
         val m = obj("truncated" to truncated)
         m["results"] = items
+        return m
+    }
+
+    /** 改变量：会改游戏状态，按控制处理（每个会话第一次弹确认）；mode=lua 还要设置里允许执行任意 Lua。 */
+    private fun set(b: LuaDebugBackend, call: ToolCall): Map<String, Any?> {
+        val a = call.args
+        val path = a.string("path")?.trim()?.takeIf { it.isNotEmpty() } ?: throw ToolArgumentException("set 要给 'path'（要改的变量，例如 self.hp）")
+        val value = a.string("value")?.takeIf { it.isNotBlank() } ?: throw ToolArgumentException("set 要给 'value'（新值，例如 100、\"text\"、nil）")
+        ValuePaths.splitLast(path) ?: throw ToolArgumentException("'$path' 不是能改的值路径：写成 hp、self.hp、items[3] 或 cfg[\"key\"]")
+        val mode = if (a.choice("mode", "value_path", "value_path", "lua") == "lua") EvalMode.LUA else EvalMode.VALUE_PATH
+        val scope = when (a.string("scope")?.takeIf { it.isNotBlank() }?.let { a.choice("scope", null, "locals", "upvalues", "globals") }) {
+            "locals" -> VariableScope.LOCALS
+            "upvalues" -> VariableScope.UPVALUES
+            "globals" -> VariableScope.GLOBALS
+            else -> null
+        }
+        val p = requirePause(b, a)
+        if (mode == EvalMode.LUA && !policy.luaEvalAllowed()) {
+            throw ToolException(
+                "eval_forbidden",
+                "用户在设置里关掉了执行任意 Lua。新值改用字面量或值路径（不带 mode=lua），或请用户在 设置 > 工具 > EmmyLua 调试 里打开「允许 Agent 执行任意 Lua」。",
+            )
+        }
+        requireControl(b.listSessions().first { it.sessionId == p.sessionId }, call)
+        val frameId = frameId(b, p, a)
+        val v = await(b.setVariable(SetVariableRequest(frameId, path, value, mode, scope)), timeouts.requestMillis)
+        val m = obj("ok" to true)
+        m["value"] = ResultJson.value(v.copy(name = path))
         return m
     }
 

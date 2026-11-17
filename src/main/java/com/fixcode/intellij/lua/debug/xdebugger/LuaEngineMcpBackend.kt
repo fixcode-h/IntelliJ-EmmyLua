@@ -32,6 +32,7 @@ import com.fixcode.intellij.lua.debug.protocol.EvalModes
 import com.fixcode.intellij.lua.debug.protocol.OutputCategories
 import com.fixcode.intellij.lua.debug.protocol.PauseReasons
 import com.fixcode.intellij.lua.debug.protocol.ScopeNames
+import com.fixcode.intellij.lua.debug.protocol.ValueResult
 import com.fixcode.intellij.lua.debug.ui.session.LuaDebugSessionStarter
 import com.fixcode.intellij.lua.debugger.LuaLineBreakpointType
 import com.fixcode.intellij.lua.debugger.mcp.AttachDeviceRequest
@@ -44,6 +45,8 @@ import com.fixcode.intellij.lua.debugger.mcp.DebugEvent
 import com.fixcode.intellij.lua.debugger.mcp.ErrorCode
 import com.fixcode.intellij.lua.debugger.mcp.EvalMode
 import com.fixcode.intellij.lua.debugger.mcp.EvaluateRequest
+import com.fixcode.intellij.lua.debugger.mcp.SetVariableRequest
+import com.fixcode.intellij.lua.debugger.mcp.ValuePaths
 import com.fixcode.intellij.lua.debugger.mcp.FrameInfo
 import com.fixcode.intellij.lua.debugger.mcp.LuaDebugBackend
 import com.fixcode.intellij.lua.debugger.mcp.LuaDebugBackendException
@@ -662,6 +665,55 @@ class LuaEngineMcpBackend(private val project: Project) : LuaDebugBackend, Dispo
                 VariableInfo(request.expression, value.typeName ?: value.type, value.value, value.children()?.let { refOf(sessionId, it) })
             }
         })
+    }
+
+    override fun setVariable(request: SetVariableRequest): CompletableFuture<VariableInfo> {
+        val (parent, leaf) = ValuePaths.splitLast(request.path)
+            ?: return CompletableFuture.failedFuture(LuaDebugBackendException(ErrorCode.INVALID_ARGUMENT, "'${request.path}' 不是能改的值路径。"))
+        val (sessionId, engine, framePromise) = parseFrame(request.frameId)
+        val mode = if (request.mode == EvalMode.LUA) EvalModes.LUA else EvalModes.VALUE_PATH
+        fun result(container: VariableContainer, r: ValueResult) =
+            VariableInfo(request.path, r.typeName ?: r.type, r.value, r.ref.takeIf { it > 0 }?.let { refOf(sessionId, VariableContainer(container.pause, it, request.path)) })
+        return mapErrors(framePromise.thenCompose { handle ->
+            if (parent != null) {
+                // 先按值路径取到父对象（table / UE 对象 / 函数的上值），再改它的字段
+                engine.evaluate(handle.pause, parent, handle, EvalModes.VALUE_PATH, "agent").thenCompose { owner ->
+                    val container = owner.children()
+                        ?: throw LuaDebugBackendException(ErrorCode.INVALID_ARGUMENT, "'$parent' 是 ${owner.type}，不能改它的字段。")
+                    engine.setVariable(container, leaf, request.value, mode).thenApply { result(container, it) }
+                }
+            } else {
+                val wanted = when (request.scope) {
+                    VariableScope.LOCALS -> listOf(ScopeNames.LOCALS)
+                    VariableScope.UPVALUES -> listOf(ScopeNames.UPVALUES)
+                    VariableScope.GLOBALS -> listOf(ScopeNames.GLOBALS)
+                    // 不写 scope 时只改局部变量和上值：名字拼错时不该悄悄新建一个全局变量
+                    null -> listOf(ScopeNames.LOCALS, ScopeNames.UPVALUES)
+                }
+                engine.scopes(handle).thenCompose { scopes ->
+                    val candidates = wanted.mapNotNull { name -> scopes.firstOrNull { it.name == name } }
+                    fun attempt(i: Int): CompletableFuture<VariableInfo> {
+                        if (i >= candidates.size) {
+                            return CompletableFuture.failedFuture(LuaDebugBackendException(ErrorCode.INVALID_ARGUMENT,
+                                "这一帧没有叫 $leaf 的" + (if (request.scope == null) "局部变量或上值；要改全局变量加 scope=globals。" else "变量。")))
+                        }
+                        val container = candidates[i]
+                        return engine.setVariable(container, leaf, request.value, mode).handle { r, e ->
+                            if (e == null) CompletableFuture.completedFuture(result(container, r))
+                            else if (i + 1 < candidates.size && isNotFound(e)) attempt(i + 1)
+                            else CompletableFuture.failedFuture(e)
+                        }.thenCompose { it }
+                    }
+                    attempt(0)
+                }
+            }
+        })
+    }
+
+    /** runtime 回「找不到要修改的变量」（INVALID_ARGS）：换下一个作用域再试。 */
+    private fun isNotFound(e: Throwable): Boolean {
+        val cause = generateSequence(e) { it.cause }.firstOrNull { it is DebugEngineException } as? DebugEngineException ?: return false
+        return cause.code == ErrorCodes.INVALID_ARGS
     }
 
     override fun getOutput(sessionId: String?, sinceSeq: Long, limit: Int): OutputPage {
