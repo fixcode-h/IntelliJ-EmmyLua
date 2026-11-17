@@ -3,7 +3,6 @@ package com.fixcode.intellij.lua.debug.ui.session
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.util.Disposer
 import com.intellij.ui.SimpleColoredComponent
-import com.intellij.ui.SimpleTextAttributes
 import com.intellij.ui.components.JBList
 import com.intellij.util.ui.UIUtil
 import java.awt.Component
@@ -19,7 +18,7 @@ import javax.swing.SwingConstants
  * 调用栈列表里函数名靠左、`相对路径:行号` 靠右（用户要求，像 VS 的调用堆栈那样两列分开好扫）。
  *
  * 帧的显示文字经 XFramesAsyncPresentationHandler 缓存后只剩「文字 + 样式」，帧自己没法设对齐，
- * 所以在本会话的帧列表上包一层渲染器：平台渲染完后，把最后一段（引擎追加的位置，两个空格开头、灰色）
+ * 所以在本会话的帧列表上包一层渲染器：平台渲染完后，把最后一段（帧追加的位置，两个空格开头）
  * 右对齐到列表右边，放不下时从左边省略路径。列表宽度固定跟视口走，避免右对齐把首选宽度撑大后
  * 出现横向滚动条、缩窄面板时位置跟不回来；为此也关掉悬停展开（位置已经省略到放得下）。
  */
@@ -89,10 +88,10 @@ internal object LuaFramesListLayout {
         while (it.hasNext()) { it.next(); location = it }
         val last = location ?: return
         if (text.fragmentCount < 2) return
+        // 只认「两个空格开头」，不比样式：2025.3 起帧经 RPC 序列化后在前端重建（FrontendXStackFrame），
+        // 灰色变成了新的 SimpleTextAttributes，和 GRAY_ATTRIBUTES 不相等，比样式会整段跳过
         val fragment = last.fragment
-        val attrs = last.textAttributes
-        if (!fragment.startsWith("  ") ||
-            (attrs != SimpleTextAttributes.GRAY_ATTRIBUTES && attrs != SimpleTextAttributes.GRAYED_ATTRIBUTES)) return
+        if (!fragment.startsWith("  ")) return
 
         // 渲染组件在单元格里的右边界：减去外层面板（新 UI 的选中框）和自己的边距
         var right = cellWidth

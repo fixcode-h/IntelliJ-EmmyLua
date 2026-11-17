@@ -42,6 +42,22 @@ class DebugUiTest : BasePlatformTestCase() {
         assertTrue("窄的时候从左边省略路径: $text", text.startsWith("main.update  …") && text.endsWith("Main.lua:12"))
     }
 
+    /** 2025.3 起帧在前端由序列化的样式重建（FrontendXStackFrame），灰色不再是 GRAY_ATTRIBUTES 本身，也要右对齐。 */
+    fun testFramesLocationRightAlignedWithRebuiltAttributes() {
+        val list = com.intellij.ui.components.JBList(listOf("f"))
+        list.setSize(600, 100)
+        val rebuilt = com.intellij.ui.SimpleTextAttributes(com.intellij.ui.SimpleTextAttributes.STYLE_PLAIN, java.awt.Color(0x80, 0x80, 0x80))
+        val renderer = object : com.intellij.ui.ColoredListCellRenderer<String>() {
+            override fun customizeCellRenderer(l: javax.swing.JList<out String>, value: String, index: Int, selected: Boolean, focus: Boolean) {
+                append("M:ReceiveBeginPlay", com.intellij.ui.SimpleTextAttributes(com.intellij.ui.SimpleTextAttributes.STYLE_PLAIN, null))
+                append("  Player/BP_PlayerCharacter_C.lua:32", rebuilt)
+            }
+        }
+        val c = renderer.getListCellRendererComponent(list, "f", 0, false, false)
+        com.fixcode.intellij.lua.debug.ui.session.LuaFramesListLayout.alignLocation(list, c)
+        assertTrue("重建的样式也右对齐", renderer.preferredSize.width >= 500)
+    }
+
     fun testParseTasklistCsv() {
         val out = """
             "UnrealEditor.exe","1234","lua54.dll,luasocket.dll"
