@@ -43,7 +43,9 @@ jobs:
         env:
           # 新引擎对着真的原生核心跑端到端用例（NativeRuntimeE2eTest）
           EMMY_CORE_HOST: ${{ github.workspace }}/build/core/emmy_core_ide_host
-        run: ./gradlew --no-daemon -DIDEA_VER=${{ matrix.idea-version }} -PverifyIdes=2025.3,2026.1,2026.2,2026.3 test buildPlugin verifyPlugin
+          # 推 main 是为了出包：同一个提交在 dev 上已经校验过全部版本，这里只校验最低（编译用的 2025.2）和最高版本，省下载和校验时间
+          VERIFY_IDES: ${{ github.ref == 'refs/heads/main' && '2026.3' || '2025.3,2026.1,2026.2,2026.3' }}
+        run: ./gradlew --no-daemon -DIDEA_VER=${{ matrix.idea-version }} -PverifyIdes=$VERIFY_IDES test buildPlugin verifyPlugin
       - name: Preserve JVM and plugin verification reports
         uses: actions/upload-artifact@v4
         if: always()
