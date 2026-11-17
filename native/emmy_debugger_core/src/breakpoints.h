@@ -38,16 +38,28 @@ struct Breakpoint {
 	std::vector<std::string> capture;
 	bool autoContinue = false;
 	uint64_t vmId = 0;
+	// 函数断点（能力 functionBreakpoints）：function 是原文（"UI.BagPanel:OnClick"、"M.add"、"foo"），
+	// 拆成限定部分（点分，':' 前或最后一个 '.' 前，空表示全局函数）和函数名。line 为 0，source 可选（只限定文件）。
+	std::string function;
+	std::string funcQualifier;
+	std::string funcName;
+	bool funcMethod = false; // 写的是 Class:Method
 
 	NormalizedPath normPath;
 	NormalizedPath normChunk; // chunkName 给了才有
 	bool HasChunkName() const { return !chunkName.empty(); }
+	bool HasSource() const { return !path.empty() || !chunkName.empty(); }
+	bool IsFunction() const { return !function.empty(); }
 	bool Pauses() const { return !autoContinue && logMessage.empty(); }
 };
 
 using BreakpointPtr = std::shared_ptr<const Breakpoint>;
 
 uint64_t NextBreakpointSerial();
+
+// 解析函数断点的写法（Module.func / Class:Method / func，段名是 Lua 标识符），写进 bp 的 funcQualifier / funcName / funcMethod。
+// 失败时 err 给中文原因
+bool ParseFunctionSpec(std::string_view text, Breakpoint& bp, std::string& err);
 
 // 某个 VM 里某个 chunk 的匹配结果
 struct ChunkMatch {
@@ -63,8 +75,12 @@ public:
 	uint64_t revision() const { return revision_; }
 	bool empty() const { return bps_.empty(); }
 	bool caseSensitive() const { return caseSensitive_; }
-	// 对 vmId 是否有任何断点（vmId 过滤后）
+	// 对 vmId 是否有任何断点（vmId 过滤后；含函数断点）
 	bool AnyFor(uint64_t vmId) const;
+	// 对 vmId 是否有行断点（断点诊断只管行断点）
+	bool AnyLineFor(uint64_t vmId) const;
+	// 函数断点（不参与按 chunk 的匹配）
+	const std::vector<BreakpointPtr>& functions() const { return funcs_; }
 	const std::vector<BreakpointPtr>& all() const { return bps_; }
 
 	ChunkMatch Match(std::string_view chunkSource, uint64_t vmId) const;
@@ -78,6 +94,7 @@ private:
 	uint64_t revision_;
 	bool caseSensitive_;
 	std::vector<BreakpointPtr> bps_;
+	std::vector<BreakpointPtr> funcs_;
 	std::vector<Group> groups_;
 };
 

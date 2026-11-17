@@ -206,7 +206,9 @@ data class SourceRef(
 
 data class BreakpointSpec(
     val id: String,
-    val source: SourceRef,
+    /** 行断点必填；函数断点可选（只限定函数所在的文件）。 */
+    val source: SourceRef?,
+    /** 行断点的行号（1 起）；函数断点为 0、不下发。 */
     val line: Int,
     val condition: String? = null,
     val hitCondition: String? = null,
@@ -216,10 +218,13 @@ data class BreakpointSpec(
     /** 命中不停，只发 breakpointHit。有 logMessage 时 runtime 也视为 true。 */
     val autoContinue: Boolean = false,
     /** 0 表示所有 VM。 */
-    val vmId: Long = 0
+    val vmId: Long = 0,
+    /** 函数断点（能力 functionBreakpoints，协议 7.7）：`Module.func`、`Class:Method` 或全局函数名，停在函数第一行。 */
+    val function: String? = null
 ) : JsonDto {
     override fun toJson() = jsonObject {
-        put("id", id); put("source", source); put("line", line); put("condition", condition)
+        put("id", id); put("source", source); if (function == null || line > 0) put("line", line)
+        put("function", function); put("condition", condition)
         put("hitCondition", hitCondition); put("logMessage", logMessage)
         if (capture.isNotEmpty()) putStrings("capture", capture)
         if (autoContinue) put("autoContinue", true)
@@ -228,9 +233,11 @@ data class BreakpointSpec(
 
     companion object {
         fun fromJson(json: JsonObject) = BreakpointSpec(
-            json.reqString("id"), SourceRef.fromJson(json.reqObject("source")), json.reqInt("line"),
+            json.reqString("id"), json.optObject("source")?.let(SourceRef::fromJson),
+            if (json.optString("function") != null) json.optInt("line") ?: 0 else json.reqInt("line"),
             json.optString("condition"), json.optString("hitCondition"), json.optString("logMessage"),
-            json.strings("capture"), json.optBoolean("autoContinue") ?: false, json.optLong("vmId") ?: 0
+            json.strings("capture"), json.optBoolean("autoContinue") ?: false, json.optLong("vmId") ?: 0,
+            json.optString("function")
         )
     }
 }

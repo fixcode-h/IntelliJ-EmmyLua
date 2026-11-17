@@ -100,7 +100,7 @@ class DebugSession(
     private val pending = HashMap<Long, PendingRequest>()
     private val vms = VmRegistry()
     private val pauses = PauseStore()
-    private val breakpoints = BreakpointStore(::toSpec)
+    private val breakpoints = BreakpointStore(::toSpec, ::unsupportedBreakpoint)
     private var breakpointFlushScheduled = false
     private var lastBreakpointSend: CompletableFuture<Unit> = CompletableFuture.completedFuture(Unit)
     private val initiators = HashMap<Long, Initiator>()
@@ -885,8 +885,15 @@ class DebugSession(
         emit(DebugEvent.BreakpointsChanged(breakpoints.views()))
     }
 
+    /** 连上了但 runtime 没有函数断点能力：不下发，断点显示原因（没连上时不判断，连上后按 welcome 算）。 */
+    private fun unsupportedBreakpoint(request: BreakpointRequest): String? =
+        if (request.isFunction && welcome != null && !hasCapability(Capabilities.FUNCTION_BREAKPOINTS)) {
+            "目标进程里的调试 runtime 不支持函数断点（缺少能力 functionBreakpoints），请升级 runtime；也可以改用行断点。"
+        } else null
+
     private fun toSpec(id: String, request: BreakpointRequest): BreakpointSpec = BreakpointSpec(
-        id, sourceRef(request.file), request.line,
+        id, request.file.takeIf { it.isNotBlank() }?.let(::sourceRef), if (request.isFunction) 0 else request.line,
+        function = request.function?.trim()?.takeIf { request.isFunction },
         condition = request.condition?.takeIf { it.isNotBlank() },
         hitCondition = request.hitCondition?.takeIf { it.isNotBlank() },
         logMessage = request.logMessage?.takeIf { it.isNotEmpty() },

@@ -356,20 +356,23 @@ class LuaDebugTools(
         titleZh = "Lua 断点",
         description = ToolGuide(
             what = "Lists, adds, removes, enables and clears Lua breakpoints in the IDE (they show in the editor, marked as set by the agent): " +
-                "file+line, condition, hit count, logpoints (print a message and keep running) and probes (capture values and keep running).",
-            useWhen = "you want the game to stop where a suspect Lua line runs, only under a condition (hp <= 0), log values without stopping " +
+                "file+line or a function name, condition, hit count, logpoints (print a message and keep running) and probes (capture values and keep running).",
+            useWhen = "you want the game to stop where a suspect Lua line runs, or in a function whose file you don't know " +
+                "(function='Bag:OnClick' / 'M.add'), only under a condition (hp <= 0), log values without stopping " +
                 "(message 'hp={self.hp}'), or record values on every hit without freezing the game (capture=['self.hp'] + auto_continue=true, " +
                 "read with $INSPECT action=probes or $SESSION action=wait).",
             insteadOf = "editing scripts to add print() or asserts and reloading them.",
             notFor = "C++ / Blueprint. clear removes only breakpoints set by these tools unless scope=all; the user's own breakpoints are " +
                 "listed too (no byAgent), leave them alone. The first change asks the user in the IDE.",
-            results = "items with id (for remove/enable), file, line, condition, hitCount, message, capture, byAgent, verified (false = script " +
+            results = "items with id (for remove/enable), file, line or function, condition, hitCount, message, capture, byAgent, verified (false = script " +
                 "not loaded yet or no code on that line; it binds when the script loads).",
         ).render(),
         inputSchema = schema {
             string("action", "What to do.", required = true, enum = bpActions.toList())
-            string("file", "Lua file (absolute or relative to the project).")
-            integer("line", "1-based line.", minimum = 1)
+            string("file", "Lua file (absolute or relative to the project). add with function: optional, only that file's function.")
+            integer("line", "1-based line (not with function).", minimum = 1)
+            string("function", "add: function breakpoint instead of file+line: 'Module.func', 'Class:Method' or a global function name; " +
+                "stops at the function's first line when it is called. remove/enable: match by this name.")
             string("condition", "add: Lua condition, e.g. hp <= 0.")
             integerOrString("hit_count", "add: stop on the Nth hit (5), or '>=3', '%2' (every 2nd hit).")
             string("message", "add: logpoint, prints e.g. 'hp={self.hp}' to the debug output and keeps running.")
@@ -409,8 +412,21 @@ class LuaDebugTools(
 
     private fun addBreakpoint(b: LuaDebugBackend, call: ToolCall): Map<String, Any?> {
         val a = call.args
-        val file = a.requireString("file")
-        val line = a.requireInt("line", 1, Int.MAX_VALUE)
+        val function = a.string("function")?.trim()?.takeIf { it.isNotEmpty() }
+        val file: String
+        val line: Int
+        if (function != null) {
+            if (a.has("line")) throw ToolArgumentException("'function' 和 'line' 二选一：函数断点停在函数第一行，不要给行号")
+            if (!FUNCTION_NAME.matches(function)) {
+                throw ToolArgumentException("'function' 写法不对：用 Module.func、Class:Method 或全局函数名（段名是 Lua 标识符），收到 '$function'")
+            }
+            file = a.string("file")?.trim().orEmpty()
+            line = 0
+        } else {
+            if (!a.has("file")) throw ToolArgumentException("add 要给 'file' + 'line'，或者给 'function'（按函数名下断点）")
+            file = a.requireString("file")
+            line = a.requireInt("line", 1, Int.MAX_VALUE)
+        }
         val hit = when (val v = a.raw["hit_count"]) {
             null -> null
             is Number -> v.toInt().also { if (it < 1) throw ToolArgumentException("'hit_count' 从 1 开始") }.toString()
@@ -427,10 +443,15 @@ class LuaDebugTools(
             capture = a.stringList("capture", 16),
             autoContinue = a.bool("auto_continue", false),
             vmId = a.string("vm")?.takeIf { it.isNotBlank() },
+            function = function,
         )), timeouts.requestMillis)
         val m = LinkedHashMap(ResultJson.breakpoint(bp))
         if (!bp.verified) {
-            m["hint"] = bp.message ?: if (b.listSessions().isEmpty()) "还没有调试会话，附加后自动下发。" else "脚本还没加载，加载后自动生效。"
+            m["hint"] = bp.message ?: when {
+                b.listSessions().isEmpty() -> "还没有调试会话，附加后自动下发。"
+                function != null -> "还没找到这个函数（模块没加载或名字不对），函数被调用时按名字匹配并停在第一行。"
+                else -> "脚本还没加载，加载后自动生效。"
+            }
         }
         return m
     }
@@ -440,9 +461,12 @@ class LuaDebugTools(
         val ids = a.stringList("ids", 64)
         val file = a.string("file")?.takeIf { it.isNotBlank() }
         val line = a.int("line", 1, Int.MAX_VALUE)
-        if (id == null && ids.isEmpty() && file == null) throw ToolArgumentException("$action 要给 'id'、'ids' 或 'file'（+ 'line'）")
+        val function = a.string("function")?.trim()?.takeIf { it.isNotEmpty() }
+        if (id == null && ids.isEmpty() && file == null && function == null) {
+            throw ToolArgumentException("$action 要给 'id'、'ids'、'file'（+ 'line'）或 'function'")
+        }
         if (line != null && file == null) throw ToolArgumentException("'line' 要和 'file' 一起用")
-        return BreakpointFilter(breakpointId = id, breakpointIds = ids, file = file, line = line)
+        return BreakpointFilter(breakpointId = id, breakpointIds = ids, file = file, line = line, function = function)
     }
 
     private fun removeBreakpoints(b: LuaDebugBackend, call: ToolCall): Map<String, Any?> {
@@ -818,6 +842,9 @@ class LuaDebugTools(
         const val INSPECT = "lua_debug_inspect"
 
         private val MODULE_NAME = Regex("[A-Za-z0-9_\\-]+(\\.[A-Za-z0-9_\\-]+)*")
+
+        /** 函数断点的写法（和 runtime 的 ParseFunctionSpec 一致）：a.b.c、A.B:Method、func。 */
+        private val FUNCTION_NAME = Regex("[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*(:[A-Za-z_][A-Za-z0-9_]*)?")
 
         const val ENGINE_UNAVAILABLE = "IDE 里的 Lua 调试引擎还没准备好（没有打开的项目或插件版本过旧）。请用户打开 Lua 项目后重试。"
     }

@@ -82,6 +82,14 @@ class MessageCodecTest {
     }
 
     @Test
+    fun `函数断点不带行号，source 可省`() {
+        val fn = BreakpointSpec("f", null, 0, function = "UI.BagPanel:OnClick", condition = "index > 1")
+        val json = fn.toJson()
+        assertEquals(setOf("id", "function", "condition"), json.keySet())
+        assertEquals(fn, BreakpointSpec.fromJson(json))
+    }
+
+    @Test
     fun `缺少必填字段时报出字段名`() {
         val frame = Frame(FrameType.REQUEST, """{"command":"ping"}""".toByteArray())
         try {

@@ -53,7 +53,11 @@ class CompositeLuaDebugBackend(private val members: () -> List<Member>) : LuaDeb
 
     override fun capabilities(sessionId: String) = bySession(sessionId).capabilities(sessionId)
 
-    override fun setBreakpoint(spec: BreakpointSpec) = byFile(spec.file).setBreakpoint(spec)
+    // 函数断点不一定给文件：交给有调试会话的项目，都没有时交给第一个
+    override fun setBreakpoint(spec: BreakpointSpec) = when {
+        spec.file.isNotBlank() -> byFile(spec.file)
+        else -> all().firstOrNull { m -> m.backend.listSessions().isNotEmpty() }?.backend ?: primary()
+    }.setBreakpoint(spec)
 
     override fun removeBreakpoints(filter: BreakpointFilter): CompletableFuture<Int> =
         fanOut(filter.file) { it.removeBreakpoints(filter) }

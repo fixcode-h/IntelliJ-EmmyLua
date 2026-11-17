@@ -138,6 +138,7 @@ void Vm::Uninstall() {
 	if (errorsWrapped_) InstallErrorWrappers(mainL_, false);
 	inspector_.ResetConditionCache(mainL_);
 	ClearStep(mainL_);
+	ReleaseFunctionTargets(mainL_);
 	profiler_.Stop();
 	mux_.Uninstall();
 	UnregisterMux(g_);
@@ -302,7 +303,12 @@ int Vm::OnHook(lua_State* L, lua_Debug* ar) {
 	const int region = LUA_MASKCALL | LUA_MASKRET;
 	lua::FuncInfo f;
 	if (lua::IsCallEvent(ev)) {
-		if (lua::HookFuncInfo(L, ar, false, f) && IsHotFunc(f)) return BaseMask() | region | LUA_MASKLINE;
+		const bool hasInfo = lua::HookFuncInfo(L, ar, false, f);
+		// 函数断点：命中时给这个函数开 LINE，在它的第一行停（那时参数已经就位，条件和局部变量才取得到）
+		if (hasInfo && anyFuncBreakpoints_.load(std::memory_order_relaxed) && OnFunctionCall(L, ar, f)) {
+			return BaseMask() | region | LUA_MASKLINE;
+		}
+		if (hasInfo && IsHotFunc(f)) return BaseMask() | region | LUA_MASKLINE;
 		return BaseMask() | (curMask & LUA_MASKRET ? region : 0);
 	}
 	if (ev == LUA_HOOKRET) {
@@ -335,7 +341,10 @@ int Vm::OnHook(lua_State* L, lua_Debug* ar) {
 			}
 		}
 		const uint64_t pausesBefore = pauseCounter_;
-		if (pauseAtLine_) {
+		// 函数断点在这个函数的第一行停下时，这一行不再按行断点 / 单步再停一次
+		const bool funcPaused = funcPending_.L == L && OnFunctionEntry(L, ar, hasInfo ? f : lua::FuncInfo{});
+		if (funcPaused) {
+		} else if (pauseAtLine_) {
 			pauseAtLine_ = false;
 			EnterPause(L, pauseAtLineReason_, {}, nullptr);
 		} else if (step_.kind != ResumeKind::None) {
@@ -434,94 +443,98 @@ void Vm::ReportMatch(const SourceEntry& entry) {
 	}
 }
 
-void Vm::OnBreakLine(lua_State* L, lua_Debug* ar, SourceEntry* entry) {
+bool Vm::HandleBreakpointHit(lua_State* L, const Breakpoint* bp, int line, const std::string& chunk) {
 	Core& core = Core::Get();
 	Options& opt = core.options();
+	if (!bp->condition.empty()) {
+		bool ok = false;
+		std::string err;
+		if (!inspector_.EvalCondition(L, bp->serial, bp->condition, opt.evalTimeoutMs.load(), ok, err)) {
+			auto& reported = reported_[bp->serial];
+			if (reported != "invalid") {
+				reported = "invalid";
+				core.Emit("breakpointStatus", {{"id", bp->id}, {"vmId", id_}, {"state", "invalid"}, {"message", "条件求值出错：" + err}});
+			}
+			return false;
+		}
+		if (!ok) return false;
+	}
+	int64_t& count = hitCounts_[bp->serial];
+	++count;
+	if (!bp->hitCondition.Check(count)) return false;
+	if (!bp->logMessage.empty()) {
+		// {expr} 插值；{{ / }} 转义
+		std::string out;
+		const std::string& m = bp->logMessage;
+		for (size_t i = 0; i < m.size(); ++i) {
+			if (m[i] == '{' && i + 1 < m.size() && m[i + 1] == '{') { out += '{'; ++i; continue; }
+			if (m[i] == '}' && i + 1 < m.size() && m[i + 1] == '}') { out += '}'; ++i; continue; }
+			if (m[i] == '{') {
+				size_t end = m.find('}', i + 1);
+				if (end == std::string::npos) { out += m.substr(i); break; }
+				std::string expr = m.substr(i + 1, end - i - 1);
+				std::string err;
+				int top = lua_gettop(L);
+				bool ok = opt.allowLuaEval.load() ? inspector_.EvalLuaAt(L, 0, expr, opt.evalTimeoutMs.load(), err)
+												  : inspector_.EvalValuePathAt(L, 0, expr, false, err);
+				if (ok) {
+					if (lua_type(L, -1) == LUA_TSTRING) out += lua_tostring(L, -1);
+					else out += inspector_.Summarize(L, -1, 256);
+				} else {
+					out += "<" + err + ">";
+				}
+				lua_settop(L, top);
+				i = end;
+				continue;
+			}
+			out += m[i];
+		}
+		out += '\n';
+		core.Emit("output", {{"category", "logpoint"}, {"text", out}, {"vmId", id_}, {"chunkName", chunk}, {"line", line}});
+	}
+	if (!bp->Pauses() || !bp->capture.empty()) {
+		if (!bp->Pauses()) {
+			// 每个断点每秒最多 100 条
+			int64_t now = WallMs();
+			int64_t& winStart = hitWindowStart_[bp->serial];
+			int& winCount = hitWindowCount_[bp->serial];
+			if (now - winStart >= 1000) { winStart = now; winCount = 0; }
+			if (++winCount > 100) { ++hitDropped_[bp->serial]; return false; }
+		}
+		json captures = json::array();
+		for (const std::string& expr : bp->capture) {
+			std::string err;
+			int top = lua_gettop(L);
+			json c = {{"expression", expr}};
+			if (inspector_.EvalValuePathAt(L, 0, expr, opt.valuePathInvokeIndex.load(), err)) {
+				std::string typeName;
+				c["value"] = inspector_.Summarize(L, -1, 1024, &typeName);
+				c["type"] = lua_typename(L, lua_type(L, -1));
+				if (!typeName.empty()) c["typeName"] = typeName;
+			} else {
+				c["error"] = err;
+			}
+			lua_settop(L, top);
+			captures.push_back(std::move(c));
+		}
+		if (!bp->Pauses()) {
+			json body = {{"id", bp->id}, {"vmId", id_}, {"threadId", ThreadIdOf(L)}, {"hitCount", count}, {"line", line},
+				{"timeMs", WallMs()}, {"captures", std::move(captures)}};
+			int& dropped = hitDropped_[bp->serial];
+			if (dropped) { body["dropped"] = dropped; dropped = 0; }
+			core.Emit("breakpointHit", std::move(body));
+		}
+	}
+	return bp->Pauses();
+}
+
+void Vm::OnBreakLine(lua_State* L, lua_Debug* ar, SourceEntry* entry) {
 	const int line = ar->currentline;
 	std::vector<std::string> pauseIds;
 	bool rtlHit = entry->rtl && entry->rtlLine == line;
 	for (const Breakpoint* bp : entry->match.bps) {
 		if (bp->line != line) continue;
-		if (!bp->condition.empty()) {
-			bool ok = false;
-			std::string err;
-			if (!inspector_.EvalCondition(L, bp->serial, bp->condition, opt.evalTimeoutMs.load(), ok, err)) {
-				auto& reported = reported_[bp->serial];
-				if (reported != "invalid") {
-					reported = "invalid";
-					core.Emit("breakpointStatus", {{"id", bp->id}, {"vmId", id_}, {"state", "invalid"}, {"message", "条件求值出错：" + err}});
-				}
-				continue;
-			}
-			if (!ok) continue;
-		}
-		int64_t& count = hitCounts_[bp->serial];
-		++count;
-		if (!bp->hitCondition.Check(count)) continue;
-		if (!bp->logMessage.empty()) {
-			// {expr} 插值；{{ / }} 转义
-			std::string out;
-			const std::string& m = bp->logMessage;
-			for (size_t i = 0; i < m.size(); ++i) {
-				if (m[i] == '{' && i + 1 < m.size() && m[i + 1] == '{') { out += '{'; ++i; continue; }
-				if (m[i] == '}' && i + 1 < m.size() && m[i + 1] == '}') { out += '}'; ++i; continue; }
-				if (m[i] == '{') {
-					size_t end = m.find('}', i + 1);
-					if (end == std::string::npos) { out += m.substr(i); break; }
-					std::string expr = m.substr(i + 1, end - i - 1);
-					std::string err;
-					int top = lua_gettop(L);
-					bool ok = opt.allowLuaEval.load() ? inspector_.EvalLuaAt(L, 0, expr, opt.evalTimeoutMs.load(), err)
-													  : inspector_.EvalValuePathAt(L, 0, expr, false, err);
-					if (ok) {
-						if (lua_type(L, -1) == LUA_TSTRING) out += lua_tostring(L, -1);
-						else out += inspector_.Summarize(L, -1, 256);
-					} else {
-						out += "<" + err + ">";
-					}
-					lua_settop(L, top);
-					i = end;
-					continue;
-				}
-				out += m[i];
-			}
-			out += '\n';
-			core.Emit("output", {{"category", "logpoint"}, {"text", out}, {"vmId", id_}, {"chunkName", entry->chunk}, {"line", line}});
-		}
-		if (!bp->Pauses() || !bp->capture.empty()) {
-			if (!bp->Pauses()) {
-				// 每个断点每秒最多 100 条
-				int64_t now = WallMs();
-				int64_t& winStart = hitWindowStart_[bp->serial];
-				int& winCount = hitWindowCount_[bp->serial];
-				if (now - winStart >= 1000) { winStart = now; winCount = 0; }
-				if (++winCount > 100) { ++hitDropped_[bp->serial]; continue; }
-			}
-			json captures = json::array();
-			for (const std::string& expr : bp->capture) {
-				std::string err;
-				int top = lua_gettop(L);
-				json c = {{"expression", expr}};
-				if (inspector_.EvalValuePathAt(L, 0, expr, opt.valuePathInvokeIndex.load(), err)) {
-					std::string typeName;
-					c["value"] = inspector_.Summarize(L, -1, 1024, &typeName);
-					c["type"] = lua_typename(L, lua_type(L, -1));
-					if (!typeName.empty()) c["typeName"] = typeName;
-				} else {
-					c["error"] = err;
-				}
-				lua_settop(L, top);
-				captures.push_back(std::move(c));
-			}
-			if (!bp->Pauses()) {
-				json body = {{"id", bp->id}, {"vmId", id_}, {"threadId", ThreadIdOf(L)}, {"hitCount", count}, {"line", line},
-					{"timeMs", WallMs()}, {"captures", std::move(captures)}};
-				int& dropped = hitDropped_[bp->serial];
-				if (dropped) { body["dropped"] = dropped; dropped = 0; }
-				core.Emit("breakpointHit", std::move(body));
-			}
-		}
-		if (bp->Pauses()) pauseIds.push_back(bp->id);
+		if (HandleBreakpointHit(L, bp, line, entry->chunk)) pauseIds.push_back(bp->id);
 	}
 	if (!pauseIds.empty()) {
 		EnterPause(L, "breakpoint", std::move(pauseIds), nullptr);
@@ -629,6 +642,7 @@ void Vm::ResetSessionState(lua_State* L) {
 	ClearStep(L);
 	pauseAtLine_ = false;
 	inspector_.ResetConditionCache(L);
+	ReleaseFunctionTargets(L);
 	++cacheStamp_;
 }
 
@@ -645,6 +659,17 @@ void Vm::RefreshIndex() {
 		lastSource_ = nullptr;
 	}
 	anyBreakpoints_.store(index_ && index_->AnyFor(id_), std::memory_order_relaxed);
+	anyLineBreakpoints_.store(index_ && index_->AnyLineFor(id_), std::memory_order_relaxed);
+	// 函数断点：每次刷新都重新解析（断点、上下文、热重载都可能换掉函数）
+	funcBps_.clear();
+	if (index_) {
+		for (const BreakpointPtr& bp : index_->functions()) {
+			if (bp->vmId == 0 || bp->vmId == id_) funcBps_.push_back(bp);
+		}
+	}
+	funcDirty_ = true;
+	if (funcBps_.empty()) funcPending_ = FuncPending{};
+	anyFuncBreakpoints_.store(!funcBps_.empty(), std::memory_order_relaxed);
 	{
 		std::lock_guard<std::mutex> lock(diagMutex_);
 		if (diagIndex_ != index_.get()) {
@@ -670,7 +695,8 @@ void Vm::DiagRecordSource(const SourceEntry& e) {
 }
 
 std::string Vm::BreakpointDiagnostics(const void* currentIndex) {
-	if (!anyBreakpoints_.load(std::memory_order_relaxed)) return {};
+	// 只管行断点：函数断点没有文件可对，解析不到时按名字兜底，不算「路径对不上」
+	if (!anyLineBreakpoints_.load(std::memory_order_relaxed)) return {};
 	std::lock_guard<std::mutex> lock(diagMutex_);
 	if (diagReported_ || diagMatched_) return {};
 	diagReported_ = true;

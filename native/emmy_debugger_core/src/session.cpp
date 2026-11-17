@@ -31,6 +31,7 @@ namespace {
 const char* const kRuntimeCaps[] = {
 	"cbor", "valuePath", "luaEval", "setVariable", "condition", "hitCondition", "logpoint", "capture",
 	"runToLine", "coroutines", "output", "helpers", "sourceHash", "hookMux", "richVariables", "exceptions", "viewRules", "profiler",
+	"functionBreakpoints",
 };
 
 const char* PlatformName() {
@@ -359,8 +360,13 @@ void Session::CmdSetBreakpoints(uint64_t id, const json& args) {
 				bp->chunkName = GetStr(j["source"], "chunkName");
 				bp->sha256 = GetStr(j["source"], "sha256");
 			}
-			if (bp->id.empty() || bp->line <= 0 || (bp->path.empty() && bp->chunkName.empty())) {
-				return Fail(id, "INVALID_ARGS", "断点必须有 id、source.path 和正整数 line。");
+			bp->function = GetStr(j, "function");
+			if (!bp->function.empty()) {
+				// 函数断点：不要行号，source 可选（只限定文件）
+				bp->line = 0;
+				if (bp->id.empty()) return Fail(id, "INVALID_ARGS", "断点必须有 id。");
+			} else if (bp->id.empty() || bp->line <= 0 || (bp->path.empty() && bp->chunkName.empty())) {
+				return Fail(id, "INVALID_ARGS", "断点必须有 id、source.path 和正整数 line（函数断点用 function）。");
 			}
 			bp->condition = GetStr(j, "condition");
 			bp->hitConditionText = GetStr(j, "hitCondition");
@@ -375,6 +381,7 @@ void Session::CmdSetBreakpoints(uint64_t id, const json& args) {
 			std::string err;
 			json st = {{"id", bp->id}, {"state", "pending"}};
 			bool valid = HitCondition::Parse(bp->hitConditionText, bp->hitCondition, err);
+			if (valid && bp->IsFunction()) valid = ParseFunctionSpec(bp->function, *bp, err);
 			if (valid && !bp->condition.empty() && !checker.Check(bp->condition, err)) {
 				valid = false;
 				err = "条件表达式语法错误：" + err;
