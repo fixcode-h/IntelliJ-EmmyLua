@@ -57,16 +57,21 @@ class UnrealDeclWatcher(private val project: Project) : Disposable {
         EmmyLuaServer.restart(project)
     }
 
-    /** IDE 里勾了开关、UE 编辑器后开（或重开）的，补一次 luadecl.enable；没勾时不动 UE 那边（可能是在控制台里开的） */
+    /**
+     * IDE 里勾了开关、UE 编辑器后开（或重开）的，补一次 luadecl.enable（连同蓝图开关；UE 那边蓝图开关和 IDE 不一致也改过来）；
+     * 没勾时不动 UE 那边（可能是在控制台里开的）
+     */
     private fun syncEditor() {
-        if (!LuaProjectSettings.getInstance(project).unrealLuaDecl) return
+        val settings = LuaProjectSettings.getInstance(project)
+        if (!settings.unrealLuaDecl) return
         val ue = UnrealDecl.ueRoot(project) ?: return
         val editor = UELinkClient.findEditor(ue) ?: return
         if (editor.pid == syncedPid) return
         runCatching {
             val status = UELinkClient.call(editor, "luadecl.status")
-            if (status.get("active")?.asBoolean != true) {
-                UELinkClient.call(editor, "luadecl.enable", com.google.gson.JsonObject().apply { addProperty("enabled", true) })
+            val blueprints = settings.unrealLuaDeclBlueprints
+            if (status.get("active")?.asBoolean != true || UnrealDecl.blueprintsDiffer(status, blueprints)) {
+                UELinkClient.call(editor, "luadecl.enable", UnrealDecl.enableArgs(true, blueprints))
             }
             syncedPid = editor.pid
         }

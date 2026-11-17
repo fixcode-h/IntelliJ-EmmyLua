@@ -23,7 +23,17 @@ abstract class UnrealDeclActionBase(private val mode: UnrealDecl.Refresh) : AnAc
 }
 
 class RefreshUnrealDeclAction : UnrealDeclActionBase(UnrealDecl.Refresh.CHANGED)
-class LoadBlueprintsUnrealDeclAction : UnrealDeclActionBase(UnrealDecl.Refresh.LOAD_BLUEPRINTS)
+/** 蓝图声明没打开时置灰（点了也只会报「先打开蓝图声明」） */
+class LoadBlueprintsUnrealDeclAction : UnrealDeclActionBase(UnrealDecl.Refresh.LOAD_BLUEPRINTS) {
+    override fun update(e: AnActionEvent) {
+        super.update(e)
+        val project = e.project ?: return
+        if (e.presentation.isVisible && !LuaProjectSettings.getInstance(project).unrealLuaDeclBlueprints) {
+            e.presentation.isEnabled = false
+            e.presentation.description = "没打开蓝图声明：在 设置 → EmmyLua → 库目录 勾选「${UnrealDecl.BLUEPRINTS_LABEL}」"
+        }
+    }
+}
 class RebuildUnrealDeclAction : UnrealDeclActionBase(UnrealDecl.Refresh.FORCE)
 
 /**

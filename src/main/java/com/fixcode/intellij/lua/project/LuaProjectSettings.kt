@@ -21,6 +21,9 @@ class LuaProjectSettings : PersistentStateComponent<LuaProjectSettings> {
     /** 让 UE 编辑器（UELink 2.5+）后台生成 UE 反射的 Lua 声明；默认关（用户 2026-11-16 要求不默认生成）。 */
     var unrealLuaDecl: Boolean = false
 
+    /** 上面打开时，蓝图（及用户定义结构体 / 枚举）也生成声明（UELink 2.7+ 的 `blueprints`）；默认关，只出 C++ 反射类型（用户 2026-11-17 定）。 */
+    var unrealLuaDeclBlueprints: Boolean = false
+
     override fun getState(): LuaProjectSettings = this
 
     override fun loadState(state: LuaProjectSettings) {
