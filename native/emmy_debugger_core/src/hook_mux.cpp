@@ -28,6 +28,10 @@ struct MuxSlot {
 
 MuxSlot g_slots[kMaxVms];
 std::mutex g_slotsMutex;
+// 登记表每变一次加 1：FindMux 的线程缓存只在代数没变时可用。
+// VM 关掉后新建的 global_State 常常落在同一个地址（UE 里 PIE 重启、Lua 环境重建），
+// 只比地址会拿到已经释放的旧 HookMux，新 VM 的断点永远不触发。
+std::atomic<uint64_t> g_slotsGen{1};
 
 void AdoptedTrampoline(lua_State* L, lua_Debug* ar, void* ud) {
 	auto hook = reinterpret_cast<lua_Hook>(ud);
@@ -44,6 +48,7 @@ void RegisterMux(const void* globalState, HookMux* mux) {
 		if (slot.g.load(std::memory_order_relaxed) == nullptr) {
 			slot.mux.store(mux, std::memory_order_relaxed);
 			slot.g.store(globalState, std::memory_order_release);
+			g_slotsGen.fetch_add(1, std::memory_order_acq_rel);
 			return;
 		}
 	}
@@ -57,19 +62,23 @@ void UnregisterMux(const void* globalState) {
 			slot.mux.store(nullptr, std::memory_order_relaxed);
 		}
 	}
+	g_slotsGen.fetch_add(1, std::memory_order_acq_rel);
 }
 
 HookMux* FindMux(const void* globalState) {
 	// 每个线程记住上一次的结果：同一线程几乎总是跑同一个 VM
 	thread_local const void* lastG = nullptr;
 	thread_local HookMux* lastMux = nullptr;
-	if (globalState == lastG && lastMux) {
+	thread_local uint64_t lastGen = 0;
+	const uint64_t gen = g_slotsGen.load(std::memory_order_acquire);
+	if (globalState == lastG && lastMux && gen == lastGen) {
 		return lastMux;
 	}
 	for (auto& slot : g_slots) {
 		if (slot.g.load(std::memory_order_acquire) == globalState) {
 			lastG = globalState;
 			lastMux = slot.mux.load(std::memory_order_relaxed);
+			lastGen = gen;
 			return lastMux;
 		}
 	}

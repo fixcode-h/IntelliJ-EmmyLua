@@ -3,6 +3,8 @@
 //
 // 用法：emmy_core_ide_host <port> <脚本文件> <chunkName>
 // 准备好后在标准输出打印一行 READY；标准输入关闭（父进程退出）时结束。
+// 标准输入收到一行 rebuild：关掉当前 lua_State 再新建一个重新加载脚本（模拟 UE 里 PIE 重启、Lua 环境重建），
+// 新 VM 跑起来后打印 REBUILT。
 #include "emmy/emmy_core.h"
 #include "lua_shim.h"
 
@@ -37,19 +39,32 @@ int main(int argc, char** argv) {
 
 	std::atomic<bool> stop{false};
 	std::atomic<bool> ready{false};
+	std::atomic<bool> rebuild{false};
 	std::thread game([&] {
-		lua_State* L = luaL_newstate();
-		luaL_openlibs(L);
-		Emmy_RegisterLuaVm(L, "ide-host");
-		Emmy_SetVmName(L, "GameVM");
-		if (emmy::lua::LoadBuffer(L, script.data(), script.size(), chunkName.c_str()) != LUA_OK || lua_pcall(L, 0, 1, 0) != LUA_OK) {
-			std::fprintf(stderr, "script error: %s\n", lua_tostring(L, -1));
-			std::exit(4);
-		}
-		const int mod = lua_gettop(L);
+		lua_State* L = nullptr;
+		int mod = 0;
+		auto open = [&] {
+			L = luaL_newstate();
+			luaL_openlibs(L);
+			Emmy_RegisterLuaVm(L, "ide-host");
+			Emmy_SetVmName(L, "GameVM");
+			if (emmy::lua::LoadBuffer(L, script.data(), script.size(), chunkName.c_str()) != LUA_OK || lua_pcall(L, 0, 1, 0) != LUA_OK) {
+				std::fprintf(stderr, "script error: %s\n", lua_tostring(L, -1));
+				std::exit(4);
+			}
+			mod = lua_gettop(L);
+		};
+		open();
 		ready = true;
 		lua_Integer i = 0;
 		while (!stop) {
+			if (rebuild.exchange(false)) {
+				Emmy_UnregisterLuaVm(L);
+				lua_close(L);
+				open();
+				std::printf("REBUILT\n");
+				std::fflush(stdout);
+			}
 			lua_getfield(L, mod, "tick");
 			lua_pushinteger(L, ++i);
 			if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
@@ -66,7 +81,9 @@ int main(int argc, char** argv) {
 	std::fflush(stdout);
 
 	// 父进程（测试）退出或关掉管道时结束，避免留下孤儿进程
-	while (std::getchar() != EOF) {
+	char line[64];
+	while (std::fgets(line, sizeof(line), stdin)) {
+		if (std::string(line).rfind("rebuild", 0) == 0) rebuild = true;
 	}
 	stop = true;
 	game.join();

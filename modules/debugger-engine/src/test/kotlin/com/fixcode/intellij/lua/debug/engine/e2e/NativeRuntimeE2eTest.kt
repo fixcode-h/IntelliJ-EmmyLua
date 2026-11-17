@@ -41,6 +41,7 @@ import java.util.concurrent.TimeUnit
  */
 class NativeRuntimeE2eTest {
     private lateinit var host: Process
+    private lateinit var hostOut: java.io.BufferedReader
     private lateinit var root: File
     private lateinit var script: File
     private var port = 0
@@ -59,7 +60,8 @@ class NativeRuntimeE2eTest {
         host = ProcessBuilder(binary!!.path, port.toString(), script.path, "@game/main.lua")
             .redirectError(ProcessBuilder.Redirect.INHERIT)
             .start()
-        val ready = CompletableFuture.supplyAsync { host.inputStream.bufferedReader().readLine() }.get(10, TimeUnit.SECONDS)
+        hostOut = host.inputStream.bufferedReader()
+        val ready = CompletableFuture.supplyAsync { hostOut.readLine() }.get(10, TimeUnit.SECONDS)
         assertEquals("READY", ready)
     }
 
@@ -310,6 +312,32 @@ class NativeRuntimeE2eTest {
         lastEvents.assertNone<DebugEvent.Paused>(300)
         last.addBreakpoint(BreakpointRequest(script.path, LINE_ADD_BODY)).await()
         assertEquals(LINE_ADD_BODY, lastEvents.pause().top!!.line)
+    }
+
+    /**
+     * 用户场景：附加后 UE 重建 Lua 环境（PIE 重启：旧 lua_State 关掉、新建一个重新加载脚本）。
+     * 附加时就有的断点要在新 VM 上照样生效、命中，状态回到「已生效」。
+     */
+    @Test
+    fun `Lua 环境重建后 原有断点在新 VM 上照样命中`() {
+        val (session, events) = session()
+        val id = session.addBreakpoint(BreakpointRequest(script.path, LINE_LOCAL_R)).await()
+        var pause = events.pause()
+        val seenVms = hashSetOf(pause.vmId)
+        repeat(2) { round ->
+            // 停着时让宿主重建：继续后当前 tick 跑完就关掉旧 lua_State、新建一个
+            host.outputStream.write("rebuild\n".toByteArray())
+            host.outputStream.flush()
+            session.resume(pause.vmId).await()
+            assertEquals("REBUILT", CompletableFuture.supplyAsync { hostOut.readLine() }.get(10, TimeUnit.SECONDS))
+            events.await<DebugEvent.VmClosed>(5_000)
+            pause = events.pause()
+            assertEquals("第 ${round + 1} 次重建", PauseReasons.BREAKPOINT, pause.reason)
+            assertEquals(LINE_LOCAL_R, pause.top!!.line)
+            assertTrue("第 ${round + 1} 次重建应停在新 VM 上", seenVms.add(pause.vmId))
+            assertEquals(BreakpointVerification.VERIFIED, session.breakpoints().single { it.id == id }.verification)
+        }
+        session.resume(pause.vmId).await()
     }
 
     /** 旧会话还连着时再附加：先收到 BUSY 自动重试，旧会话一停就连上，断点照常生效。 */
