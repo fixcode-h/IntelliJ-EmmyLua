@@ -7,7 +7,7 @@ import com.intellij.psi.tree.IElementType
 /**
  * 手写的 Lua 词法器（5.1–5.4 + LuaJIT 数字后缀），只给编辑器用：高亮、括号、注释、调试器取名字。
  *
- * 状态只有三种：普通、注解行里标签之前、注解行里标签之后。长字符串、长注释都是一整个 token，
+ * 状态只有四种：普通、注解行里标签之前、注解行里标签之后、`--region` 的说明文字。长字符串、长注释都是一整个 token，
  * 所以 token 开头总是状态 0（注解行内部除外），平台增量重扫时从最近的状态 0 处开始即可。
  */
 class LuaLexer : LexerBase() {
@@ -48,6 +48,7 @@ class LuaLexer : LexerBase() {
         when (state) {
             STATE_DOC_BEFORE_TAG -> lexDocBeforeTag()
             STATE_DOC_REST -> lexDocRest()
+            STATE_REGION_DESC -> lexDocRest(T.REGION_DESC)
             else -> lexNormal()
         }
     }
@@ -98,7 +99,22 @@ class LuaLexer : LexerBase() {
             }
             return
         }
+        // --region 说明 / --endregion：标记和说明分开上色（旧版配色就这样分）
+        for (mark in REGION_MARKS) {
+            val end = afterDashes + mark.length
+            if (matches(afterDashes, mark) && (end >= bufferEnd || at(end) == ' ' || at(end) == '\t' || at(end) == '\n' || at(end) == '\r')) {
+                if (lineEnd(end) > end) state = STATE_REGION_DESC
+                finish(end, T.REGION_MARK)
+                return
+            }
+        }
         finish(lineEnd(afterDashes), T.LINE_COMMENT)
+    }
+
+    private fun matches(from: Int, word: String): Boolean {
+        if (from + word.length > bufferEnd) return false
+        for (i in word.indices) if (buffer[from + i] != word[i]) return false
+        return true
     }
 
     private fun lexDocBeforeTag() {
@@ -114,9 +130,9 @@ class LuaLexer : LexerBase() {
         }
     }
 
-    private fun lexDocRest() {
+    private fun lexDocRest(type: IElementType = T.DOC_COMMENT) {
         state = STATE_NORMAL
-        finish(lineEnd(tokenStart), T.DOC_COMMENT)
+        finish(lineEnd(tokenStart), type)
     }
 
     private fun lexOperator(p: Int, c: Char) {
@@ -229,6 +245,8 @@ class LuaLexer : LexerBase() {
         const val STATE_NORMAL = 0
         const val STATE_DOC_BEFORE_TAG = 1
         const val STATE_DOC_REST = 2
+        const val STATE_REGION_DESC = 3
+        private val REGION_MARKS = listOf("endregion", "region")
 
         private fun Char.isNameStart() = this == '_' || this in 'a'..'z' || this in 'A'..'Z' || this.code >= 0x80
         private fun Char.isNamePart() = isNameStart() || this in '0'..'9'

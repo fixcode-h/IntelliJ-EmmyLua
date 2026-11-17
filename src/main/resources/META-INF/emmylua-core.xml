@@ -12,6 +12,9 @@
         <lang.parserDefinition language="Lua" implementationClass="com.fixcode.intellij.lua.lang.LuaParserDefinition"/>
         <lang.syntaxHighlighterFactory language="Lua" implementationClass="com.fixcode.intellij.lua.highlighting.LuaSyntaxHighlighterFactory"/>
         <colorSettingsPage implementation="com.fixcode.intellij.lua.highlighting.LuaColorSettingsPage"/>
+        <!-- 旧版的配色方案，原样保留：升级后代码颜色不变 -->
+        <additionalTextAttributes scheme="Default" file="colorSchemes/Default.xml"/>
+        <additionalTextAttributes scheme="Darcula" file="colorSchemes/Darcula.xml"/>
         <lang.commenter language="Lua" implementationClass="com.fixcode.intellij.lua.editor.LuaCommenter"/>
         <lang.braceMatcher language="Lua" implementationClass="com.fixcode.intellij.lua.editor.LuaBraceMatcher"/>
         <lang.quoteHandler language="Lua" implementationClass="com.fixcode.intellij.lua.editor.LuaQuoteHandler"/>

@@ -21,6 +21,10 @@ object LuaTokenTypes {
     @JvmField val DOC_COMMENT = LuaTokenType("DOC_COMMENT")
     /** `---@class` 里的 `@class`。 */
     @JvmField val DOC_TAG = LuaTokenType("DOC_TAG")
+    /** `--region` / `--endregion` 本身。 */
+    @JvmField val REGION_MARK = LuaTokenType("REGION_MARK")
+    /** `--region` 后面的说明文字。 */
+    @JvmField val REGION_DESC = LuaTokenType("REGION_DESC")
 
     @JvmField val STRING = LuaTokenType("STRING")
     @JvmField val LONG_STRING = LuaTokenType("LONG_STRING")
@@ -54,6 +58,6 @@ object LuaTokenTypes {
     val CONSTANTS: Set<String> = setOf("nil", "true", "false")
 
     @JvmField val WHITESPACES: TokenSet = TokenSet.create(WHITE_SPACE)
-    @JvmField val COMMENTS: TokenSet = TokenSet.create(LINE_COMMENT, BLOCK_COMMENT, DOC_COMMENT, DOC_TAG)
+    @JvmField val COMMENTS: TokenSet = TokenSet.create(LINE_COMMENT, BLOCK_COMMENT, DOC_COMMENT, DOC_TAG, REGION_MARK, REGION_DESC)
     @JvmField val STRINGS: TokenSet = TokenSet.create(STRING, LONG_STRING)
 }

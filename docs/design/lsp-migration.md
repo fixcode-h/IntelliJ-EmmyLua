@@ -50,6 +50,8 @@ IDE 里只保留不需要语义的东西，全部基于一个**手写的 Kotlin 
 
 语义上的东西（变量是局部还是全局、类名、函数调用）由 emmylua_ls 的**语义高亮**叠加上色。
 
+**配色和旧版一致**：配色键的外部名、默认回退色、配色页条目和 `colorSchemes/Default.xml`、`Darcula.xml` 都照旧版。词法高亮把关键字分成普通 / 控制流 / 逻辑 / goto，运算符分成比较 / 算术 / 位运算 / 连接 / 长度，`--region` 标记和说明分开（`LuaHighlightingLexer`，只在高亮时细分）。语义 token 按 emmylua_ls 实际发的类型和修饰符映射到旧键（`EmmyLuaSemanticTokensColors`：`readonly` 只表示没被重新赋值，`static` 表示全局；关键字、运算符、`self` 留给词法）。emmylua_ls 区分不出的几类（上值、局部函数和全局函数、闭包变量、标准库表 `string`/`math` 本身）按最接近的键上色，旧键保留在配色页里。
+
 ### 2.3 功能对照
 
 | 功能 | 旧实现 | 新实现 |

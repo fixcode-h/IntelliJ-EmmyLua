@@ -1,7 +1,11 @@
 package com.fixcode.intellij.lua.lang
 
 import com.fixcode.intellij.lua.lsp.EmmyLuaServer
+import com.fixcode.intellij.lua.highlighting.LuaColorSettingsPage
+import com.fixcode.intellij.lua.highlighting.LuaHighlightingData
 import com.intellij.codeInsight.generation.actions.CommentByLineCommentAction
+import com.intellij.openapi.editor.colors.EditorColorsManager
+import java.awt.Color
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.redhat.devtools.lsp4ij.LanguageServersRegistry
 
@@ -32,5 +36,20 @@ class LuaPluginWiringTest : BasePlatformTestCase() {
         assertNotNull(registry.getServerDefinition(EmmyLuaServer.ID))
         val file = myFixture.configureByText("b.lua", "")
         assertTrue(registry.isFileSupported(file))
+    }
+
+    /** 旧版的配色方案已经装上：Darcula 下成员变量、函数调用还是原来的颜色。 */
+    fun testOldColorSchemesLoaded() {
+        val darcula = EditorColorsManager.getInstance().getScheme("Darcula")
+        assertNotNull("测试环境里应有 Darcula 配色方案", darcula)
+        assertEquals(Color(0x87CEEB), darcula!!.getAttributes(LuaHighlightingData.FIELD)?.foregroundColor)
+        assertEquals(Color(0xA4F65E), darcula!!.getAttributes(LuaHighlightingData.FUNCTION_CALL)?.foregroundColor)
+        assertEquals(Color(0xCC542E), darcula!!.getAttributes(LuaHighlightingData.STD_API)?.foregroundColor)
+    }
+
+    fun testColorSettingsPageDemoTagsKnown() {
+        val page = LuaColorSettingsPage()
+        val tags = Regex("<(\\w+)>").findAll(page.demoText).map { it.groupValues[1] }.toSet()
+        assertEquals(emptySet<String>(), tags - page.additionalHighlightingTagToDescriptorMap.keys)
     }
 }

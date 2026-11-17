@@ -66,6 +66,15 @@ class LuaLexerTest {
     }
 
     @Test
+    fun regionComments() {
+        assertEquals(
+            listOf(T.REGION_MARK to "--region", T.REGION_DESC to " members", T.NAME to "x", T.REGION_MARK to "--endregion"),
+            lex("--region members\nx\n--endregion"),
+        )
+        assertEquals(listOf(T.LINE_COMMENT), types("--regional"))
+    }
+
+    @Test
     fun operators() {
         assertEquals(
             listOf(T.ELLIPSIS, T.CONCAT, T.OPERATOR, T.OPERATOR, T.OPERATOR, T.DOUBLE_COLON, T.COLON, T.OPERATOR),
