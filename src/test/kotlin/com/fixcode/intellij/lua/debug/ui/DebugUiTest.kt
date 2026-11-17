@@ -12,6 +12,36 @@ import org.w3c.dom.Element
 
 class DebugUiTest : BasePlatformTestCase() {
 
+    fun testFramesLocationFit() {
+        val w: (String) -> Int = { it.length }
+        val fit = com.fixcode.intellij.lua.debug.ui.session.LuaFramesListLayout::fit
+        assertEquals("  a/b/c.lua:3", fit("  a/b/c.lua:3", 100, w))
+        assertEquals("  …/c.lua:3", fit("  a/b/c.lua:3", 11, w))
+        assertEquals("  …c.lua:3", fit("  a/b/c.lua:3", 10, w))
+        assertNull("连文件名都放不下就不省略", fit("  a/b/c.lua:3", 5, w))
+    }
+
+    fun testFramesLocationRightAligned() {
+        val list = com.intellij.ui.components.JBList(listOf("f"))
+        list.setSize(600, 100)
+        val renderer = object : com.intellij.ui.ColoredListCellRenderer<String>() {
+            override fun customizeCellRenderer(l: javax.swing.JList<out String>, value: String, index: Int, selected: Boolean, focus: Boolean) {
+                append("main.update", com.intellij.ui.SimpleTextAttributes.REGULAR_ATTRIBUTES)
+                append("  Scripts/Game/Main.lua:12", com.intellij.ui.SimpleTextAttributes.GRAY_ATTRIBUTES)
+            }
+        }
+        val c = renderer.getListCellRendererComponent(list, "f", 0, false, false)
+        com.fixcode.intellij.lua.debug.ui.session.LuaFramesListLayout.alignLocation(list, c)
+        assertTrue("右对齐后首选宽度撑到列表右边", renderer.preferredSize.width >= 500)
+        assertEquals("  Scripts/Game/Main.lua:12", renderer.getCharSequence(false).toString().removePrefix("main.update"))
+
+        list.setSize(renderer.getFontMetrics(renderer.font).stringWidth("main.update  …Main.lua:12") + 40, 100)
+        val c2 = renderer.getListCellRendererComponent(list, "f", 0, false, false)
+        com.fixcode.intellij.lua.debug.ui.session.LuaFramesListLayout.alignLocation(list, c2)
+        val text = renderer.getCharSequence(false).toString()
+        assertTrue("窄的时候从左边省略路径: $text", text.startsWith("main.update  …") && text.endsWith("Main.lua:12"))
+    }
+
     fun testParseTasklistCsv() {
         val out = """
             "UnrealEditor.exe","1234","lua54.dll,luasocket.dll"
