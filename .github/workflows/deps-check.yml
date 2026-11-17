@@ -1,0 +1,52 @@
+name: Dependency versions
+
+# 每月看一次 emmylua_ls 和 LSP4IJ 有没有新版本，有就开（或更新）一个 issue 提醒升级。
+# 升 emmylua_ls 时要同时换 src/main/resources/schemas/emmyrc.schema.json，并看 Verify Plugin 里的 emmylua_ls 冒烟测试。
+on:
+  schedule:
+    - cron: "0 2 1 * *"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare with latest releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          prop() { grep -E "^$1=" gradle.properties | cut -d= -f2 | tr -d '[:space:]'; }
+          ls_cur=$(prop emmyLuaLsVersion)
+          lsp_cur=$(prop lsp4ijVersion)
+          ls_new=$(gh api repos/EmmyLuaLs/emmylua-analyzer-rust/releases/latest -q .tag_name || echo "")
+          # 插件市场：列出 LSP4IJ 的全部版本，取最大的稳定版（不含 - 的）
+          lsp_new=$(curl -fsSL "https://plugins.jetbrains.com/api/plugins/com.redhat.devtools.lsp4ij/updates?size=20" 2>/dev/null \
+            | jq -r '.[].version' 2>/dev/null | grep -v -- '-' | sort -V | tail -1 || echo "")
+          echo "emmylua_ls：当前 $ls_cur，最新 ${ls_new:-（取不到）}"
+          echo "LSP4IJ：当前 $lsp_cur，最新 ${lsp_new:-（取不到）}"
+          body=""
+          newer() { [ -n "$2" ] && [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1)" = "$2" ]; }
+          if newer "$ls_cur" "$ls_new"; then
+            body+="- emmylua_ls：\`$ls_cur\` → \`$ls_new\`（https://github.com/EmmyLuaLs/emmylua-analyzer-rust/releases/tag/$ls_new）。升级时改 \`gradle.properties\` 的 \`emmyLuaLsVersion\`，换 \`src/main/resources/schemas/emmyrc.schema.json\`，看 Verify Plugin 的 emmylua_ls 冒烟测试。"$'\n'
+          fi
+          if newer "$lsp_cur" "$lsp_new"; then
+            body+="- LSP4IJ：\`$lsp_cur\` → \`$lsp_new\`。升级时改 \`gradle.properties\` 的 \`lsp4ijVersion\`，确认新版本支持的最低 IDE 版本不高于本插件的 since-build。"$'\n'
+          fi
+          if [ -z "$body" ]; then
+            echo "都是最新的"
+            exit 0
+          fi
+          title="依赖有新版本：emmylua_ls / LSP4IJ"
+          existing=$(gh issue list --state open --search "\"$title\" in:title" --json number -q '.[0].number' || echo "")
+          text="$(printf '%s\n\n这条由「Dependency versions」工作流每月自动检查生成。' "$body")"
+          if [ -n "$existing" ]; then
+            gh issue edit "$existing" --body "$text"
+          else
+            gh issue create --title "$title" --body "$text"
+          fi
