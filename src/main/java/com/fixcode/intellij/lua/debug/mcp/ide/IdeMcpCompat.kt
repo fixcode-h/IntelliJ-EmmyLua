@@ -29,6 +29,7 @@ internal object IdeMcpCompat {
     /** 设置页里按类别分组时用（2026.1 起）；全名照 IDE 的写法用「类名」，工具全名是「类别全名.工具名」。 */
     const val CATEGORY_SHORT_NAME = "LuaDebug"
     const val CATEGORY_FQN = "com.fixcode.intellij.lua.debug.mcp.LuaDebugToolset"
+    const val CATEGORY_DISPLAY_NAME = "EmmyLua (Lua debug & code)"
     private const val PKG = "com.intellij.mcpserver"
 
     fun descriptor(tool: LuaTool): McpToolDescriptor =
@@ -56,9 +57,9 @@ internal object IdeMcpCompat {
                     when {
                         categoryAt in 0 until index -> "$CATEGORY_FQN.${tool.name}" // 类别后面的字符串是工具全名
                         stringIndex == 0 -> tool.name
-                        stringsBeforeCategory == 2 -> if (stringIndex == 1) tool.description else DEFAULT
+                        stringsBeforeCategory == 2 -> if (stringIndex == 1) describe(tool) else DEFAULT
                         stringIndex == 1 -> tool.title
-                        stringIndex == 2 -> tool.description
+                        stringIndex == 2 -> describe(tool)
                         else -> DEFAULT // displayDescription 等：用 IDE 的默认值
                     }
                 }
@@ -70,6 +71,14 @@ internal object IdeMcpCompat {
             }
         }
     }
+
+    /**
+     * IDE 的 tools/list 不带 `_meta`（各版本的描述符都没有这个字段），2026.2 前连 title 也没有，
+     * 所以中文名附在说明最后一行，面板按 [ZH_TITLE_PREFIX] 读出来当显示名（和面板约定，改格式要同步面板）。
+     */
+    fun describe(tool: LuaTool): String = "${tool.description}\n\n$ZH_TITLE_PREFIX${tool.titleZh}"
+
+    const val ZH_TITLE_PREFIX = "Title (zh): "
 
     /** properties 每项转成 kotlinx 的 JsonElement；required 单独给。additionalProperties 由 IDE 自己生成 schema 时丢掉，靠 JsonArgs 拒绝未知参数。 */
     @Suppress("UNCHECKED_CAST")
@@ -94,14 +103,20 @@ internal object IdeMcpCompat {
     private fun category(loader: ClassLoader): Any {
         val cls = loader.loadClass("$PKG.McpToolCategory")
         var strings = 0
+        var booleans = 0
         return construct(cls) { _, type, _ ->
             when (type) {
                 String::class.java -> when (strings++) {
                     0 -> CATEGORY_SHORT_NAME
                     1 -> CATEGORY_FQN
-                    else -> DEFAULT // displayName / displayDescription（2026.3）
+                    2 -> CATEGORY_DISPLAY_NAME // displayName（2026.3）
+                    else -> DEFAULT // displayDescription（2026.3）
                 }
-                else -> DEFAULT // isExperimental / alwaysIncluded：默认
+                // (isExperimental, alwaysIncluded)，2026.2 起才有 alwaysIncluded：
+                // 设成 true 后「仅路由器模式」下我们的工具仍直接列给 Agent（2026.2），2026.3 默认不勾 Router-only；
+                // 用户仍可以在设置里关掉或改成 Router-only。
+                java.lang.Boolean.TYPE -> if (booleans++ == 1) true else DEFAULT
+                else -> DEFAULT
             }
         }
     }

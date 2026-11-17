@@ -60,6 +60,9 @@ import com.fixcode.intellij.lua.debugger.mcp.ProbeHit
 import com.fixcode.intellij.lua.debugger.mcp.ProbeHitPage
 import com.fixcode.intellij.lua.debugger.mcp.ReloadItem
 import com.fixcode.intellij.lua.debugger.mcp.ReloadRequest
+import com.fixcode.intellij.lua.debugger.mcp.LaunchRequest
+import com.fixcode.intellij.lua.debugger.mcp.LaunchResult
+import com.fixcode.intellij.lua.debugger.mcp.RunConfigInfo
 import com.fixcode.intellij.lua.debugger.mcp.ReloadResult
 import com.fixcode.intellij.lua.debugger.mcp.ReloadTargetResult
 import com.fixcode.intellij.lua.debug.ue.UnrealLuaReloader
@@ -224,22 +227,94 @@ class LuaEngineMcpBackend(private val project: Project) : LuaDebugBackend, Dispo
                 started.completeExceptionally(LuaDebugBackendException(ErrorCode.ATTACH_FAILED, e.message ?: e.toString()))
             }
         }, ModalityState.any())
-        return started.thenCompose { engine ->
-            // 注入、建转发可能要十几秒
-            val waiting = engine.awaitEvent(ATTACH_TIMEOUT_MS) { it is EngineEvent.Connected || it is EngineEvent.Terminated }
-            // 订阅之前可能已经连上或失败了
+        return started.thenCompose { awaitConnected(it) }
+    }
+
+    /** 注入、建转发可能要十几秒；连上返回会话 id，失败或超时报错。 */
+    private fun awaitConnected(engine: DebugSession): CompletableFuture<String> {
+        val waiting = engine.awaitEvent(ATTACH_TIMEOUT_MS) { it is EngineEvent.Connected || it is EngineEvent.Terminated }
+        // 订阅之前可能已经连上或失败了
+        when {
+            engine.state == EngineState.RUNNING -> waiting.complete(null)
+            engine.state.isTerminal -> waiting.complete(EngineEvent.Terminated("连接失败"))
+        }
+        return waiting.thenApply { event ->
             when {
-                engine.state == EngineState.RUNNING -> waiting.complete(null)
-                engine.state.isTerminal -> waiting.complete(EngineEvent.Terminated("连接失败"))
-            }
-            waiting.thenApply { event ->
-                when {
-                    engine.state == EngineState.RUNNING || event is EngineEvent.Connected -> engine.id
-                    event is EngineEvent.Terminated -> throw LuaDebugBackendException(ErrorCode.ATTACH_FAILED, "附加失败：${event.reason}（详细步骤见 IDE 调试控制台）")
-                    else -> throw LuaDebugBackendException(ErrorCode.TIMEOUT, "附加超时：${ATTACH_TIMEOUT_MS / 1000} 秒内没有连上，详细步骤见 IDE 调试控制台。")
-                }
+                engine.state == EngineState.RUNNING || event is EngineEvent.Connected -> engine.id
+                event is EngineEvent.Terminated -> throw LuaDebugBackendException(ErrorCode.ATTACH_FAILED, "附加失败：${event.reason}（详细步骤见 IDE 调试控制台）")
+                else -> throw LuaDebugBackendException(ErrorCode.TIMEOUT, "附加超时：${ATTACH_TIMEOUT_MS / 1000} 秒内没有连上，详细步骤见 IDE 调试控制台。")
             }
         }
+    }
+
+    // ---- 运行配置：IDE 自带 MCP 的 execute_run_configuration 只用 Run 执行器，Agent 要调试得从这里启动
+
+    override fun listRunConfigurations(): List<RunConfigInfo> = LuaRunConfigs.list(project)
+
+    override fun launchConfiguration(request: LaunchRequest): CompletableFuture<LaunchResult> {
+        val result = CompletableFuture<LaunchResult>()
+        val disposable = Disposer.newDisposable("lua-mcp-launch")
+        result.whenComplete { _, _ -> Disposer.dispose(disposable) }
+        ApplicationManager.getApplication().invokeLater({
+            try {
+                val settings = LuaRunConfigs.find(project, request.name)
+                    ?: throw LuaDebugBackendException(ErrorCode.TARGET_NOT_FOUND, "没有名为「${request.name}」的运行配置。")
+                val lua = settings.configuration is com.fixcode.intellij.lua.debug.ui.session.LuaDebugTargetConfiguration
+                if (lua && request.debug) {
+                    // Lua 配置：等它的会话登记（resolveTarget 可能先等进程、选设备），再等连上
+                    LuaDebugSessionManager.getInstance(project).addListener(object : LuaDebugSessionManager.Listener {
+                        override fun sessionAdded(entry: LuaDebugSessionManager.Entry) {
+                            if (entry.xSession.runProfile?.name != settings.name) return
+                            awaitConnected(entry.engine).whenComplete { id, e ->
+                                if (e != null) result.completeExceptionally(e) else result.complete(LaunchResult(settings.name, id))
+                            }
+                        }
+                    }, disposable)
+                    AppExecutorUtil.getAppScheduledExecutorService().schedule({
+                        result.completeExceptionally(LuaDebugBackendException(ErrorCode.TIMEOUT,
+                            "已启动「${settings.name}」，但 ${ATTACH_TIMEOUT_MS / 1000} 秒内没有出现调试会话：看 IDE 里是不是弹了选择框或报错。"))
+                    }, ATTACH_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                }
+                LuaRunConfigs.execute(project, settings, request.debug)
+                if (!lua || !request.debug) result.complete(LaunchResult(settings.name, executor = if (request.debug) "debug" else "run"))
+            } catch (e: LuaDebugBackendException) {
+                result.completeExceptionally(e)
+            } catch (e: Throwable) {
+                result.completeExceptionally(LuaDebugBackendException(ErrorCode.ATTACH_FAILED, "启动「${request.name}」失败：${e.message ?: e}"))
+            }
+        }, ModalityState.any())
+        return result
+    }
+
+    /** 用运行配置开的按配置重跑（会重新找进程），Agent / Attach to Process 开的按原目标重新附加。 */
+    override fun restartSession(sessionId: String): CompletableFuture<String> {
+        val entry = entry(sessionId)
+        val configName = entry.xSession.runProfile
+            ?.takeIf { it is com.fixcode.intellij.lua.debug.ui.session.LuaDebugTargetConfiguration }?.name
+            ?.takeIf { LuaRunConfigs.find(project, it) != null }
+        return stopAndWait(entry).thenCompose {
+            if (configName != null) launchConfiguration(LaunchRequest(configName)).thenApply { r ->
+                r.sessionId ?: throw LuaDebugBackendException(ErrorCode.ATTACH_FAILED, "重启后没有新的调试会话。")
+            } else startSession(entry.target)
+        }
+    }
+
+    private fun stopAndWait(entry: LuaDebugSessionManager.Entry): CompletableFuture<Unit> {
+        val done = CompletableFuture<Unit>()
+        val disposable = Disposer.newDisposable("lua-mcp-restart")
+        done.whenComplete { _, _ -> Disposer.dispose(disposable) }
+        val manager = LuaDebugSessionManager.getInstance(project)
+        manager.addListener(object : LuaDebugSessionManager.Listener {
+            override fun sessionRemoved(removed: LuaDebugSessionManager.Entry) {
+                if (removed.sessionId == entry.sessionId) done.complete(Unit)
+            }
+        }, disposable)
+        ApplicationManager.getApplication().invokeLater({
+            entry.xSession.stop()
+            if (manager.find(entry.sessionId) == null) done.complete(Unit)
+        }, ModalityState.any())
+        // 注销没来也继续：旧会话已经在停了
+        return done.completeOnTimeout(Unit, STOP_TIMEOUT_MS, TimeUnit.MILLISECONDS)
     }
 
     override fun stopSession(sessionId: String): CompletableFuture<Unit> {
@@ -839,6 +914,7 @@ class LuaEngineMcpBackend(private val project: Project) : LuaDebugBackend, Dispo
     companion object {
         private const val SEP = "|"
         private const val ATTACH_TIMEOUT_MS = 60_000L
+        private const val STOP_TIMEOUT_MS = 5_000L
         private const val SYNC_WAIT_MS = 2_000L
 
         fun getInstance(project: Project): LuaEngineMcpBackend = project.service()
