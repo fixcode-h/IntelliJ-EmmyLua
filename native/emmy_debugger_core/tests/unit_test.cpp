@@ -174,6 +174,41 @@ TEST_CASE("hit_condition.parse_and_check") {
 	CHECK(!HitCondition::Parse("%0", h, err));
 }
 
+TEST_CASE("breakpoints.function_spec") {
+	Breakpoint bp;
+	std::string err;
+	CHECK(ParseFunctionSpec("UI.BagPanel:OnItemClick", bp, err));
+	CHECK_EQ(bp.funcQualifier, std::string("UI.BagPanel"));
+	CHECK_EQ(bp.funcName, std::string("OnItemClick"));
+	CHECK(bp.funcMethod);
+	CHECK(ParseFunctionSpec(" M.add ", bp, err));
+	CHECK_EQ(bp.funcQualifier, std::string("M"));
+	CHECK_EQ(bp.funcName, std::string("add"));
+	CHECK(!bp.funcMethod);
+	CHECK(ParseFunctionSpec("foo", bp, err));
+	CHECK(bp.funcQualifier.empty());
+	CHECK_EQ(bp.funcName, std::string("foo"));
+	CHECK(!ParseFunctionSpec("", bp, err));
+	CHECK(!ParseFunctionSpec("a:b:c", bp, err));
+	CHECK(!ParseFunctionSpec(":b", bp, err));
+	CHECK(!ParseFunctionSpec("a.", bp, err));
+	CHECK(!ParseFunctionSpec("a..b", bp, err));
+	CHECK(!ParseFunctionSpec("a.b(1)", bp, err));
+	CHECK(!ParseFunctionSpec("1abc", bp, err));
+	CHECK(!err.empty());
+
+	// 函数断点不参与按 chunk 匹配，但算「有断点」（要开 CALL 钩子）
+	auto fn = std::make_shared<Breakpoint>();
+	fn->id = "f";
+	fn->function = "M.add";
+	ParseFunctionSpec(fn->function, *fn, err);
+	BreakpointIndex idx(1, {fn}, true);
+	CHECK(idx.AnyFor(1));
+	CHECK(!idx.AnyLineFor(1));
+	CHECK_EQ(idx.functions().size(), static_cast<size_t>(1));
+	CHECK(idx.Match("@M.lua", 1).bps.empty());
+}
+
 TEST_CASE("value_path.parse") {
 	std::vector<PathSegment> segs;
 	std::string err;

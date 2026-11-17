@@ -35,7 +35,7 @@ class HandshakeBehaviorTest : BehaviorTestBase() {
         val full = SetBreakpointsArgs.fromJson(lastRequest(Commands.SET_BREAKPOINTS).args)
         assertTrue(full.replaceAll)
         assertEquals(1L, full.revision)
-        assertEquals("d:/Game/Script/main.lua", full.upserts.single().source.path)
+        assertEquals("d:/Game/Script/main.lua", full.upserts.single().source!!.path)
         assertEquals(SessionState.RUNNING, session.state)
         assertEquals(listOf(1L), session.vms().map { it.vmId })
     }

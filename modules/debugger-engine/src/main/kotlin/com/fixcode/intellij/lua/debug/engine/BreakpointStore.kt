@@ -14,7 +14,11 @@ import com.fixcode.intellij.lua.debug.protocol.SetBreakpointsArgs
  *
  * 下发是增量的：记住 runtime 当前有哪些（[sent]），每次只发差异；新连接发全量（replaceAll）。
  */
-class BreakpointStore(private val toSpec: (id: String, request: BreakpointRequest) -> BreakpointSpec) {
+class BreakpointStore(
+    private val toSpec: (id: String, request: BreakpointRequest) -> BreakpointSpec,
+    /** 当前 runtime 不支持这种断点（例如没有 functionBreakpoints 能力）时返回原因：不下发，状态为 INVALID。 */
+    private val unsupported: (BreakpointRequest) -> String? = { null }
+) {
     private class Entry(val id: String, var request: BreakpointRequest) {
         var ack: BreakpointAck? = null
         val perVm = LinkedHashMap<Long, BreakpointStatusEvent>()
@@ -61,7 +65,7 @@ class BreakpointStore(private val toSpec: (id: String, request: BreakpointReques
 
     /** 当前想要 runtime 持有的断点（禁用的不下发）。 */
     private fun desired(): Map<String, BreakpointSpec> =
-        entries.values.filter { it.request.enabled }.associate { it.id to toSpec(it.id, it.request) }
+        entries.values.filter { it.request.enabled && unsupported(it.request) == null }.associate { it.id to toSpec(it.id, it.request) }
 
     /** 和 runtime 已有的比较，没有差异时返回 null。调用方发送后要 [markSent]。 */
     fun nextDelta(): SetBreakpointsArgs? {
@@ -121,13 +125,15 @@ class BreakpointStore(private val toSpec: (id: String, request: BreakpointReques
         val ambiguous = statuses.firstOrNull { it.state == BreakpointStateNames.AMBIGUOUS }
         val invalid = statuses.firstOrNull { it.state == BreakpointStateNames.INVALID }
         val ack = entry.ack
+        unsupported(entry.request)?.let { return BreakpointView(entry.id, entry.request, BreakpointVerification.INVALID, it) }
         return when {
             ack?.state == BreakpointStateNames.INVALID ->
                 BreakpointView(entry.id, entry.request, BreakpointVerification.INVALID, ack.message)
             invalid != null -> BreakpointView(entry.id, entry.request, BreakpointVerification.INVALID, invalid.message)
             verified != null -> BreakpointView(
                 entry.id, entry.request, BreakpointVerification.VERIFIED, verified.message,
-                verified.line?.takeIf { it != entry.request.line }
+                verified.line?.takeIf { it != entry.request.line },
+                verified.chunkName?.takeIf { entry.request.isFunction }
             )
             mismatch != null -> BreakpointView(
                 entry.id, entry.request, BreakpointVerification.MISMATCH,

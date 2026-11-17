@@ -90,6 +90,29 @@ class LuaDebugToolsTest {
     }
 
     @Test
+    fun `按函数名下断点 和 file+line 二选一`() {
+        backend.addSession()
+        val r = client.call(B, mapOf("action" to "add", "function" to "UI.BagPanel:OnItemClick", "condition" to "index > 1"))
+        assertFalse(r.raw, r.isError)
+        assertEquals("UI.BagPanel:OnItemClick", r["function"])
+        assertFalse(r.raw, "line" in r.json)
+        val spec = backend.breakpoints.single()
+        assertEquals("UI.BagPanel:OnItemClick", spec.function)
+        assertEquals(0, spec.line)
+        assertEquals("", spec.file)
+
+        assertEquals("invalid_argument", client.call(B, mapOf("action" to "add", "function" to "M.add", "line" to 3)).code)
+        assertEquals("invalid_argument", client.call(B, mapOf("action" to "add", "function" to "M.add(1)")).code)
+        assertEquals("invalid_argument", client.call(B, mapOf("action" to "add")).code)
+        // 函数断点可以限定文件
+        val scoped = client.call(B, mapOf("action" to "add", "function" to "M.add", "file" to "/proj/M.lua"))
+        assertEquals("/proj/M.lua", scoped["file"])
+
+        val removed = client.call(B, mapOf("action" to "remove", "function" to "UI.BagPanel:OnItemClick"))
+        assertEquals(1L, removed["removed"])
+    }
+
+    @Test
     fun `用户拒绝时返回 permission_denied 且不执行`() {
         backend.addSession()
         confirmer.control = ControlDecision.DENY

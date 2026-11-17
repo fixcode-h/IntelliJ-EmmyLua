@@ -46,6 +46,8 @@ class BreakpointDiagnostics(
 
     /** 断点状态变化：记下开始等待的时间；生效、删除后清掉。 */
     fun recordBreakpoint(view: BreakpointView, now: Long) {
+        // 函数断点没有文件可对，「路径对不上」的诊断不适用
+        if (view.request.isFunction) return
         if (view.verification == BreakpointVerification.PENDING) pendingSince.putIfAbsent(view.id, now)
         else pendingSince.remove(view.id)
     }
@@ -65,7 +67,7 @@ class BreakpointDiagnostics(
      * 结论成立的条件：断点开始等待之后 runtime 报过「没匹配上」，或等了 [pendingTimeoutMillis] 还是「已下发」。
      */
     fun unmatchedReason(view: BreakpointView, now: Long): String? {
-        if (view.verification != BreakpointVerification.PENDING) return null
+        if (view.verification != BreakpointVerification.PENDING || view.request.isFunction) return null
         val since = pendingSince[view.id] ?: return null
         if (lastReportAt < since && now - since < pendingTimeoutMillis) return null
         val seen = chunks()

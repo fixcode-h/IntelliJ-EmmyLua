@@ -51,6 +51,7 @@ class EmmyLuaDebugMcp(
             | Restart the debugged game / re-attach | `lua_debug_session` action=`restart` |
             | Attach to a local process / Android app | `lua_debug_session` action=`targets`, then `attach` (pid / name, or device + package) |
             | Stop at a line | `lua_debug_breakpoints` action=`add` file + line (+ condition, hit_count) |
+            | Stop when a function is called (file unknown) | `lua_debug_breakpoints` action=`add` function="BagPanel:OnItemClick" / "M.add" / "GlobalFn" (stops at its first line; optional file narrows it) |
             | Log without stopping | `lua_debug_breakpoints` action=`add` message="hp={self.hp}" |
             | Record values on every hit without stopping | `lua_debug_breakpoints` action=`add` capture=[...] auto_continue=true, then `lua_debug_inspect` action=`probes` |
             | Wait for the next stop | `lua_debug_session` action=`wait` (timeout_ms ≤ 120000) |

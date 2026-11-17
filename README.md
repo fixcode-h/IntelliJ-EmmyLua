@@ -38,6 +38,7 @@ EmmyLua 是一个功能强大的 Lua 语言支持插件，专为 IntelliJ IDEA �
 - **Lua 附加** - 附加到本机正在运行的进程（Windows），不用改游戏代码；也可以「启动并附加」，从 IDE 启动 UE 编辑器 / 游戏，启动阶段的 Lua 也能断住
 - **Lua 真机附加** - 通过 adb 附加 Android 设备上的游戏进程，包内不需要加任何插件
 - **断点** - 条件断点、命中次数、日志断点、Probe（不停下只记录值）、Lua 出错时暂停
+- **函数断点** - 不知道代码在哪个文件时，在「断点」对话框里 + 新建「Lua 函数断点」，填 `Module.func`、`Class:Method` 或全局函数名，函数被调用时停在它的第一行（宿主从 C++ 调进来的也能停）；Agent 用 `lua_debug_breakpoints action=add function=...`
 - **变量和协程** - 变量分组展示、修改变量值、查看其他协程的调用栈
 - **MCP 调试工具** - 让 Claude Code、Cursor 等 Agent 直接下断点、看栈和变量
 - **MCP 代码查找** - Agent 用 `lua_code` 按名字找 Lua 函数 / 方法 / 类、按 require 路径找文件、看文件大纲、查引用（经 emmylua_ls，替代 UEToVS 的 Lua 工具）

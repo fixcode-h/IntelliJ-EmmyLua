@@ -88,7 +88,7 @@ class FakeBackend : LuaDebugBackend {
     override fun setBreakpoint(spec: BreakpointSpec): CompletableFuture<BreakpointInfo> {
         val bp = BreakpointInfo(
             (bpIds.incrementAndGet()).toString(), BreakpointOrigin.AGENT, spec.file, spec.line, verified = sessions.isNotEmpty(),
-            condition = spec.condition, capture = spec.capture, autoContinue = spec.autoContinue,
+            condition = spec.condition, capture = spec.capture, autoContinue = spec.autoContinue, function = spec.function,
         )
         breakpoints += bp
         return CompletableFuture.completedFuture(bp)
@@ -99,7 +99,8 @@ class FakeBackend : LuaDebugBackend {
         breakpoints.removeIf { b ->
             (filter.all && (filter.includeIde || b.origin == BreakpointOrigin.AGENT)) ||
                 b.breakpointId == filter.breakpointId || b.breakpointId in filter.breakpointIds ||
-                (filter.file == b.file && (filter.line == null || filter.line == b.line))
+                (filter.file == b.file && (filter.line == null || filter.line == b.line)) ||
+                (filter.function != null && filter.function == b.function)
         }
         return CompletableFuture.completedFuture(before - breakpoints.size)
     }

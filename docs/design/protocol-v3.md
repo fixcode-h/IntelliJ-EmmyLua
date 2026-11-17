@@ -276,10 +276,10 @@
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
 | `id` | 是 | IDE 分配的不透明字符串，连接内唯一。runtime 在事件里原样带回 |
-| `source.path` | 是 | IDE 本机文件路径，统一用 `/` 分隔 |
+| `source.path` | 是 | IDE 本机文件路径，统一用 `/` 分隔（函数断点可省，见 7.7） |
 | `source.chunkName` | 否 | IDE 已知（学习过或用户配置了映射）的 chunkName。给了就**只**按它精确匹配 |
 | `source.sha256` | 否 | 本地文件内容的 SHA-256（小写 hex）。runtime 有宿主登记的哈希且不一致时，断点状态为 `mismatch`（仍然生效，只是提示） |
-| `line` | 是 | 1 起的行号 |
+| `line` | 是 | 1 起的行号（函数断点不给，见 7.7） |
 | `condition` | 否 | Lua 表达式，在**断点所在帧**里求值，结果为真才算命中。runtime 侧执行，不往返 IDE。语法错误时断点状态为 `invalid` |
 | `hitCondition` | 否 | 命中次数条件，见 7.3。先判断 `condition`，满足后才计数 |
 | `logMessage` | 否 | 日志断点：命中时输出一条 `output`（`category = "logpoint"`），`{expr}` 会被替换成求值结果（`{{` / `}}` 转义），**不暂停** |
@@ -363,6 +363,36 @@ response 的 `breakpoints` 列出本次 upsert 的每个断点的**初始**状�
 
 - `captures` 的每项是**一层**快照（不带 `ref`，不能再展开），大 table 只给 `value` 摘要。
 - 高频命中时 runtime 可以合并或丢弃：每个断点每秒最多发 100 条，超出部分计数后在下一条里给 `dropped: <n>`。
+
+### 7.7 函数断点（能力 `functionBreakpoints`）
+
+用户不知道代码在哪个文件时按函数名下断点；函数被调用时停在**函数第一行**（这时参数已经就位，条件、日志、`capture` 都在函数帧里求值）。
+
+和行断点在同一张表里，用同一个 `setBreakpoints` 下发，只是 `Breakpoint` 换成：
+
+```json
+{ "id": "bp-30", "function": "UI.BagPanel:OnItemClick", "condition": "index > 5", "hitCondition": ">= 2" }
+{ "id": "bp-31", "function": "M.add", "source": { "path": "D:/Game/Content/Script/Util/M.lua" } }
+{ "id": "bp-32", "function": "OnGameStart" }
+```
+
+| 字段 | 说明 |
+| --- | --- |
+| `function` | 有它就是函数断点。写法：`Module.func`、`A.B:Method`（`:` 只能在最后一段前）、全局函数名 `func`；每段是 Lua 标识符。写法不对时 response 里该断点为 `invalid` |
+| `line` | 不给（或 0） |
+| `source` | 可选：给了就只认这个文件里的函数（匹配规则同 7.2） |
+| 其余 | `condition` / `hitCondition` / `logMessage` / `capture` / `autoContinue` / `vmId` 和行断点完全一样 |
+
+runtime 的匹配（两条路，任一命中即可）：
+
+1. **按函数值**：在 VM 里按名字找到函数值，记下它的原型（source + 定义行），调用到这个原型就命中。宿主从 C 调进来、调用处没有名字的（UnLua 的 `ReceiveBeginPlay` 等）也能停。限定部分依次查：全局表按点分路径（`rawget`，沿元表 `__index` 是 table 时往上找，不调元方法）→ `package.loaded[限定名]` → `package.loaded` 里模块名以它结尾的（`UI.BagPanel`、`UI/BagPanel` 都算）。函数值每秒重新解析一次，热重载换了函数也跟得上。
+2. **按调用处的名字兜底**：还找不到函数值时（local 模块表、还没 require 的模块），用 `lua_getinfo` 的 `n` 取调用处的名字比函数名：全局函数名要求 `namewhat` 是 `global` / `local` / `upvalue`；带限定名的要求 `namewhat` 是 `field` / `method`，并且函数所在文件名（去掉目录和扩展名，模块名式的 chunk 取最后一段）等于限定名的最后一段（`BagPanel:OnItemClick` 认 `.../BagPanel.lua`）。
+
+- 只认 Lua 函数；C 函数没有「第一行」，不支持。
+- 停下时 `paused { reason: "breakpoint", breakpointIds: [...] }`，`top` 是函数第一行。和行断点落在同一行时只停一次。
+- `breakpointStatus`：找到函数值或第一次按名字命中时发 `verified`，`chunkName` 是函数所在 chunk，`line` 是函数的**定义行**（`function` 关键字那一行）。一直没找到时保持 `pending`。7.2 末尾的「断点下发 5 秒后没匹配上」诊断只管行断点。
+- 性能：没有函数断点时不多任何开销（CALL 钩子本来就只在有断点时挂）；有函数断点时每次调用多一次哈希查找，按名字兜底的断点还要 `lua_getinfo "n"`（带限定名的先比文件名，对不上不取）。
+- 没有这个能力的 runtime（旧版）：IDE 不下发函数断点，在界面上标「runtime 不支持」，行断点照常。
 
 ---
 
@@ -730,6 +760,7 @@ IDE 收到不认识的错误码按 `INTERNAL` 处理并展示 `message`。
 | `hookMux` | runtime 用 HookMux 与宿主其他钩子共存（诊断信息，IDE 不依赖） |
 | `terminate` | `disconnect { terminate: true }` |
 | `profiler` | `profile`（第 20 节）。没协商到时 IDE 不发 `profile`、不显示采样按钮 |
+| `functionBreakpoints` | 断点的 `function` 字段（7.7）。没协商到时 IDE 不下发函数断点 |
 | `errorReport` | `setOptions.collectErrors`、`errors` 命令、`luaError` 事件（第 21 节） |
 
 能力位只增不改义；新功能加新能力位，旧 IDE 看不到就不会用。
@@ -832,6 +863,7 @@ IDE                                           runtime
 | v3.0（revision 0） | 2026-11-16 | 按 `emmy_debugger_core` 实现补充说明（不改字段语义）：`loadHelpers` 立即返回 `{}`、失败走 `output`；helper 读写宿主 `_G`；父协程帧为可选；`exceptions` 能力未声明时 `setOptions.exceptions` 只接受 `none`。变量视图的字段扩展见 [variable-view.md](variable-view.md)，后续合进第 9 节 |
 | v3.0（revision 0） | 2026-11-16 | 新增能力 `profiler` 和命令 `profile`（第 20 节），向后兼容：老 runtime 不声明这个能力，IDE 就不发 |
 | v3.0（revision 0） | 2026-11-17 | 新增 `emmy_tool launch`（第 16.1 节第 7 步）：启动程序、停在入口点注入，结果多 `launched:true`；不涉及线上协议 |
+| v3.0（revision 0） | 2026-11-17 | 新增能力 `functionBreakpoints` 和断点字段 `function`（7.7 函数断点），向后兼容：老 runtime 不声明这个能力，IDE 就不发函数断点 |
 | v3.0（revision 0） | 2026-11-17 | 新增能力 `errorReport`：`setOptions.collectErrors`、命令 `errors`、事件 `luaError`（第 21 节）。宿主 `lua_pcall` 自带错误处理函数（如 UnLua）时，核心把自己的处理函数串在它前面，`exceptions` 和 `collectErrors` 都能收到这类错误 |
 
 ---

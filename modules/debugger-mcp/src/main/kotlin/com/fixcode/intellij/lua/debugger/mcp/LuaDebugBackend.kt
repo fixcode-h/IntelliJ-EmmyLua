@@ -288,8 +288,9 @@ data class VmInfo(
 enum class BreakpointOrigin { IDE, AGENT }
 
 data class BreakpointSpec(
-    /** 本地文件路径（绝对或相对项目根），引擎负责映射到 chunkName。 */
+    /** 本地文件路径（绝对或相对项目根），引擎负责映射到 chunkName。函数断点可为空串（给了就只认这个文件里的函数）。 */
     val file: String,
+    /** 行号；函数断点为 0。 */
     val line: Int,
     val condition: String? = null,
     /** 命中次数条件，例如 "5"、">=3"、"%2"。 */
@@ -301,6 +302,8 @@ data class BreakpointSpec(
     /** 命中后自动继续（Probe）。 */
     val autoContinue: Boolean = false,
     val vmId: String? = null,
+    /** 函数断点：`Module.func`、`Class:Method` 或全局函数名，停在函数第一行（和 file + line 二选一）。 */
+    val function: String? = null,
 )
 
 data class BreakpointFilter(
@@ -308,6 +311,8 @@ data class BreakpointFilter(
     val breakpointIds: List<String> = emptyList(),
     val file: String? = null,
     val line: Int? = null,
+    /** 按函数断点的函数名匹配。 */
+    val function: String? = null,
     /** 匹配所有断点（默认只 Agent 下的，includeIde 时连用户的一起）。 */
     val all: Boolean = false,
     /** 也作用于用户在 IDE 里下的断点（对应 clear scope=all）。 */
@@ -329,6 +334,8 @@ data class BreakpointInfo(
     val enabled: Boolean = true,
     /** 没验证的原因，例如"chunk 未加载"、"行上没有代码"。 */
     val message: String? = null,
+    /** 函数断点的函数名（此时 line 为 0，file 是限定的文件或空串）。 */
+    val function: String? = null,
 )
 
 enum class StepKind { OVER, INTO, OUT }

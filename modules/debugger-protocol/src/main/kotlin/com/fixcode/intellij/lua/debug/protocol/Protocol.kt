@@ -79,13 +79,16 @@ object Capabilities {
     const val VIEW_RULES = "viewRules"
     /** 采样性能分析 profile（第 20 节）。没协商到时 IDE 不发 profile、不显示采样按钮。 */
     const val PROFILER = "profiler"
+    /** 函数断点：断点带 function（7.7）。没协商到时 IDE 不下发函数断点，界面上标「runtime 不支持」。 */
+    const val FUNCTION_BREAKPOINTS = "functionBreakpoints"
     /** 错误聚合：setOptions.collectErrors、errors、luaError（第 21 节）。 */
     const val ERROR_REPORT = "errorReport"
 
     /** IDE 在 hello 里声明想用的能力；最终生效的是 welcome 里的交集。 */
     val CLIENT_WANTED: List<String> = listOf(
         VALUE_PATH, LUA_EVAL, SET_VARIABLE, CONDITION, HIT_CONDITION, LOGPOINT, CAPTURE, RUN_TO_LINE,
-        EXCEPTIONS, COROUTINES, OUTPUT, HELPERS, SOURCE_HASH, TERMINATE, RICH_VARIABLES, VIEW_RULES, PROFILER, ERROR_REPORT
+        EXCEPTIONS, COROUTINES, OUTPUT, HELPERS, SOURCE_HASH, TERMINATE, RICH_VARIABLES, VIEW_RULES, PROFILER, ERROR_REPORT,
+        FUNCTION_BREAKPOINTS
     )
 }
 
