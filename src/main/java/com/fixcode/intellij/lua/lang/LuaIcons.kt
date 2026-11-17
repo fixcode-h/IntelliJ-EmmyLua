@@ -7,6 +7,7 @@ object LuaIcons {
     private fun load(path: String): Icon = IconLoader.getIcon(path, LuaIcons::class.java)
 
     @JvmField val FILE: Icon = load("/icons/lua.svg")
+    @JvmField val UNREAL_DECL: Icon = load("/icons/ueDecl.svg")
 
     object Debugger {
         @JvmField val Console: Icon = load("/icons/console.svg")

@@ -84,6 +84,12 @@
                 text="Copy Lua Require Path" id="lua.copyReference.copyRequirePath">
             <add-to-group group-id="CopyReferencePopupGroup"/>
         </action>
+        <action class="com.fixcode.intellij.lua.actions.GenerateUnrealDeclAction" id="lua.unrealDecl.generate"
+                icon="/icons/ueDecl.svg"
+                text="生成 UE Lua 声明" description="让开着的 UE 编辑器经 UELink 马上生成 / 刷新 UE 反射的 Lua 声明（只写变了的文件）">
+            <add-to-group group-id="MainToolbarRight" anchor="first"/>
+            <add-to-group group-id="NavBarToolBar" anchor="first"/>
+        </action>
         <group id="lua.unrealDecl" text="UE 反射声明（EmmyLua）" popup="true">
             <add-to-group group-id="ToolsMenu" anchor="last"/>
             <action class="com.fixcode.intellij.lua.actions.RefreshUnrealDeclAction" id="lua.unrealDecl.refresh"
