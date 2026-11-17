@@ -41,9 +41,9 @@ class LocalAttachTool(
         log("注入 $arch 调试组件到进程 $pid …")
         val (exit, output) = run(listOf(tool.path, "attach", "-p", pid.toString(), "-dir", dir.path, "-dll", HOOK, "-auth-token", token, "-protocol", "3"), dir)
         val result = parseResult(output, exit)
-        log(
+        // waiting 的提示由调用方用「任何级别都显示」的方式打出（用户要知道在等什么）
+        if (!result.waiting) log(
             when {
-                result.waiting -> result.message ?: "目标进程还没有加载 Lua，调试器已就位，Lua 加载后自动连上"
                 result.reinjected -> "进程里已有调试组件，复用它（${result.host}:${result.port}）"
                 else -> "注入完成，runtime 监听 ${result.host}:${result.port}"
             }

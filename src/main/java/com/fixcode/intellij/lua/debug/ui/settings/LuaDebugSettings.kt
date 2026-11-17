@@ -31,7 +31,11 @@ class LuaDebugSettings : SimplePersistentStateComponent<LuaDebugSettings.State>(
         var symbolSearchDirs by string(DEFAULT_SYMBOL_DIRS)
         /** 参考 so：同一工程以前任意一次构建的未裁剪 libUnreal.so，没有同一次构建的符号时按特征码找 Lua 函数。支持 $PROJECT_DIR$。 */
         var referenceSo by string("")
-        var logLevel by enum(LuaDebugLogLevel.RUNTIME)
+        /**
+         * 调试控制台的日志级别。2.5.x 起新增「精简」并设为默认（用户 2026-11-17）；以前的 logLevel 项不再读，
+         * 所有人升级后统一回到精简（旧设置当时也没真正生效过），想看更多的再手动调高。
+         */
+        var consoleLogLevel by enum(LuaDebugLogLevel.COMPACT)
         /** 保存 Lua 文件后经 UELink 自动重载到开着的 UE 编辑器 / 游戏（默认关）。 */
         var reloadToUnrealOnSave by property(false)
 
@@ -74,8 +78,8 @@ class LuaDebugSettings : SimplePersistentStateComponent<LuaDebugSettings.State>(
     }
 
     var logLevel: LuaDebugLogLevel
-        get() = state.logLevel
-        set(value) { state.logLevel = value }
+        get() = state.consoleLogLevel
+        set(value) { state.consoleLogLevel = value }
 
     var reloadToUnrealOnSave: Boolean
         get() = state.reloadToUnrealOnSave
@@ -129,9 +133,11 @@ class LuaDebugSettings : SimplePersistentStateComponent<LuaDebugSettings.State>(
 }
 
 enum class LuaDebugLogLevel {
-    /** 只显示 Lua 输出和错误。 */
+    /** 默认：只显示插件的必要信息（连接、断开、出错、出错暂停）和日志断点，不显示 Lua 的 print 和断点细节。 */
+    COMPACT,
+    /** 加上 Lua 自己的输出（print、stderr）。 */
     RUNTIME,
-    /** 加上连接、握手、断点下发。 */
+    /** 再加上注入过程、断点下发 / 生效、暂停位置、runtime 的诊断提示。 */
     VERBOSE,
     /** 打印每一帧协议，排查问题用。 */
     PROTOCOL,

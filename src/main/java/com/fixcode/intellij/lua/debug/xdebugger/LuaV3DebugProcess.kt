@@ -41,6 +41,8 @@ import com.fixcode.intellij.lua.debug.protocol.OutputCategories
 import com.fixcode.intellij.lua.debug.protocol.SetOptionsArgs
 import com.intellij.xdebugger.breakpoints.XBreakpoint
 import com.fixcode.intellij.lua.debug.protocol.PauseReasons
+import com.fixcode.intellij.lua.debug.ui.settings.LuaDebugLogLevel
+import com.fixcode.intellij.lua.debug.ui.settings.LuaDebugSettings
 import com.fixcode.intellij.lua.debug.protocol.ProfileResult
 import com.fixcode.intellij.lua.debug.protocol.VmStates
 import com.fixcode.intellij.lua.debugger.LuaDebuggerEditorsProvider
@@ -81,6 +83,7 @@ class LuaV3DebugProcess(
         subscription = engine.events.subscribe(::onEvent)
         LuaDebugSessionManager.getInstance(session.project).register(LuaDebugSessionManager.Entry(engine, target, session))
         session.addSessionListener(InlineValuesListener())
+        syncProtocolTrace()
     }
 
     /** 编辑器行尾的变量值跟着「当前选中的栈帧」走：暂停、切帧时取快照，继续运行或结束时清掉。 */
@@ -110,7 +113,7 @@ class LuaV3DebugProcess(
     override fun sessionInitialized() {
         super.sessionInitialized()
         session.consoleView?.addMessageFilter(LuaTracebackFilter(session.project))
-        print("[EmmyLua] 正在连接 ${engine.config.name} …\n", ConsoleViewContentType.SYSTEM_OUTPUT)
+        print("[EmmyLua] 正在连接 ${engine.config.name} …\n", ConsoleViewContentType.SYSTEM_OUTPUT, LuaDebugLogLevel.VERBOSE)
         engine.start().whenComplete { welcome, error ->
             if (error != null) {
                 val message = messageOf(error)
@@ -174,6 +177,7 @@ class LuaV3DebugProcess(
 
     private fun onEvent(event: DebugEvent) {
         if (stopping) return
+        syncProtocolTrace()
         notifyModel(event)
         when (event) {
             is DebugEvent.Paused -> {
@@ -208,7 +212,7 @@ class LuaV3DebugProcess(
                 }
                 schedulePendingHint()
             }
-            is DebugEvent.SourceMismatch -> print(
+            is DebugEvent.SourceMismatch -> printAt(LuaDebugLogLevel.VERBOSE,
                 "[EmmyLua] ${event.chunkName ?: event.breakpointId}：设备上的代码和本地文件不一致，断点行号可能不准。\n",
                 ConsoleViewContentType.LOG_WARNING_OUTPUT
             )
@@ -254,7 +258,7 @@ class LuaV3DebugProcess(
             BreakpointVerification.AMBIGUOUS -> "断点 $where 同时对上了多个同名文件，没有生效：${view.message ?: "在调试窗口的「映射」页指定对应的文件"}" to ConsoleViewContentType.LOG_WARNING_OUTPUT
             BreakpointVerification.INVALID -> "断点 $where 无效：${view.message ?: "未知原因"}" to ConsoleViewContentType.LOG_WARNING_OUTPUT
         }
-        print("[EmmyLua] $text\n", type)
+        print("[EmmyLua] $text\n", type, LuaDebugLogLevel.VERBOSE)
     }
 
     /**
@@ -266,6 +270,7 @@ class LuaV3DebugProcess(
             if (stopping) return@schedule
             val pending = engine.breakpoints().filter { it.request.origin == BreakpointOrigin.IDE && it.verification == BreakpointVerification.PENDING }
             if (pending.isEmpty()) return@schedule
+            if (level() < LuaDebugLogLevel.VERBOSE) return@schedule
             print(
                 "[EmmyLua] 有 ${pending.size} 个断点连上 20 秒后仍没对上代码。确认这段代码执行过；如果执行过还不停，" +
                     "点调试工具栏的「暂停」，控制台会打印游戏实际执行的文件名（chunkName）；点了也停不下来说明调试钩子没生效。把控制台这几行发给我们。\n",
@@ -313,7 +318,7 @@ class LuaV3DebugProcess(
         if (!top.hasSource) return
         val local = engine.localPathOfChunk(top.chunkName)
         val mapped = local?.let { "本地文件 $it" } ?: "没有找到对应的本地文件，断点下在这个文件上不会生效"
-        print("[EmmyLua] 暂停在 chunkName=\"${top.chunkName}\" 第 ${top.line} 行（$mapped）\n", ConsoleViewContentType.LOG_INFO_OUTPUT)
+        print("[EmmyLua] 暂停在 chunkName=\"${top.chunkName}\" 第 ${top.line} 行（$mapped）\n", ConsoleViewContentType.LOG_INFO_OUTPUT, LuaDebugLogLevel.VERBOSE)
     }
 
     private fun breakpointFor(ids: List<String>): XLineBreakpoint<*>? {
@@ -332,13 +337,43 @@ class LuaV3DebugProcess(
             OutputCategories.LOGPOINT -> ConsoleViewContentType.LOG_DEBUG_OUTPUT
             else -> ConsoleViewContentType.NORMAL_OUTPUT
         }
-        print(event.output.text, type)
+        print(event.output.text, type, minimumLevel(event))
     }
 
     /** 建连过程的日志（注入、转发每一步），显示在调试控制台。任意线程可调。 */
-    fun log(text: String) = print("[EmmyLua] $text\n", ConsoleViewContentType.SYSTEM_OUTPUT)
+    /** 建连过程的细节（注入、端口、复用）：详细级别才显示。 */
+    fun log(text: String) = print("[EmmyLua] $text\n", ConsoleViewContentType.SYSTEM_OUTPUT, LuaDebugLogLevel.VERBOSE)
 
-    private fun print(text: String, type: ConsoleViewContentType) {
+    /** 用户需要知道的状态（例如在等游戏加载 Lua）：任何级别都显示。 */
+    fun notice(text: String) = print("[EmmyLua] $text\n", ConsoleViewContentType.SYSTEM_OUTPUT)
+
+    private fun level(): LuaDebugLogLevel = LuaDebugSettings.getInstance().logLevel
+
+    /**
+     * 各类输出最低在哪一级显示（用户 2026-11-17：默认精简，只要插件的必要信息）：
+     * 日志断点是用户自己要的，总显示；runtime 的错误和引擎自己的提示（带 [EmmyLua] 前缀：心跳、重试、下发失败）总显示；
+     * runtime 的其他诊断（例如断点没匹配上时列出执行过的脚本）详细级别才显示；Lua 自己的 print / stderr 从「运行时」起显示。
+     */
+    private fun minimumLevel(event: DebugEvent.Output): LuaDebugLogLevel = when (event.output.category) {
+        OutputCategories.LOGPOINT -> LuaDebugLogLevel.COMPACT
+        OutputCategories.RUNTIME -> when {
+            event.output.level == "error" || event.output.text.startsWith("[EmmyLua]") -> LuaDebugLogLevel.COMPACT
+            else -> LuaDebugLogLevel.VERBOSE
+        }
+        else -> LuaDebugLogLevel.RUNTIME
+    }
+
+    private fun printAt(minimum: LuaDebugLogLevel, text: String, type: ConsoleViewContentType) = print(text, type, minimum)
+
+    /** 「协议」级别时把每一帧打到控制台；级别随设置页随时生效。 */
+    private fun syncProtocolTrace() {
+        val want = level() >= LuaDebugLogLevel.PROTOCOL
+        if (want == (engine.protocolTrace != null)) return
+        engine.protocolTrace = if (want) { line -> print("[协议] $line\n", ConsoleViewContentType.LOG_DEBUG_OUTPUT, LuaDebugLogLevel.PROTOCOL) } else null
+    }
+
+    private fun print(text: String, type: ConsoleViewContentType, minimum: LuaDebugLogLevel = LuaDebugLogLevel.COMPACT) {
+        if (level() < minimum) return
         session.consoleView?.print(text, type)
     }
 
@@ -356,9 +391,12 @@ class LuaV3DebugProcess(
             BreakpointVerification.VERIFIED -> session.setBreakpointVerified(breakpoint)
             BreakpointVerification.INVALID -> session.setBreakpointInvalid(breakpoint, view.message)
             BreakpointVerification.MISMATCH, BreakpointVerification.AMBIGUOUS -> session.setBreakpointInvalid(breakpoint, view.message)
-            // 一直没对上代码：灰色图标 + 悬停说明原因；对上后 setBreakpointVerified 换回正常图标
+            // 一直没对上代码：悬停说明原因；对上后 setBreakpointVerified 换回正常图标。
+            // 只有确实执行过同名文件、路径却对不上时才把图标变灰：代码只是还没跑到（Lua 环境刚重建、功能没触发）
+            // 时变灰会让人以为断点坏了。
             BreakpointVerification.PENDING -> diagnostics.unmatchedReason(view, System.currentTimeMillis())?.let {
-                session.updateBreakpointPresentation(breakpoint, com.intellij.icons.AllIcons.Debugger.Db_muted_breakpoint, it)
+                val pathMismatch = BreakpointDiagnostics.suggestChunks(view.request.file, diagnostics.chunks()).isNotEmpty()
+                session.updateBreakpointPresentation(breakpoint, if (pathMismatch) com.intellij.icons.AllIcons.Debugger.Db_muted_breakpoint else null, it)
             }
         }
     }

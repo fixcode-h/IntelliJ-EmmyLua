@@ -28,6 +28,7 @@ class LocalProcessDebugProcessFactory : LuaDebugProcessFactory {
             config.copy(options = config.options.copy(captureOutput = local.captureOutput))
         }
         connector.log = process::log
+        connector.notice = process::notice
         return process
     }
 
@@ -38,6 +39,8 @@ class LocalProcessDebugProcessFactory : LuaDebugProcessFactory {
     private class InjectingConnector(private val pid: Int, private val token: String) : Connector {
         @Volatile
         var log: (String) -> Unit = {}
+        @Volatile
+        var notice: (String) -> Unit = {}
         @Volatile
         private var arch: String? = null
 
@@ -60,6 +63,7 @@ class LocalProcessDebugProcessFactory : LuaDebugProcessFactory {
                 throw e
             }
             if (!result.waiting) return TcpConnector(result.host, result.port, token = token).connect()
+            notice(result.message ?: "目标进程还没有加载 Lua，调试器已就位，Lua 加载后自动连上")
             return waitForLua(result)
         }
 
@@ -76,7 +80,7 @@ class LocalProcessDebugProcessFactory : LuaDebugProcessFactory {
                 }
                 if (System.nanoTime() - lastLog > TimeUnit.SECONDS.toNanos(30)) {
                     lastLog = System.nanoTime()
-                    log("仍在等待目标进程加载 Lua …")
+                    notice("仍在等待目标进程加载 Lua …")
                 }
                 try {
                     Thread.sleep(1000)

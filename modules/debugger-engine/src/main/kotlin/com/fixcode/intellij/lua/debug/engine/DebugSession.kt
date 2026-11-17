@@ -117,6 +117,10 @@ class DebugSession(
     private var reconnectAttempt = 0
     /** 握手回 BUSY 后已经重试的次数。 */
     private var busyRetries = 0
+
+    /** 协议跟踪：设置后每一帧收发都回调一行（IDE 日志级别「协议」时用），在会话线程调用，不要阻塞。 */
+    @Volatile
+    var protocolTrace: ((String) -> Unit)? = null
     private var runtimeTerminatedReason: String? = null
     private var heartbeat: ScheduledFuture<*>? = null
     private var heartbeatMisses = 0
@@ -539,6 +543,7 @@ class DebugSession(
             }
         }
         try {
+            protocolTrace?.invoke("→ #$id $command $args")
             conn.send(ProtocolMessage.Request(id, command, args))
         } catch (error: Exception) {
             pending.remove(id)?.timeout?.cancel(false)
@@ -558,6 +563,13 @@ class DebugSession(
     }
 
     private fun dispatch(message: ProtocolMessage) {
+        protocolTrace?.let { trace ->
+            when (message) {
+                is ProtocolMessage.Response -> trace("← #${message.id} ${if (message.ok) "ok" else "error"} ${message.body}${message.error?.let { " $it" } ?: ""}")
+                is ProtocolMessage.Event -> trace("← ${message.event} ${message.body}")
+                else -> trace("← $message")
+            }
+        }
         when (message) {
             is ProtocolMessage.Response -> {
                 val entry = pending.remove(message.id) ?: return
