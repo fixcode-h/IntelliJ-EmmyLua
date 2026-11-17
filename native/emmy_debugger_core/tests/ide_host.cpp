@@ -4,7 +4,8 @@
 // 用法：emmy_core_ide_host <port> <脚本文件> <chunkName>
 // 准备好后在标准输出打印一行 READY；标准输入关闭（父进程退出）时结束。
 // 标准输入收到一行 rebuild：关掉当前 lua_State 再新建一个重新加载脚本（模拟 UE 里 PIE 重启、Lua 环境重建），
-// 新 VM 跑起来后打印 REBUILT。
+// 新 VM 跑起来后打印 REBUILT。第 4 个参数是 --no-vm 时先不建 lua_State（模拟附加时 PIE 还没开始），
+// 等第一次 rebuild 再建。
 #include "emmy/emmy_core.h"
 #include "lua_shim.h"
 
@@ -30,6 +31,7 @@ int main(int argc, char** argv) {
 	}
 	const std::string script((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
 	const std::string chunkName = argv[3];
+	const bool startWithoutVm = argc > 4 && std::string(argv[4]) == "--no-vm";
 
 	char err[256] = {0};
 	if (Emmy_ListenTcp("127.0.0.1", port, err, sizeof(err)) != 0) {
@@ -46,21 +48,32 @@ int main(int argc, char** argv) {
 		auto open = [&] {
 			L = luaL_newstate();
 			luaL_openlibs(L);
+			// 和 Windows 附加一样：脚本加载好、第一次 lua_pcall 前才登记 VM
+			if (emmy::lua::LoadBuffer(L, script.data(), script.size(), chunkName.c_str()) != LUA_OK) {
+				std::fprintf(stderr, "script error: %s\n", lua_tostring(L, -1));
+				std::exit(4);
+			}
 			Emmy_RegisterLuaVm(L, "ide-host");
 			Emmy_SetVmName(L, "GameVM");
-			if (emmy::lua::LoadBuffer(L, script.data(), script.size(), chunkName.c_str()) != LUA_OK || lua_pcall(L, 0, 1, 0) != LUA_OK) {
+			if (lua_pcall(L, 0, 1, 0) != LUA_OK) {
 				std::fprintf(stderr, "script error: %s\n", lua_tostring(L, -1));
 				std::exit(4);
 			}
 			mod = lua_gettop(L);
 		};
-		open();
+		if (!startWithoutVm) open();
 		ready = true;
 		lua_Integer i = 0;
 		while (!stop) {
+			if (!L && !rebuild.load()) {
+				std::this_thread::sleep_for(std::chrono::milliseconds(2));
+				continue;
+			}
 			if (rebuild.exchange(false)) {
-				Emmy_UnregisterLuaVm(L);
-				lua_close(L);
+				if (L) {
+					Emmy_UnregisterLuaVm(L);
+					lua_close(L);
+				}
 				open();
 				std::printf("REBUILT\n");
 				std::fflush(stdout);
@@ -73,8 +86,10 @@ int main(int argc, char** argv) {
 			}
 			std::this_thread::sleep_for(std::chrono::milliseconds(2));
 		}
-		Emmy_UnregisterLuaVm(L);
-		lua_close(L);
+		if (L) {
+			Emmy_UnregisterLuaVm(L);
+			lua_close(L);
+		}
 	});
 	while (!ready) std::this_thread::sleep_for(std::chrono::milliseconds(1));
 	std::printf("READY\n");

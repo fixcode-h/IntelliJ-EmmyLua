@@ -50,9 +50,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit 1 }
       - name: Build cores (dynamic, one per Lua version)
         run: |
+          # runtime 版本带上提交号：IDE 连上后和插件自带的 runtime-version.txt 比，
+          # 目标进程里还是更新插件前注入的旧组件时提示重启游戏 / 编辑器
+          $coreVersion = "3.0.0+$($env:GITHUB_SHA.Substring(0, 7))"
           foreach ($v in "51", "52", "53", "54") {
             cmake -S native/emmy_debugger_core -B build/core-${{ matrix.arch }}-$v -A ${{ matrix.platform }} `
-              -DEMMY_CORE_LUA_MODE=dynamic "-DEMMY_CORE_LUA_VERSION=$v" -DEMMY_CORE_BUILD_SHARED=ON `
+              -DEMMY_CORE_LUA_MODE=dynamic "-DEMMY_CORE_LUA_VERSION=$v" -DEMMY_CORE_BUILD_SHARED=ON "-DEMMY_CORE_VERSION=$coreVersion" `
               -DEMMY_CORE_BUILD_TESTS=OFF -DEMMY_CORE_BUILD_BENCH=OFF
             if ($LASTEXITCODE -ne 0) { exit 1 }
             cmake --build build/core-${{ matrix.arch }}-$v --config Release --target emmy_debugger_core_shared --parallel 4
@@ -67,6 +70,7 @@ jobs:
             if (-not $file) { Write-Error "缺少 $name"; exit 1 }
             Copy-Item $file.FullName -Destination $out
           }
+          [System.IO.File]::WriteAllText("$PWD/$out/runtime-version.txt", "3.0.0+$($env:GITHUB_SHA.Substring(0, 7))")
           foreach ($v in "51", "52", "53", "54") {
             New-Item -ItemType Directory -Force "$out/lua$v" | Out-Null
             Copy-Item build/core-${{ matrix.arch }}-$v/Release/emmy_debugger_core.dll "$out/lua$v/"

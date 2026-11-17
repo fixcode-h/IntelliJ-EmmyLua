@@ -29,6 +29,7 @@ class LocalProcessDebugProcessFactory : LuaDebugProcessFactory {
         }
         connector.log = process::log
         connector.notice = process::notice
+        connector.bundledRuntime = { process.expectedRuntimeVersion = it }
         return process
     }
 
@@ -41,6 +42,8 @@ class LocalProcessDebugProcessFactory : LuaDebugProcessFactory {
         var log: (String) -> Unit = {}
         @Volatile
         var notice: (String) -> Unit = {}
+        @Volatile
+        var bundledRuntime: (String?) -> Unit = {}
         @Volatile
         private var arch: String? = null
 
@@ -56,7 +59,7 @@ class LocalProcessDebugProcessFactory : LuaDebugProcessFactory {
             val tool = LocalAttachTool(root, log)
             val result = try {
                 val known = arch ?: tool.detectArch(pid).also { arch = it }
-                tool.attach(pid, token, known)
+                tool.attach(pid, token, known).also { bundledRuntime(it.bundledRuntime) }
             } catch (e: IOException) {
                 // 注入途中进程退出时 emmy_tool 报的是各种「打不开进程」，统一成进程已退出
                 if (!isTargetAlive()) throw TargetGoneException("进程 $pid 已退出，调试结束")
