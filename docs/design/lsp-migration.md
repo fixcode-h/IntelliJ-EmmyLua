@@ -92,7 +92,8 @@ emmylua_ls 自己读工作区根目录的 `.emmyrc.json`（也认 `.luarc.json`�
 
 - 插件通过 `workspace/configuration`（section `emmylua`）下发一份「部分配置」，emmylua_ls 把它合并在 `.emmyrc.json` 之后：对象逐项合并、数组取并集。所以用户写的库目录和插件探测到的库目录会叠加，不会互相覆盖。
 - 同一份部分配置还写进 `<IDE system>/emmylua/emmyrc/<项目>.json`，用环境变量 `EMMYLUALS_CONFIG` 交给 emmylua_ls：它只等配置请求 5 秒，IDE 刚启动忙时会超时，库目录整个丢掉（UE 声明全都找不到）。这个文件在 `.emmyrc.json` 之前合并，标量以用户文件为准。
-- 插件下发的内容：自动探测到的 UE 库目录（§3）、设置页里填的额外库目录、默认 Lua 版本（只在 `.emmyrc.json` 没写时生效）。
+- 插件下发的内容：自动探测到的 UE 库目录（§3）、设置页里填的额外库目录、默认 Lua 版本（只在 `.emmyrc.json` 没写时生效）、默认关掉的诊断（`diagnostics.disable`）。
+- 默认关掉的诊断现在只有 `unnecessary-if`：emmylua_ls 0.25.1 把字段第一次赋的字面量当成字段类型（`self.bFlag = false` 推成 `false`，`self.Timer = nil` 推成 `nil`），后面再赋别的值也不放宽，`if self.bFlag then` 就报「永远为假」；面向对象的 Lua 里字段几乎都这样初始化，误报太多（2026-11-18 用户报）。`disable` 优先于 `enables`、数组又和用户配置取并集，所以用户在配置文件的 `diagnostics.enables` 里写了 `unnecessary-if` 时插件不下发，想要这条诊断就这样打开。升级 emmylua_ls 时用 `emmylua_check` 跑一下「字段先赋 false、别处赋 true、再 if」的例子，上游修好了就去掉（`EmmyLuaWorkspaceConfig.DEFAULT_DISABLED_DIAGNOSTICS`）；2026-11-18 看上游主干：`false` 初始化的已修，`nil` 初始化的（`self.Timer = nil` 后 `if self.Timer`）还报。
 - 设置页（设置 → 语言和框架 → EmmyLua）只放：emmylua_ls 路径（留空用插件自带的）、额外库目录、是否自动探测 UE 项目、默认 Lua 版本，和「打开 / 新建 .emmyrc.json」按钮。
 
 ### 2.5 服务器进程
