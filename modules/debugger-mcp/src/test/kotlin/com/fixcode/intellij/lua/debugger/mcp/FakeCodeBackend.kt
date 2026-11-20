@@ -14,7 +14,7 @@ import java.util.concurrent.atomic.AtomicInteger
  * （`M:OnButtonClicked` 这样的全名、参数作为函数的子项、表构造里的字段作为表的子项）。
  */
 class FakeCodeBackend(override val projectName: String = "Game", val root: String = "/work/Game") : LuaCodeBackend {
-    class Entry(val file: LuaFile, val text: String, var symbols: List<DocSymbol>?)
+    class Entry(val file: LuaFile, val text: String, @Volatile var symbols: List<DocSymbol>?)
 
     val entries = LinkedHashMap<String, Entry>()
     val workspace = ArrayList<WorkspaceSymbolHit>()

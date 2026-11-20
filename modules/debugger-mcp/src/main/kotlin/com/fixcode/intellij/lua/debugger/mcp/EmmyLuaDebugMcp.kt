@@ -94,7 +94,7 @@ class EmmyLuaDebugMcp(
             | Who uses a symbol | `lua_code` action=`references` query="M:Fire", or file + line + col |
 
             - search covers project scripts by default; scope=all adds libraries (UE declarations, extra libraries, emmylua std).
-            - `indexing`: emmylua_ls is starting or indexing, retry in a few seconds. `engine_unavailable`: no project / no server, grep instead.
+            - lua_code waits (up to a minute) for emmylua_ls to start and index before answering; `indexing` means it is still not ready after that, retry later. Files emmylua_ls never indexes (excluded in .emmyrc.json) are skipped and named in `note` when nothing matched. `engine_unavailable`: no project / no server, grep instead.
             - Fields assigned outside a table constructor (`M.x = 1`) are not listed by emmylua_ls; grep for those.
         """.trimIndent()
     }

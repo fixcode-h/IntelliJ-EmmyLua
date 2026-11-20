@@ -38,6 +38,20 @@ class LuaCodeTools(
         val scanMillis: Long = 45_000,
         /** 同时发给服务器的 documentSymbol 请求数。 */
         val parallel: Int = 24,
+        /**
+         * emmylua_ls 还在启动或建索引时最多等多久再返回。原来马上返回「稍后重试」，
+         * Agent 拿到不全的结果常常就当成「没有」（用户 2026-11-20 报：第一次 search 因为还有 854 个文件没索引返回空）。
+         */
+        val indexWaitMillis: Long = 60_000,
+        /** 等索引时隔多久再问一次服务器。 */
+        val indexPollMillis: Long = 1_000,
+        /**
+         * 连续这么多次再问、没索引的文件一个都没少，就认定服务器不收它们（被 .emmyrc.json 排除、不在它的工作区里），
+         * 不再等：用户 2026-11-20 报每次 search 都带「还有 854 个文件没索引完」，其实那批文件 emmylua_ls 永远不给结果。
+         */
+        val stallPolls: Int = 3,
+        /** 认定不收的文件多久后再问一次（文件版本变了也会马上再问）。 */
+        val excludedRecheckMillis: Long = 10 * 60_000,
     )
 
     fun all(): List<McpTool> = listOf(tool())
@@ -57,7 +71,7 @@ class LuaCodeTools(
                 "'UI.MainPanel.Show'. A require path or script name: files ('UI.MainPanel', 'MainPan'). Before reading a big " +
                 "script: outline, then read only the lines you need. Who calls it: references.",
             insteadOf = "grep/glob over script folders: one indexed lookup, declarations only, knows require paths and ':' methods.",
-            notFor = "C++ / Blueprint (UE or VS tools); runtime values (lua_debug_*). On indexing retry in a few seconds; on " +
+            notFor = "C++ / Blueprint (UE or VS tools); runtime values (lua_debug_*). It waits up to a minute for indexing; on " +
                 "engine_unavailable grep instead.",
             results = "search: name, kind, container, file, line/col (1-based), sig, module, local, lib; files: name, path, " +
                 "module; outline: file, module, items; references: target, items {file, line, col, text}.",
@@ -144,7 +158,7 @@ class LuaCodeTools(
         val slice = hits.drop(offset).take(limit)
         val m = page(slice, offset, hits.size > offset + slice.size, hits.size, ResultJson.BUDGET) { declJson(it.decl, it.ctx, withFile = true) }
         projectNote(b, m)
-        index.note()?.let { m["note"] = it }
+        index.note(hits.isEmpty())?.let { m["note"] = it }
         if (hits.isEmpty() && m["note"] == null) {
             m["note"] = "没有找到名字匹配 '$query' 的 Lua 声明" + (if (!all) "（只查了项目脚本，库里的用 scope=all）" else "") +
                 "。emmylua_ls 不列出 `M.x = 1` 这类在表外赋值的字段：找这种用 grep。"
@@ -185,7 +199,7 @@ class LuaCodeTools(
         val file = resolve(b, path, bases)
         requireServer(b)
         val module = LuaSymbols.moduleName(file.path, bases)
-        val symbols = await(b.documentSymbols(file), timeouts.requestMillis, "textDocument/documentSymbol")
+        val symbols = untilIndexed(System.nanoTime(), fileWaitMillis(b, file)) { await(b.documentSymbols(file), timeouts.requestMillis, "textDocument/documentSymbol") }
             ?: throw indexing("emmylua_ls 还没索引到 ${file.path}（刚启动或文件在工作区和库目录之外）。几秒后重试；一直这样就检查 .emmyrc.json 的 workspace 设置。")
         val decls = LuaSymbols.declarations(symbols, b.readText(file)).filter { kinds == null || it.kind in kinds }
         val slice = decls.drop(offset).take(limit)
@@ -302,7 +316,8 @@ class LuaCodeTools(
 
     private class FileCtx(val file: LuaFile, val module: String?)
 
-    private class CachedFile(val stamp: Long, val decls: List<LuaDecl>)
+    /** [excludedAt] 不为 0：emmylua_ls 一直不给这个文件结果，那时起认定它不收，到 excludedRecheckMillis 再问。 */
+    private class CachedFile(val stamp: Long, val decls: List<LuaDecl>, val excludedAt: Long = 0)
 
     private inner class ProjectIndex(
         val files: List<Pair<FileCtx, List<LuaDecl>>>,
@@ -310,10 +325,15 @@ class LuaCodeTools(
         val bases: List<String>,
         val pending: Int,
         val skipped: Int,
+        /** emmylua_ls 不收的项目文件（路径），没查它们 */
+        val excluded: List<String>,
     ) {
-        fun note(): String? = when {
+        /** [empty]：这次没有命中。不收的文件只在没命中时提一句，免得每次搜索都带同一句话。 */
+        fun note(empty: Boolean): String? = when {
             skipped > 0 -> "扫描超时，还有 $skipped 个文件没查，结果不全：稍后重试（结果会缓存，第二次快得多）。"
-            pending > 0 -> "emmylua_ls 还有 $pending 个文件没索引完，结果可能不全：稍后重试。"
+            pending > 0 -> "emmylua_ls 等了 ${timeouts.indexWaitMillis / 1000} 秒还有 $pending 个文件没索引完，结果可能不全：稍后再查一次。"
+            empty && excluded.isNotEmpty() -> "有 ${excluded.size} 个项目里的 .lua 文件 emmylua_ls 不给结果（多半被 .emmyrc.json 排除或不在它的工作区里，" +
+                "例如 ${LuaSymbols.sampleDirs(excluded, 3).joinToString("、")}），没查这些；要找它们里面的代码用 rg。"
             else -> null
         }
     }
@@ -335,40 +355,94 @@ class LuaCodeTools(
         for (f in all) byPath[norm(f.path)] = FileCtx(f, LuaSymbols.moduleName(f.path, bases))
         val result = ArrayList<Pair<FileCtx, List<LuaDecl>>>()
         val todo = ArrayList<FileCtx>()
+        val excluded = ArrayList<String>()
+        val nowMs = System.currentTimeMillis()
         for (f in project) {
             val ctx = byPath.getValue(norm(f.path))
             val hit = cache[norm(f.path)]
-            if (hit != null && hit.stamp == f.stamp) result += ctx to hit.decls else todo += ctx
+            when {
+                hit == null || hit.stamp != f.stamp -> todo += ctx
+                hit.excludedAt == 0L -> result += ctx to hit.decls
+                nowMs - hit.excludedAt < timeouts.excludedRecheckMillis -> excluded += f.path
+                else -> todo += ctx
+            }
         }
-        var pending = 0
         var skipped = 0
-        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeouts.scanMillis)
+        val started = System.nanoTime()
+        val deadline = started + TimeUnit.MILLISECONDS.toNanos(timeouts.scanMillis)
+        var waiting = scan(b, todo, deadline, cache, result) { skipped++ }
+        // 服务器还没索引到的文件（documentSymbol 回 null）：等它建完再查，免得把「没索引完」当成「没有」交给 Agent。
+        // 一直不少的那批是服务器不收的，等几次没进展就不等了，记下来以后直接跳过
+        val indexDeadline = started + TimeUnit.MILLISECONDS.toNanos(timeouts.indexWaitMillis)
+        var stalls = 0
+        while (waiting.isNotEmpty() && stalls < timeouts.stallPolls && System.nanoTime() < indexDeadline) {
+            pause()
+            val before = waiting.size
+            waiting = scan(b, waiting, indexDeadline, cache, result) { skipped++ }
+            // 一个结果都还没有时是服务器整体还在建索引，一直等到上限；有了结果、剩下的又不动，才算「不收」
+            stalls = if (waiting.size < before || result.isEmpty()) 0 else stalls + 1
+        }
+        if (waiting.isNotEmpty() && stalls >= timeouts.stallPolls) {
+            val at = System.currentTimeMillis()
+            for (ctx in waiting) {
+                cache[norm(ctx.file.path)] = CachedFile(ctx.file.stamp, emptyList(), at)
+                excluded += ctx.file.path
+            }
+            waiting = emptyList()
+        }
+        val pending = waiting.size
+        if (project.isNotEmpty() && pending + skipped + excluded.size >= project.size && pending + skipped > 0) {
+            throw indexing("emmylua_ls 还在建立索引（等了 ${timeouts.indexWaitMillis / 1000} 秒，${project.size} 个项目脚本都还没有结果），稍后重试。")
+        }
+        return ProjectIndex(result, byPath, bases, pending, skipped, excluded)
+    }
+
+    /** 问一批文件的符号，结果放进 [result]；返回服务器还没索引到的文件。超时的记进 [onSkip]。 */
+    private fun scan(b: LuaCodeBackend, todo: List<FileCtx>, deadline: Long, cache: ConcurrentHashMap<String, CachedFile>, result: MutableList<Pair<FileCtx, List<LuaDecl>>>, onSkip: () -> Unit): List<FileCtx> {
+        val notYet = ArrayList<FileCtx>()
         for (chunk in todo.chunked(timeouts.parallel.coerceAtLeast(1))) {
-            if (System.nanoTime() > deadline) { skipped += chunk.size; continue }
+            if (System.nanoTime() > deadline) { chunk.forEach { _ -> onSkip() }; continue }
             val futures = chunk.map { it to b.documentSymbols(it.file) }
             for ((ctx, future) in futures) {
                 val left = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()).coerceAtLeast(1)
                 val symbols = try {
                     future.get(minOf(left, timeouts.requestMillis), TimeUnit.MILLISECONDS)
                 } catch (e: TimeoutException) {
-                    future.cancel(true); skipped++; continue
+                    future.cancel(true); onSkip(); continue
                 } catch (e: ExecutionException) {
-                    pending++; continue
+                    notYet += ctx; continue
                 } catch (e: InterruptedException) {
                     Thread.currentThread().interrupt()
                     throw ToolException("cancelled", "调用被客户端取消。")
                 }
-                if (symbols == null) { pending++; continue }
+                if (symbols == null) { notYet += ctx; continue }
                 val decls = LuaSymbols.declarations(symbols, b.readText(ctx.file))
                 // 服务器给了空表、文件却不空：多半是还没索引到，别缓存
                 if (symbols.isNotEmpty() || decls.isNotEmpty()) cache[norm(ctx.file.path)] = CachedFile(ctx.file.stamp, decls)
                 result += ctx to decls
             }
         }
-        if (project.isNotEmpty() && pending + skipped >= project.size) {
-            throw indexing("emmylua_ls 还在建立索引（${project.size} 个项目脚本都还没有结果），几秒后重试。")
+        return notYet
+    }
+
+    /** 等索引时睡一会儿；客户端取消时中断。 */
+    private fun pause() {
+        try {
+            Thread.sleep(timeouts.indexPollMillis)
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw ToolException("cancelled", "调用被客户端取消。")
         }
-        return ProjectIndex(result, byPath, bases, pending, skipped)
+    }
+
+    /** [ask] 回 null（服务器还没索引到）时隔一会儿再问，最多等到 [started] 起 [maxMillis]。 */
+    private fun <T> untilIndexed(started: Long, maxMillis: Long, ask: () -> T?): T? {
+        val deadline = started + TimeUnit.MILLISECONDS.toNanos(maxMillis)
+        while (true) {
+            ask()?.let { return it }
+            if (System.nanoTime() >= deadline) return null
+            pause()
+        }
     }
 
     // ======================================================================= 公共
@@ -438,7 +512,15 @@ class LuaCodeTools(
     private fun requireServer(b: LuaCodeBackend) {
         when (val s = b.serverState()) {
             ServerState.Ready -> {}
-            ServerState.Starting -> throw indexing("emmylua_ls 正在启动，几秒后重试。")
+            ServerState.Starting -> {
+                // 刚打开项目时服务器还在启动：等它起来，不让 Agent 自己隔几秒重试
+                val ready = untilIndexed(System.nanoTime(), timeouts.indexWaitMillis) { b.serverState().takeIf { it !is ServerState.Starting } }
+                when (ready) {
+                    null -> throw indexing("emmylua_ls 等了 ${timeouts.indexWaitMillis / 1000} 秒还在启动，稍后重试。")
+                    is ServerState.Unavailable -> throw ToolException("engine_unavailable", ready.message)
+                    else -> {}
+                }
+            }
             is ServerState.Unavailable -> throw ToolException("engine_unavailable", s.message)
         }
     }
@@ -447,6 +529,17 @@ class LuaCodeTools(
         val known = b.luaFiles().map { it to LuaSymbols.moduleName(it.path, bases) }
         return LuaSymbols.resolveFile(input, bases, known, b::fileAt)
             ?: throw ToolException("target_not_found", "找不到 Lua 文件 '$input'（绝对路径、相对项目或脚本根的路径、模块名都试过了）：用 $NAME action=files query=... 先找文件。")
+    }
+
+    /**
+     * 单个文件等多久：search 已经认定服务器不收的文件不等；项目里已经有文件查到过（服务器在工作）时只等几次，
+     * 剩下的情况（刚启动）等满 indexWaitMillis。
+     */
+    private fun fileWaitMillis(b: LuaCodeBackend, file: LuaFile): Long {
+        val cache = caches[b.projectName] ?: return timeouts.indexWaitMillis
+        val hit = cache[norm(file.path)]
+        if (hit != null && hit.stamp == file.stamp && hit.excludedAt != 0L) return 0
+        return if (cache.values.any { it.excludedAt == 0L }) timeouts.stallPolls * timeouts.indexPollMillis else timeouts.indexWaitMillis
     }
 
     private fun indexing(message: String) = ToolException("indexing", message)

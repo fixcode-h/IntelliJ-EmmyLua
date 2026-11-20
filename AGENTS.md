@@ -46,6 +46,8 @@
 - 预算：默认约 4000 字，读结构的（栈、变量树）最多 12000 字；超出时截断、标 `truncated` 并给出 `nextOffset` / `next`，至少返回一项保证 Agent 能往下翻。日志类保留最新的。
 - 会停下的动作（`pause` / `step` / `wait`）返回同一种事件结构：`event` = `break` / `probe` / `resumed` / `exited` / `timeout` / `idle` / `running`；`break` 时带 `location`、`source`（当前行 ±2）、8 帧 `stack` 和栈顶 `locals`，Agent 一般不用再调一次 `stack`。已经停着且这个客户端没看过的暂停，`wait` 马上返回。
 
+- **等到结果再返回**（面板 ADR 0067 第 5 节）：emmylua_ls 在启动、在建索引时 `lua_code` 自己等（`LuaCodeTools.Timeouts.indexWaitMillis`，默认 60 秒）再返回，不让 Agent 隔几秒重试；一直不给结果的文件（被 `.emmyrc.json` 排除、不在工作区）连着几次没进展就认定不收，记住后跳过，只在没命中时在 `note` 里提一句。
+
 ### 错误
 
 - 出错返回 `isError: true` + `{"error": "<code>", "message": "<中文说明>"}`。`message` 原样给用户和 Agent 看，要写清楚**怎么办**（例：「游戏已继续运行，引用失效：先 lua_debug_session action=wait 或 lua_debug_inspect action=stack 取新的。」）。

@@ -156,6 +156,11 @@ object LuaSymbols {
     // ------------------------------------------------------------------ 查询
 
     /** `a.b:c` / `a.b.c` 拆成 (容器, 名字)。 */
+    /** 一批文件最常见的几个所在目录（按文件数），提示里举例用。 */
+    fun sampleDirs(paths: List<String>, n: Int): List<String> =
+        paths.groupingBy { it.replace('\\', '/').substringBeforeLast('/', "") }.eachCount()
+            .entries.sortedByDescending { it.value }.take(n).map { it.key.ifEmpty { "/" } }
+
     fun splitQuery(query: String): Pair<String?, String> {
         val q = query.trim()
         val cut = q.lastIndexOfAny(charArrayOf('.', ':'))

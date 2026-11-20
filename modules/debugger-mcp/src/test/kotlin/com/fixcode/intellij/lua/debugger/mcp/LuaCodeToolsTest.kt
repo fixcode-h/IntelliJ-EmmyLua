@@ -24,6 +24,9 @@ class LuaCodeToolsTest {
     private lateinit var client: McpTestClient
     private val T = LuaCodeTools.NAME
 
+    // 等索引的时长缩到毫秒级，单测不真等一分钟
+    private val FAST = LuaCodeTools.Timeouts(indexWaitMillis = 400, indexPollMillis = 20, stallPolls = 3)
+
     @Before
     fun setUp() {
         backend = FakeCodeBackend()
@@ -32,7 +35,7 @@ class LuaCodeToolsTest {
         backend.add("Plugins/UnLua/Content/Script/UnLua.lua", "UnLua = {}\nfunction UnLua.Class() end\n",
             listOf(com.fixcode.intellij.lua.debugger.mcp.code.DocSymbol("UnLua.Class", 12, "()", 1, 9)), library = true)
         backends = listOf(backend)
-        client = McpTestClient(McpToolDispatcher(LuaCodeTools({ backends }).all(), McpCallLog()))
+        client = McpTestClient(McpToolDispatcher(LuaCodeTools({ backends }, FAST).all(), McpCallLog()))
     }
 
     @Suppress("UNCHECKED_CAST")
@@ -157,13 +160,39 @@ class LuaCodeToolsTest {
     }
 
     @Test
-    fun `所有文件都还没索引时报 indexing，部分没索引时带说明`() {
+    fun `所有文件等到上限都还没索引时报 indexing，部分一直不给结果时没命中才说明`() {
         backend.entries.values.forEach { it.symbols = null }
         assertEquals("indexing", client.call(T, mapOf("action" to "search", "query" to "Fire")).code)
         backend.add("Content/Script/Weapon/Gun.lua", FakeCodeBackend.GUN, FakeCodeBackend.gunSymbols())
         val r = client.call(T, mapOf("action" to "search", "query" to "Fire"))
         assertFalse(r.raw, r.isError)
-        assertTrue(r["note"] as String, "没索引完" in (r["note"] as String))
+        assertNull(r.raw, r["note"])
+        val miss = client.call(T, mapOf("action" to "search", "query" to "NoSuchThing"))
+        assertTrue(miss.raw, "不给结果" in (miss["note"] as String))
+    }
+
+    @Test
+    fun `还在建索引时等它建完再返回，不让 Agent 拿着不全的结果`() {
+        val gun = backend.entries.values.first { it.file.path.endsWith("Gun.lua") }
+        val symbols = gun.symbols
+        gun.symbols = null
+        Thread { Thread.sleep(60); gun.symbols = symbols }.start()
+        val r = client.call(T, mapOf("action" to "search", "query" to "Fire"))
+        assertFalse(r.raw, r.isError)
+        assertNull(r.raw, r["note"])
+        assertTrue(r.raw, items(r).any { it["name"] == "Fire" || (it["name"] as String).endsWith("Fire") })
+    }
+
+    @Test
+    fun `一直不给结果的文件认定不收：不再等、不再每次都提，没命中时才说一句`() {
+        backend.add("Content/Script/Excluded/Old.lua", "function Old() end\n", null)
+        val first = client.call(T, mapOf("action" to "search", "query" to "Fire"))
+        assertFalse(first.raw, first.isError)
+        assertNull(first.raw, first["note"])
+        val calls = backend.docSymbolCalls.get()
+        val miss = client.call(T, mapOf("action" to "search", "query" to "NoSuchThing"))
+        assertTrue(miss.raw, "不给结果" in (miss["note"] as String) && "Excluded" in (miss["note"] as String))
+        assertEquals("认定不收的文件不再问服务器", calls, backend.docSymbolCalls.get())
     }
 
     @Test
