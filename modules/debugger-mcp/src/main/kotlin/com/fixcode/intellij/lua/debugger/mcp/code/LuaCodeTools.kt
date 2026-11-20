@@ -330,7 +330,7 @@ class LuaCodeTools(
     ) {
         /** [empty]：这次没有命中。不收的文件只在没命中时提一句，免得每次搜索都带同一句话。 */
         fun note(empty: Boolean): String? = when {
-            skipped > 0 -> "扫描超时，还有 $skipped 个文件没查，结果不全：稍后重试（结果会缓存，第二次快得多）。"
+            skipped > 0 -> "扫描超时或请求出错，还有 $skipped 个文件没查到，结果不全：稍后重试（查到的会缓存，第二次快得多）。"
             pending > 0 -> "emmylua_ls 等了 ${timeouts.indexWaitMillis / 1000} 秒还有 $pending 个文件没索引完，结果可能不全：稍后再查一次。"
             empty && excluded.isNotEmpty() -> "有 ${excluded.size} 个项目里的 .lua 文件 emmylua_ls 不给结果（多半被 .emmyrc.json 排除或不在它的工作区里，" +
                 "例如 ${LuaSymbols.sampleDirs(excluded, 3).joinToString("、")}），没查这些；要找它们里面的代码用 rg。"
@@ -410,7 +410,8 @@ class LuaCodeTools(
                 } catch (e: TimeoutException) {
                     future.cancel(true); onSkip(); continue
                 } catch (e: ExecutionException) {
-                    notYet += ctx; continue
+                    // 请求本身失败不是「没索引到」：不进等待、也不会被记成不收，算进跳过的，note 里会说结果不全
+                    onSkip(); continue
                 } catch (e: InterruptedException) {
                     Thread.currentThread().interrupt()
                     throw ToolException("cancelled", "调用被客户端取消。")
