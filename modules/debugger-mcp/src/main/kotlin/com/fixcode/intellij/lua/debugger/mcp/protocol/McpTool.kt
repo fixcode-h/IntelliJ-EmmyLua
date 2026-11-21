@@ -29,11 +29,16 @@ class McpTool(
     val level: PermissionLevel,
     /** 可能结束目标进程或丢数据（例如 stop 时游戏随调试器一起退出）。 */
     val destructive: Boolean = false,
+    /**
+     * 不写进 schema、但也接受的参数名。目前只有 IDE 自带工具通用的 `projectPath`：Agent 看惯了 IDE 工具都带它，
+     * 给我们的工具也会顺手传（用户 2026-11-21 报 lua_code 因此整次失败）；它是 camelCase，不进 schema，免得破坏参数命名规范。
+     */
+    val hiddenArgs: Set<String> = emptySet(),
     val handler: (ToolCall) -> Map<String, Any?>,
 ) {
     /** 参数名（校验未知参数用）。 */
     @Suppress("UNCHECKED_CAST")
-    val argumentNames: Set<String> = (inputSchema["properties"] as? Map<String, Any?>)?.keys ?: emptySet()
+    val argumentNames: Set<String> = (inputSchema["properties"] as? Map<String, Any?>)?.keys.orEmpty() + hiddenArgs
 
     fun descriptor(): Map<String, Any?> = linkedMapOf(
         "name" to name,

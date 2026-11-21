@@ -57,6 +57,13 @@ class LuaDebugToolsTest {
     }
 
     @Test
+    fun `传了 IDE 工具的 projectPath 时报错里直接说改用 project`() {
+        val r = client.call(S, mapOf("action" to "configs", "projectPath" to "/work/Game"))
+        assertEquals("invalid_argument", r.code)
+        assertTrue(r["message"] as String, (r["message"] as String).contains("这个工具用 project"))
+    }
+
+    @Test
     fun `action 不合法时报错`() {
         val r = client.call(S, mapOf("action" to "fly"))
         assertEquals("invalid_argument", r.code)

@@ -31,7 +31,7 @@
 
 - 参数名 snake_case（`session_id`、`wait_ms`、`timeout_ms`、`hit_count`、`auto_continue`、`max_chars`）。
 - 每个工具的 inputSchema 写 `additionalProperties: false`（IDE 的 MCP 服务器生成 schema 时只取 properties 和 required，所以未知参数靠下一条拒绝），`action` 必填并给出 `enum`；每个参数的 description 用英文写清楚哪些 action 用它、默认值是多少（例：`"step: over (default) / into / out / toLine"`）。
-- **未知参数直接报错**并列出合法的名字（`JsonArgs(raw, allowed)`）：拼错的过滤条件被悄悄忽略比报错更糟。类型宽松：`"20"` 当整数、`"a, b"` 当字符串数组；超范围报错并写出范围。
+- **未知参数直接报错**并列出合法的名字（`JsonArgs(raw, allowed)`）：拼错的过滤条件被悄悄忽略比报错更糟。例外：IDE 自带工具通用的 `projectPath`，Agent 会顺手传给我们的工具，`lua_code` 经 `McpTool.hiddenArgs` 接受它（不进 schema，按路径选项目）；其他带 `project` 的工具报错时直接说改用 `project`。类型宽松：`"20"` 当整数、`"a, b"` 当字符串数组；超范围报错并写出范围。
 - 行号从 1 开始；帧号 `frame` 从 0（栈顶）开始。
 - 列表分页用 `limit` / `offset`（默认 30–50，最大 200）；日志类增量读取用 `cursor`，值是上次返回的 `next`。
 - 会阻塞等待的动作给上限：`wait` 的 `timeout_ms` ≤ 120000（默认 30000），`step` 的 `wait_ms` 默认 10000、`pause` 默认 5000、`continue` 默认 0。

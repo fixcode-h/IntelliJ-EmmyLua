@@ -9,6 +9,7 @@ import com.fixcode.intellij.lua.debugger.mcp.protocol.ToolGuide
 import com.fixcode.intellij.lua.debugger.mcp.tools.ResultJson
 import com.fixcode.intellij.lua.debugger.mcp.tools.ResultJson.obj
 import com.fixcode.intellij.lua.debugger.mcp.tools.schema
+import java.nio.file.Path
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutionException
@@ -97,6 +98,7 @@ class LuaCodeTools(
             integer("offset", "Items to skip (use nextOffset from the previous call).", minimum = 0)
         },
         level = PermissionLevel.READ,
+        hiddenArgs = setOf(PROJECT_PATH),
     ) { call ->
         val a = call.args
         when (a.choice("action", null, *actions)) {
@@ -492,7 +494,8 @@ class LuaCodeTools(
     }
 
     /**
-     * 选项目：给了 `project` 按名字；给了绝对路径选包含它的；否则焦点项目（列表第一个）。
+     * 选项目：给了 `project` 按名字；给了 `projectPath`（IDE 自带工具的写法，见 [McpTool.hiddenArgs]）按路径；
+     * 给了绝对路径选包含它的；否则焦点项目（列表第一个）。
      */
     private fun pickBackend(a: JsonArgs, path: String?): LuaCodeBackend {
         val list = backends()
@@ -502,9 +505,31 @@ class LuaCodeTools(
             return list.firstOrNull { it.projectName.equals(wanted, ignoreCase = true) }
                 ?: throw ToolArgumentException("没有打开名为 '$wanted' 的项目，打开的是：${list.joinToString { it.projectName }}")
         }
+        val dir = a.string(PROJECT_PATH)?.trim()?.trim('"')?.takeIf { it.isNotEmpty() }
+        if (dir != null) {
+            byDir(list, dir)?.let { return it }
+            // 只开了一个项目时 projectPath 对不上也照查：Agent 常填工作区根（项目的上级目录之外），为这个让整次失败不划算
+            if (list.size > 1) throw ToolArgumentException(
+                "projectPath '$dir' 不属于任何打开的项目；改用 project 传项目名，打开的是：${list.joinToString { it.projectName }}")
+        }
         if (path != null && list.size > 1) list.firstOrNull { it.owns(path.trim().trim('"')) }?.let { return it }
         return list[0]
     }
+
+    /**
+     * 按 projectPath 选项目：路径在项目里面的优先，项目嵌套时取根最深（最具体）的那个；
+     * 否则路径是项目根的上级目录（Agent 常填工作区根，IDE 打开的是它下面的子目录），只有一个项目对得上才算，多个算对不上。
+     */
+    private fun byDir(list: List<LuaCodeBackend>, dir: String): LuaCodeBackend? {
+        val p = normPath(dir) ?: return null
+        val bases = list.associateWith { b -> b.baseDirs().mapNotNull { normPath(it) } }
+        list.filter { it.owns(dir) }
+            .maxByOrNull { b -> bases.getValue(b).filter { p.startsWith(it) }.maxOfOrNull { it.nameCount } ?: -1 }
+            ?.let { return it }
+        return list.filter { b -> bases.getValue(b).any { it.startsWith(p) } }.singleOrNull()
+    }
+
+    private fun normPath(s: String): Path? = runCatching { Path.of(s).toAbsolutePath().normalize() }.getOrNull()
 
     private fun projectNote(b: LuaCodeBackend, m: MutableMap<String, Any?>) {
         if (backends().size > 1) m["project"] = b.projectName
@@ -565,5 +590,8 @@ class LuaCodeTools(
 
     companion object {
         const val NAME = "lua_code"
+
+        /** IDE 自带工具通用的项目参数，我们不写进 schema 但接受（见 [McpTool.hiddenArgs]） */
+        const val PROJECT_PATH = "projectPath"
     }
 }
