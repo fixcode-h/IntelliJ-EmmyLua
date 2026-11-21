@@ -269,6 +269,25 @@ class LuaCodeToolsTest {
         assertEquals("invalid_argument", client.call(T, mapOf("action" to "search", "query" to "x", "project" to "Nope")).code)
     }
 
+    @Test
+    fun `接受 IDE 工具通用的 projectPath：按路径选项目，上级目录也算，对不上且多个项目时报错说改用 project`() {
+        val other = FakeCodeBackend("Tools", "/work/Tools")
+        other.add("Scripts/Build.lua", "function Build() end\n", listOf(com.fixcode.intellij.lua.debugger.mcp.code.DocSymbol("Build", 12, "()", 0, 9)))
+        backends = listOf(backend, other)
+        // 项目里面的路径（用户 2026-11-21 报的就是传了脚本根）
+        assertEquals("Tools", client.call(T, mapOf("action" to "search", "query" to "Build", "projectPath" to "/work/Tools/Scripts"))["project"])
+        // 项目根的上级目录（工作区根）
+        assertEquals("Game", client.call(T, mapOf("action" to "search", "query" to "Fire", "projectPath" to "/work"))["project"])
+        val bad = client.call(T, mapOf("action" to "search", "query" to "Build", "projectPath" to "/elsewhere"))
+        assertEquals("invalid_argument", bad.code)
+        assertTrue(bad.raw, "改用 project" in bad.raw)
+        // 只开了一个项目时对不上也照查
+        backends = listOf(other)
+        assertEquals("Build", items(client.call(T, mapOf("action" to "search", "query" to "Build", "projectPath" to "/elsewhere"))).single()["name"])
+        // schema 里不出现 projectPath（参数名保持 snake_case）
+        assertFalse(((client.tools().single()["inputSchema"] as Map<*, *>)["properties"] as Map<*, *>).containsKey("projectPath"))
+    }
+
     // ------------------------------------------------------------------ 纯逻辑
 
     @Test

@@ -9,6 +9,7 @@ import com.fixcode.intellij.lua.debugger.mcp.protocol.ToolGuide
 import com.fixcode.intellij.lua.debugger.mcp.tools.ResultJson
 import com.fixcode.intellij.lua.debugger.mcp.tools.ResultJson.obj
 import com.fixcode.intellij.lua.debugger.mcp.tools.schema
+import java.nio.file.Path
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutionException
@@ -97,6 +98,7 @@ class LuaCodeTools(
             integer("offset", "Items to skip (use nextOffset from the previous call).", minimum = 0)
         },
         level = PermissionLevel.READ,
+        hiddenArgs = setOf(PROJECT_PATH),
     ) { call ->
         val a = call.args
         when (a.choice("action", null, *actions)) {
@@ -492,7 +494,8 @@ class LuaCodeTools(
     }
 
     /**
-     * 选项目：给了 `project` 按名字；给了绝对路径选包含它的；否则焦点项目（列表第一个）。
+     * 选项目：给了 `project` 按名字；给了 `projectPath`（IDE 自带工具的写法，见 [McpTool.hiddenArgs]）按路径；
+     * 给了绝对路径选包含它的；否则焦点项目（列表第一个）。
      */
     private fun pickBackend(a: JsonArgs, path: String?): LuaCodeBackend {
         val list = backends()
@@ -502,8 +505,22 @@ class LuaCodeTools(
             return list.firstOrNull { it.projectName.equals(wanted, ignoreCase = true) }
                 ?: throw ToolArgumentException("没有打开名为 '$wanted' 的项目，打开的是：${list.joinToString { it.projectName }}")
         }
+        val dir = a.string(PROJECT_PATH)?.trim()?.trim('"')?.takeIf { it.isNotEmpty() }
+        if (dir != null) {
+            list.firstOrNull { matchesDir(it, dir) }?.let { return it }
+            // 只开了一个项目时 projectPath 对不上也照查：Agent 常填工作区根（项目的上级目录之外），为这个让整次失败不划算
+            if (list.size > 1) throw ToolArgumentException(
+                "projectPath '$dir' 不属于任何打开的项目；改用 project 传项目名，打开的是：${list.joinToString { it.projectName }}")
+        }
         if (path != null && list.size > 1) list.firstOrNull { it.owns(path.trim().trim('"')) }?.let { return it }
         return list[0]
+    }
+
+    /** projectPath 在项目里面，或者是项目根的上级目录（Agent 常填工作区根，IDE 打开的是它下面的子目录） */
+    private fun matchesDir(b: LuaCodeBackend, dir: String): Boolean {
+        if (b.owns(dir)) return true
+        val p = runCatching { Path.of(dir).toAbsolutePath().normalize() }.getOrNull() ?: return false
+        return b.baseDirs().any { base -> runCatching { Path.of(base).toAbsolutePath().normalize().startsWith(p) }.getOrDefault(false) }
     }
 
     private fun projectNote(b: LuaCodeBackend, m: MutableMap<String, Any?>) {
@@ -565,5 +582,8 @@ class LuaCodeTools(
 
     companion object {
         const val NAME = "lua_code"
+
+        /** IDE 自带工具通用的项目参数，我们不写进 schema 但接受（见 [McpTool.hiddenArgs]） */
+        const val PROJECT_PATH = "projectPath"
     }
 }
