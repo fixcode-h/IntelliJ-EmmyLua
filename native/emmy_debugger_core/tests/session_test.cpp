@@ -863,8 +863,31 @@ TEST_CASE("session.expand_tostring_coroutine") {
 	json cst = c.Request("stackTrace", {{"vmId", pz["body"]["vmId"]}, {"pauseId", pz["body"]["pauseId"]}, {"threadId", coId}});
 	CHECK(Ok(cst));
 	bool yieldLine = false;
-	for (auto& f : cst["body"]["frames"]) if (f["line"] == 18) yieldLine = true; // coroutine.yield 那一行
+	uint64_t coFrame = 0;
+	for (auto& f : cst["body"]["frames"]) {
+		if (f["line"] == 18) { // coroutine.yield 那一行
+			yieldLine = true;
+			coFrame = f["frameId"];
+		}
+	}
 	CHECK(yieldLine);
+	// 别的协程的帧上求值 / 改值：要在那个协程的栈上找局部变量，不能拿暂停线程同一层的帧（以前会得到 nil）
+	for (const char* mode : {"valuePath", "lua"}) {
+		json ce = c.Request("evaluate", {{"frameId", coFrame}, {"expression", "inner"}, {"mode", mode}});
+		CHECK(Ok(ce));
+		if (Ok(ce)) CHECK_EQ(ce["body"]["value"].get<std::string>(), std::string("42"));
+	}
+	json cs = c.Request("scopes", {{"frameId", coFrame}});
+	uint64_t coLocals = 0;
+	for (auto& s : cs["body"]["scopes"]) if (s["name"] == "locals") coLocals = s["ref"];
+	CHECK(coLocals != 0);
+	CHECK(Ok(c.Request("variables", {{"ref", coLocals}})));
+	json csv = c.Request("setVariable", {{"ref", coLocals}, {"name", "inner"}, {"value", "inner + 1"}, {"mode", "lua"}});
+	CHECK(Ok(csv));
+	if (Ok(csv)) CHECK_EQ(csv["body"]["value"].get<std::string>(), std::string("43"));
+	json ce2 = c.Request("evaluate", {{"frameId", coFrame}, {"expression", "inner"}});
+	if (Ok(ce2)) CHECK_EQ(ce2["body"]["value"].get<std::string>(), std::string("43"));
+	c.Request("setVariable", {{"ref", coLocals}, {"name", "inner"}, {"value", "42"}});
 	CHECK_EQ(c.Request("stackTrace", {{"vmId", pz["body"]["vmId"]}, {"threadId", "t1234"}})["error"]["code"].get<std::string>(), std::string("INVALID_ARGS"));
 
 	CHECK(Ok(SetBps(c, json::array())));
