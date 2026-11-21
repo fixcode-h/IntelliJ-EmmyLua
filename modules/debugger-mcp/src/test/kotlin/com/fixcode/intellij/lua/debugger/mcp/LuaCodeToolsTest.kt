@@ -271,16 +271,23 @@ class LuaCodeToolsTest {
 
     @Test
     fun `接受 IDE 工具通用的 projectPath：按路径选项目，上级目录也算，对不上且多个项目时报错说改用 project`() {
-        val other = FakeCodeBackend("Tools", "/work/Tools")
+        val other = FakeCodeBackend("Tools", "/srv/Tools")
         other.add("Scripts/Build.lua", "function Build() end\n", listOf(com.fixcode.intellij.lua.debugger.mcp.code.DocSymbol("Build", 12, "()", 0, 9)))
         backends = listOf(backend, other)
         // 项目里面的路径（用户 2026-11-21 报的就是传了脚本根）
-        assertEquals("Tools", client.call(T, mapOf("action" to "search", "query" to "Build", "projectPath" to "/work/Tools/Scripts"))["project"])
+        assertEquals("Tools", client.call(T, mapOf("action" to "search", "query" to "Build", "projectPath" to "/srv/Tools/Scripts"))["project"])
         // 项目根的上级目录（工作区根）
         assertEquals("Game", client.call(T, mapOf("action" to "search", "query" to "Fire", "projectPath" to "/work"))["project"])
         val bad = client.call(T, mapOf("action" to "search", "query" to "Build", "projectPath" to "/elsewhere"))
         assertEquals("invalid_argument", bad.code)
         assertTrue(bad.raw, "改用 project" in bad.raw)
+        // 项目嵌套时取根最深的那个，不按列表顺序
+        val inner = FakeCodeBackend("Inner", "/work/Game/Plugins/Inner")
+        inner.add("Scripts/Build.lua", "function Build() end\n", listOf(com.fixcode.intellij.lua.debugger.mcp.code.DocSymbol("Build", 12, "()", 0, 9)))
+        backends = listOf(backend, inner)
+        assertEquals("Inner", client.call(T, mapOf("action" to "search", "query" to "Build", "projectPath" to "/work/Game/Plugins/Inner/Scripts"))["project"])
+        // 上级目录同时盖住多个项目：算对不上
+        assertEquals("invalid_argument", client.call(T, mapOf("action" to "search", "query" to "Build", "projectPath" to "/work")).code)
         // 只开了一个项目时对不上也照查
         backends = listOf(other)
         assertEquals("Build", items(client.call(T, mapOf("action" to "search", "query" to "Build", "projectPath" to "/elsewhere"))).single()["name"])

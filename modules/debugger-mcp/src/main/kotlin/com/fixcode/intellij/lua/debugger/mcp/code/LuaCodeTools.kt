@@ -507,7 +507,7 @@ class LuaCodeTools(
         }
         val dir = a.string(PROJECT_PATH)?.trim()?.trim('"')?.takeIf { it.isNotEmpty() }
         if (dir != null) {
-            list.firstOrNull { matchesDir(it, dir) }?.let { return it }
+            byDir(list, dir)?.let { return it }
             // 只开了一个项目时 projectPath 对不上也照查：Agent 常填工作区根（项目的上级目录之外），为这个让整次失败不划算
             if (list.size > 1) throw ToolArgumentException(
                 "projectPath '$dir' 不属于任何打开的项目；改用 project 传项目名，打开的是：${list.joinToString { it.projectName }}")
@@ -516,12 +516,20 @@ class LuaCodeTools(
         return list[0]
     }
 
-    /** projectPath 在项目里面，或者是项目根的上级目录（Agent 常填工作区根，IDE 打开的是它下面的子目录） */
-    private fun matchesDir(b: LuaCodeBackend, dir: String): Boolean {
-        if (b.owns(dir)) return true
-        val p = runCatching { Path.of(dir).toAbsolutePath().normalize() }.getOrNull() ?: return false
-        return b.baseDirs().any { base -> runCatching { Path.of(base).toAbsolutePath().normalize().startsWith(p) }.getOrDefault(false) }
+    /**
+     * 按 projectPath 选项目：路径在项目里面的优先，项目嵌套时取根最深（最具体）的那个；
+     * 否则路径是项目根的上级目录（Agent 常填工作区根，IDE 打开的是它下面的子目录），只有一个项目对得上才算，多个算对不上。
+     */
+    private fun byDir(list: List<LuaCodeBackend>, dir: String): LuaCodeBackend? {
+        val p = normPath(dir) ?: return null
+        val bases = list.associateWith { b -> b.baseDirs().mapNotNull { normPath(it) } }
+        list.filter { it.owns(dir) }
+            .maxByOrNull { b -> bases.getValue(b).filter { p.startsWith(it) }.maxOfOrNull { it.nameCount } ?: -1 }
+            ?.let { return it }
+        return list.filter { b -> bases.getValue(b).any { it.startsWith(p) } }.singleOrNull()
     }
+
+    private fun normPath(s: String): Path? = runCatching { Path.of(s).toAbsolutePath().normalize() }.getOrNull()
 
     private fun projectNote(b: LuaCodeBackend, m: MutableMap<String, Any?>) {
         if (backends().size > 1) m["project"] = b.projectName
