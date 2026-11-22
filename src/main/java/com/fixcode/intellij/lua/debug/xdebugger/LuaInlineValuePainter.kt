@@ -2,7 +2,6 @@ package com.fixcode.intellij.lua.debug.xdebugger
 
 import com.fixcode.intellij.lua.debug.xdebugger.LuaInlineValueScanner.Entry
 import com.fixcode.intellij.lua.lang.LuaFileType
-import com.fixcode.intellij.lua.lexer.LuaTokenTypes
 import com.intellij.openapi.editor.DefaultLanguageHighlighterColors
 import com.intellij.openapi.editor.Document
 import com.intellij.openapi.editor.EditorLinePainter
@@ -13,7 +12,6 @@ import com.intellij.openapi.editor.markup.TextAttributes
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.VirtualFile
-import com.intellij.psi.PsiDocumentManager
 import com.intellij.xdebugger.XDebuggerManager
 import java.awt.Color
 import java.awt.Font
@@ -45,12 +43,14 @@ class LuaInlineValuePainter : EditorLinePainter() {
         if (session.currentStackFrame == null) return null
         val snapshot = LuaInlineValueStore.getInstance(project).get(session, file) ?: return null
 
-        val document = FileDocumentManager.getInstance().getDocument(file) ?: return null
+        // 绘制时平台软禁止拿锁（withLocksSoftlyProhibited），getDocument 要读锁会报错；
+        // 正在绘制的文件一定开着编辑器，文档已经在缓存里，取缓存的就够了。
+        val document = FileDocumentManager.getInstance().getCachedDocument(file) ?: return null
         if (lineNumber < 0 || lineNumber >= document.lineCount) return null
 
         val lineStart = document.getLineStartOffset(lineNumber)
         val lineEnd = document.getLineEndOffset(lineNumber)
-        val scanStart = codeStartOnLine(project, document, lineStart, lineEnd) ?: return null
+        val scanStart = codeStartOnLine(document, lineStart, lineEnd) ?: return null
 
         val entries = LuaInlineValueScanner.scan(document.immutableCharSequence.subSequence(scanStart, lineEnd))
         if (entries.isEmpty()) return null
@@ -121,20 +121,14 @@ class LuaInlineValuePainter : EditorLinePainter() {
 
     /**
      * 本行从哪里开始是代码。只扫一行文本时看不出这一行是不是在跨行的长注释 / 长字符串中间，
-     * 里面的单词会被当成变量名；扁平 PSI 已经有整个文件的 token（一次词法扫描，不等索引），借它判断：
+     * 里面的单词会被当成变量名；所以看 [LuaMultilineSpans]（整个文件扫一次词法，按修改戳缓存）：
      * 行首落在从上面几行开始的注释或字符串里时，从它结束处开始扫，整行都在里面就不显示。
-     * PSI 还没和文档同步（正在编辑）时偏移对不上，直接扫整行。
+     * 不用 PSI：绘制线程里拿不到读锁。
      */
-    private fun codeStartOnLine(project: Project, document: Document, lineStart: Int, lineEnd: Int): Int? {
-        val documentManager = PsiDocumentManager.getInstance(project)
-        if (!documentManager.isCommitted(document)) return lineStart
-        val psiFile = documentManager.getCachedPsiFile(document) ?: return lineStart
-        val leaf = psiFile.findElementAt(lineStart) ?: return lineStart
-        val type = leaf.node?.elementType ?: return lineStart
-        val spansLines = type == LuaTokenTypes.BLOCK_COMMENT || LuaTokenTypes.STRINGS.contains(type)
-        val range = leaf.textRange
-        if (!spansLines || range.startOffset >= lineStart) return lineStart
-        return if (range.endOffset >= lineEnd) null else range.endOffset
+    private fun codeStartOnLine(document: Document, lineStart: Int, lineEnd: Int): Int? {
+        val end = LuaMultilineSpans.endOfSpanCovering(document, lineStart)
+        if (end < 0) return lineStart
+        return if (end >= lineEnd) null else end
     }
 
     // ---------- Snapshot 侧：只读路径解析 ----------
