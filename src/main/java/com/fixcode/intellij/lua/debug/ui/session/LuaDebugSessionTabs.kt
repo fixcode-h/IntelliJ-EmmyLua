@@ -1,5 +1,6 @@
 package com.fixcode.intellij.lua.debug.ui.session
 
+import com.intellij.execution.ui.RunnerLayoutUi
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
@@ -12,6 +13,7 @@ import com.fixcode.intellij.lua.debug.api.LuaMcpService
 import com.fixcode.intellij.lua.debug.api.LuaProfilerModel
 import com.fixcode.intellij.lua.debug.ui.LuaDebugBundle
 import com.fixcode.intellij.lua.debug.ui.LuaDebugIcons
+import java.util.function.Consumer
 import javax.swing.JComponent
 
 /**
@@ -23,7 +25,27 @@ import javax.swing.JComponent
 object LuaDebugSessionTabs {
 
     fun install(project: Project, session: XDebugSession) {
-        val ui = session.ui ?: return
+        whenUiReady(session) { ui -> if (!project.isDisposed && !session.isStopped) install(project, session, ui) }
+    }
+
+    /**
+     * 等会话界面建好再装。2025.3 起默认是「拆分调试器」（registry `xdebugger.toolwindow.split`，单机也开）：
+     * 页签由前端异步建，会话刚启动时 `session.ui` 还是 null，原来直接 return，调用栈对齐和这些页签一个都没装上。
+     * 有 `runWhenUiReady`（2025.3+）就用它等；没有就是旧版，界面在 startSession 返回时已建好。
+     */
+    private fun whenUiReady(session: XDebugSession, block: (RunnerLayoutUi) -> Unit) {
+        val method = runCatching { session.javaClass.getMethod("runWhenUiReady", Consumer::class.java) }.getOrNull()
+        if (method != null) {
+            val ok = runCatching { method.invoke(session, Consumer<RunnerLayoutUi?> { ui -> ui?.let(block) }) }.isSuccess
+            if (ok) return
+        }
+        session.ui?.let(block)
+    }
+
+    private fun install(project: Project, session: XDebugSession, ui: RunnerLayoutUi) {
+        // runWhenUiReady 和旧路径不会都走到，这里只防同一个界面装两遍
+        if (ui.component.getClientProperty(INSTALLED) != null) return
+        ui.component.putClientProperty(INSTALLED, true)
         // 会话结束时一起释放页签里的监听器
         val disposable = Disposer.newCheckedDisposable("EmmyLua debug tabs")
         session.addSessionListener(object : XDebugSessionListener {
@@ -68,7 +90,9 @@ object LuaDebugSessionTabs {
         }, disposable)
     }
 
-    private fun add(ui: com.intellij.execution.ui.RunnerLayoutUi, id: String, title: String, icon: javax.swing.Icon, component: JComponent) {
+    private const val INSTALLED = "EmmyLua.SessionTabs"
+
+    private fun add(ui: RunnerLayoutUi, id: String, title: String, icon: javax.swing.Icon, component: JComponent) {
         if (ui.findContent(id) != null) return
         val content = ui.createContent(id, component, title, icon, null)
         content.isCloseable = false

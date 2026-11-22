@@ -100,7 +100,7 @@ object LuaDebugSessionStarter {
                 override fun sessionStopped() { attachedPids -= target.pid }
             })
         }
-        // 页签要等会话 UI 建好再加；startSession 返回时通常已经建好，保险起见放到下一轮 EDT。
+        // 页签要等会话 UI 建好再加：2025.3+ 由 LuaDebugSessionTabs 用 runWhenUiReady 等，旧版放到下一轮 EDT 时已建好。
         ApplicationManager.getApplication().invokeLater({
             if (!project.isDisposed && !session.isStopped) LuaDebugSessionTabs.install(project, session)
         }, project.disposed)
