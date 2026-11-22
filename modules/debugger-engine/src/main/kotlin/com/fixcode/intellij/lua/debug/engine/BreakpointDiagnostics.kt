@@ -65,14 +65,20 @@ class BreakpointDiagnostics(
     /**
      * 断点为什么还没对上代码；还不该下结论（没等够、已生效）时返回 null。
      * 结论成立的条件：断点开始等待之后 runtime 报过「没匹配上」，或等了 [pendingTimeoutMillis] 还是「已下发」。
+     * [mapping] 是 chunk → 本地文件（IDE 的源码映射，没映射为 null），用来分清同名 chunk 是不是就是这个文件。
      */
-    fun unmatchedReason(view: BreakpointView, now: Long): String? {
+    fun unmatchedReason(view: BreakpointView, now: Long, mapping: (String) -> String? = { null }): String? {
         if (view.verification != BreakpointVerification.PENDING || view.request.isFunction) return null
         val since = pendingSince[view.id] ?: return null
         if (lastReportAt < since && now - since < pendingTimeoutMillis) return null
         val seen = chunks()
-        val suggestions = suggestChunks(view.request.file, seen)
+        val sameName = suggestChunks(view.request.file, seen)
+        val suggestions = mismatchedChunks(view.request.file, sameName, mapping)
         return when {
+            // 同名 chunk 都已经映射到这个文件：路径没问题，只是下了断点之后这个文件里的代码还没再执行
+            // （runtime 在文件里的函数下一次执行时才确认断点）。这时不能说「路径没对上」，图标也不该变灰。
+            sameName.isNotEmpty() && suggestions.isEmpty() ->
+                "这个文件之前执行过、路径也对得上；下了断点之后它里面的代码还没再执行，执行到时会自动生效。"
             suggestions.isNotEmpty() ->
                 "游戏执行过 chunk \"${suggestions.first()}\"，文件名一样但路径没对上这个文件。" +
                     "用调试工具栏的「诊断断点」应用建议的映射，或在调试窗口「映射」页把它指到这个文件。"
@@ -105,6 +111,16 @@ class BreakpointDiagnostics(
                 while (common < segs.size && common < fileSegs.size && segs[segs.size - 1 - common] == fileSegs[fileSegs.size - 1 - common]) common++
                 chunk to common
             }.sortedByDescending { it.second }.map { it.first }.distinct()
+        }
+
+        /**
+         * 真正「路径没对上」的同名 chunk：[suggestChunks] 里去掉已经映射到 [file] 本身的。
+         * 不去掉的话，断点所在文件执行过（例如在同一文件的别的断点停过）、新断点还没执行到时，
+         * 会把这个文件自己的 chunk 当成「同名但路径不对」，断点被误标成灰色。
+         */
+        fun mismatchedChunks(file: String, chunks: Collection<String>, mapping: (String) -> String?): List<String> {
+            val target = SourcePaths.normalize(file)
+            return suggestChunks(file, chunks).filter { chunk -> mapping(chunk)?.let(SourcePaths::normalize)?.equals(target, ignoreCase = true) != true }
         }
 
         /** 「诊断断点」报告的一个断点。 */
