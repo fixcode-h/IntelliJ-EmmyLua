@@ -333,7 +333,7 @@ class LuaV3DebugProcess(
         val now = System.currentTimeMillis()
         val chunks = diagnostics.chunks()
         val lines = engine.breakpoints().filter { it.request.origin != BreakpointOrigin.TEMPORARY && !it.request.isFunction }.map {
-            BreakpointDiagnostics.Companion.BreakpointLine(it, diagnostics.unmatchedReason(it, now), BreakpointDiagnostics.suggestChunks(it.request.file, chunks))
+            BreakpointDiagnostics.Companion.BreakpointLine(it, diagnostics.unmatchedReason(it, now, engine::localPathOfChunk), BreakpointDiagnostics.suggestChunks(it.request.file, chunks))
         }
         val (body, suggested) = BreakpointDiagnostics.report(lines, chunks) { engine.localPathOfChunk(it) }
         val vms = engine.vms().joinToString("、") { "${it.name}(${it.vmId})" }.ifEmpty { "还没有" }
@@ -436,9 +436,9 @@ class LuaV3DebugProcess(
             BreakpointVerification.MISMATCH, BreakpointVerification.AMBIGUOUS -> session.setBreakpointInvalid(breakpoint, view.message)
             // 一直没对上代码：悬停说明原因；对上后 setBreakpointVerified 换回正常图标。
             // 只有确实执行过同名文件、路径却对不上时才把图标变灰：代码只是还没跑到（Lua 环境刚重建、功能没触发）
-            // 时变灰会让人以为断点坏了。
-            BreakpointVerification.PENDING -> diagnostics.unmatchedReason(view, System.currentTimeMillis())?.let {
-                val pathMismatch = BreakpointDiagnostics.suggestChunks(view.request.file, diagnostics.chunks()).isNotEmpty()
+            // 时变灰会让人以为断点坏了。同名 chunk 已经映射到这个文件本身的不算对不上（新加的断点在文件再执行前都是「已下发」）。
+            BreakpointVerification.PENDING -> diagnostics.unmatchedReason(view, System.currentTimeMillis(), engine::localPathOfChunk)?.let {
+                val pathMismatch = BreakpointDiagnostics.mismatchedChunks(view.request.file, diagnostics.chunks(), engine::localPathOfChunk).isNotEmpty()
                 session.updateBreakpointPresentation(breakpoint, if (pathMismatch) com.intellij.icons.AllIcons.Debugger.Db_muted_breakpoint else null, it)
             }
         }

@@ -66,4 +66,21 @@ class BreakpointDiagnosticsTest {
         val (_, none) = BreakpointDiagnostics.report(lines, chunks) { SourcePaths.normalize(file) }
         assertTrue(none.isEmpty())
     }
+    @Test
+    fun `文件执行过、新断点还没执行到时不算路径没对上`() {
+        // 用户在已经停过的文件里新加断点：同名 chunk 就是这个文件本身，不能把断点标灰
+        val file = "D:/Proj/Content/Script/UI/BagPanel.lua"
+        val d = BreakpointDiagnostics(pendingTimeoutMillis = 6000)
+        d.recordChunk("UI/BagPanel.lua")
+        val b = bp("1", file)
+        d.recordBreakpoint(b, now = 1000)
+        val mapping = { chunk: String -> if (chunk == "UI/BagPanel.lua") "d:/Proj/Content/Script/UI/BagPanel.lua" else null }
+        assertTrue(BreakpointDiagnostics.mismatchedChunks(file, d.chunks(), mapping).isEmpty())
+        val reason = d.unmatchedReason(b, now = 8000, mapping)!!
+        assertFalse(reason, reason.contains("路径没对上"))
+
+        // 同名 chunk 映射到别的文件（或没映射）时仍然算对不上
+        assertEquals(listOf("UI/BagPanel.lua"), BreakpointDiagnostics.mismatchedChunks(file, d.chunks()) { "D:/Other/UI/BagPanel.lua" })
+        assertTrue(d.unmatchedReason(b, now = 8000)!!.contains("路径没对上"))
+    }
 }

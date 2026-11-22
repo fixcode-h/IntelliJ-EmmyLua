@@ -101,6 +101,9 @@ public:
 	// 在 L 的第 level 层帧上求值 Lua 表达式，结果留在 L 栈顶（成功时）
 	bool EvalLuaAt(lua_State* L, int level, const std::string& expr, int timeoutMs, std::string& err, int compiledCacheRef = 0);
 	bool EvalValuePathAt(lua_State* L, int level, const std::string& expr, bool invokeIndex, std::string& err);
+	// 同上，但帧在 thread（同一 VM 的另一个协程）的第 level 层；结果仍留在 L 栈顶
+	bool EvalLuaAt(lua_State* L, lua_State* thread, int level, const std::string& expr, int timeoutMs, std::string& err);
+	bool EvalValuePathAt(lua_State* L, lua_State* thread, int level, const std::string& expr, bool invokeIndex, std::string& err);
 	// 取栈顶值的一行摘要
 	std::string Summarize(lua_State* L, int idx, size_t maxLen, std::string* typeName = nullptr);
 

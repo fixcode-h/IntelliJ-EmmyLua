@@ -914,6 +914,10 @@ bool Inspector::BuildEvalEnv(lua_State* L, lua_State* thread, int level) {
 }
 
 bool Inspector::EvalLuaAt(lua_State* L, int level, const std::string& expr, int timeoutMs, std::string& err, int) {
+	return EvalLuaAt(L, L, level, expr, timeoutMs, err);
+}
+
+bool Inspector::EvalLuaAt(lua_State* L, lua_State* thread, int level, const std::string& expr, int timeoutMs, std::string& err) {
 	int top = lua_gettop(L);
 	std::string code = "return " + expr;
 	if (lua::LoadBuffer(L, code.data(), code.size(), "=(eval)") != LUA_OK) {
@@ -925,7 +929,8 @@ bool Inspector::EvalLuaAt(lua_State* L, int level, const std::string& expr, int 
 			return false;
 		}
 	}
-	if (!BuildEvalEnv(L, L, level)) {
+	// level 是 thread 上的层号：选了别的协程的帧时不能拿 L 的同一层（那是另一个函数，局部变量全成了 nil）
+	if (!BuildEvalEnv(L, thread, level)) {
 		err = "栈帧不存在";
 		lua_settop(L, top);
 		return false;
@@ -1000,6 +1005,10 @@ bool Inspector::IndexValue(lua_State* L, const PathSegment& seg, bool invokeInde
 }
 
 bool Inspector::EvalValuePathAt(lua_State* L, int level, const std::string& expr, bool invokeIndex, std::string& err) {
+	return EvalValuePathAt(L, L, level, expr, invokeIndex, err);
+}
+
+bool Inspector::EvalValuePathAt(lua_State* L, lua_State* thread, int level, const std::string& expr, bool invokeIndex, std::string& err) {
 	std::vector<PathSegment> segs;
 	std::string code;
 	if (!ParseValuePath(expr, segs, code)) {
@@ -1007,7 +1016,7 @@ bool Inspector::EvalValuePathAt(lua_State* L, int level, const std::string& expr
 		return false;
 	}
 	int top = lua_gettop(L);
-	if (!LookupRoot(L, L, level, segs[0].text)) {
+	if (!LookupRoot(L, thread, level, segs[0].text)) {
 		err = "栈帧不存在";
 		lua_settop(L, top);
 		return false;
@@ -1041,9 +1050,9 @@ bool Inspector::Evaluate(uint64_t frameId, const std::string& expr, const std::s
 			err = {"EVAL_FORBIDDEN", "当前不允许执行任意 Lua，请在 IDE 设置中开启，或改用 valuePath。"};
 			return false;
 		}
-		ok = EvalLuaAt(L, f.level, expr, opt.timeoutMs, e);
+		ok = EvalLuaAt(L, f.thread, f.level, expr, opt.timeoutMs, e);
 	} else {
-		ok = EvalValuePathAt(L, f.level, expr, opt.invokeIndex, e);
+		ok = EvalValuePathAt(L, f.thread, f.level, expr, opt.invokeIndex, e);
 		if (!ok && e.rfind("valuePath 语法", 0) == 0) {
 			err = {"INVALID_ARGS", e};
 			lua_settop(L, top);
@@ -1097,14 +1106,14 @@ bool Inspector::SetVariable(uint64_t ref, const std::string& name, const std::st
 			err = {"EVAL_FORBIDDEN", "当前不允许执行任意 Lua，请在 IDE 设置中开启。"};
 			return false;
 		}
-		ok = EvalLuaAt(L, level, value, opt.timeoutMs, e);
+		ok = EvalLuaAt(L, thread, level, value, opt.timeoutMs, e);
 	} else {
 		if (IsLiteral(value)) {
 			std::string code = "return " + value;
 			ok = lua::LoadBuffer(L, code.data(), code.size(), "=(literal)") == LUA_OK && lua_pcall(L, 0, 1, 0) == LUA_OK;
 			if (!ok) e = lua_tostring(L, -1) ? lua_tostring(L, -1) : "字面量无效";
 		} else {
-			ok = EvalValuePathAt(L, level, value, opt.invokeIndex, e);
+			ok = EvalValuePathAt(L, thread, level, value, opt.invokeIndex, e);
 		}
 	}
 	if (!ok) {
