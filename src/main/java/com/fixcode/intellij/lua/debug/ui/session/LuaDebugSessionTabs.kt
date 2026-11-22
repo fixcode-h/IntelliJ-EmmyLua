@@ -25,7 +25,18 @@ import javax.swing.JComponent
 object LuaDebugSessionTabs {
 
     fun install(project: Project, session: XDebugSession) {
-        whenUiReady(session) { ui -> if (!project.isDisposed && !session.isStopped) install(project, session, ui) }
+        val block = { ui: RunnerLayoutUi -> if (!project.isDisposed && !session.isStopped) install(project, session, ui) }
+        whenUiReady(session, block)
+        // 保底：XDebugSession 接口的默认 runWhenUiReady 在界面还没建好时什么也不做、也不再回调，
+        // 所以每次暂停（这时界面一定建好了）再试一次，装过的界面由 INSTALLED 标记跳过
+        val listener = object : XDebugSessionListener {
+            override fun sessionPaused() {
+                ApplicationManager.getApplication().invokeLater {
+                    if (!project.isDisposed && !session.isStopped) session.ui?.let(block)
+                }
+            }
+        }
+        session.addSessionListener(listener)
     }
 
     /**
@@ -43,7 +54,7 @@ object LuaDebugSessionTabs {
     }
 
     private fun install(project: Project, session: XDebugSession, ui: RunnerLayoutUi) {
-        // runWhenUiReady 和旧路径不会都走到，这里只防同一个界面装两遍
+        // runWhenUiReady 和暂停时的保底都会走到这里，同一个界面只装一遍
         if (ui.component.getClientProperty(INSTALLED) != null) return
         ui.component.putClientProperty(INSTALLED, true)
         // 会话结束时一起释放页签里的监听器
