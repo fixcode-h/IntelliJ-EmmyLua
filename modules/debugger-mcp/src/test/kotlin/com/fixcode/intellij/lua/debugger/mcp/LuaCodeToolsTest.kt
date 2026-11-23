@@ -1,6 +1,7 @@
 package com.fixcode.intellij.lua.debugger.mcp
 
 import com.fixcode.intellij.lua.debugger.mcp.code.CodeLocation
+import com.fixcode.intellij.lua.debugger.mcp.code.DocSymbol
 import com.fixcode.intellij.lua.debugger.mcp.code.FuzzyMatcher
 import com.fixcode.intellij.lua.debugger.mcp.code.LuaCodeBackend
 import com.fixcode.intellij.lua.debugger.mcp.code.LuaCodeTools
@@ -154,15 +155,23 @@ class LuaCodeToolsTest {
         backend.state = ServerState.Unavailable("找不到 emmylua_ls。")
         val r = client.call(T, mapOf("action" to "outline", "path" to "UI.MainPanel"))
         assertEquals("engine_unavailable", r.code); assertEquals("找不到 emmylua_ls。", r["message"])
+        // search 不报错，整份按文本查
+        val text = client.call(T, mapOf("action" to "search", "query" to "Fire"))
+        assertFalse(text.raw, text.isError)
+        assertTrue(text.raw, items(text).any { it["name"] == "Fire" })
+        assertTrue(text.raw, "找不到 emmylua_ls" in (text["note"] as String))
         assertFalse(client.call(T, mapOf("action" to "files", "query" to "Gun")).isError)
         backends = emptyList()
         assertEquals("engine_unavailable", client.call(T, mapOf("action" to "files", "query" to "Gun")).code)
     }
 
     @Test
-    fun `所有文件等到上限都还没索引时报 indexing，部分一直不给结果时没命中才说明`() {
+    fun `所有文件等到上限都还没索引时先按文本查并说明，部分一直不给结果时没命中才说明`() {
         backend.entries.values.forEach { it.symbols = null }
-        assertEquals("indexing", client.call(T, mapOf("action" to "search", "query" to "Fire")).code)
+        val early = client.call(T, mapOf("action" to "search", "query" to "Fire"))
+        assertFalse(early.raw, early.isError)
+        assertTrue(early.raw, items(early).any { it["name"] == "Fire" })
+        assertTrue(early.raw, "按文本" in (early["note"] as String))
         backend.add("Content/Script/Weapon/Gun.lua", FakeCodeBackend.GUN, FakeCodeBackend.gunSymbols())
         val r = client.call(T, mapOf("action" to "search", "query" to "Fire"))
         assertFalse(r.raw, r.isError)
@@ -193,6 +202,24 @@ class LuaCodeToolsTest {
         val miss = client.call(T, mapOf("action" to "search", "query" to "NoSuchThing"))
         assertTrue(miss.raw, "不给结果" in (miss["note"] as String) && "Excluded" in (miss["note"] as String))
         assertEquals("认定不收的文件不再问服务器", calls, backend.docSymbolCalls.get())
+        // 不收的文件按文本认声明，照样搜得到
+        val old = client.call(T, mapOf("action" to "search", "query" to "Old", "match" to "exact"))
+        assertEquals(old.raw, "Content/Script/Excluded/Old.lua", (items(old).single()["file"] as String).substringAfter("/work/Game/"))
+    }
+
+    @Test
+    fun `emmylua_ls 不列的表外赋值按文本补上；outline 在服务器不给结果时按文本列`() {
+        val text = "local M = {}\nM.Inner = {}\nM.Inner.ApplyRule = function(a, b) end\nfunction M.Inner:Apply2() end\nM.Count = 3\nreturn M\n"
+        backend.add("Content/Script/Deco/Rule.lua", text, listOf(DocSymbol("M", 13, null, 0, 6)))
+        val r = client.call(T, mapOf("action" to "search", "query" to "ApplyRule", "match" to "exact"))
+        val hit = items(r).single()
+        assertEquals("Inner", (hit["container"] as String).substringAfterLast('.'))
+        assertEquals(3L, hit["line"])
+        backend.add("Content/Script/Deco/Big.lua", "function Big.Run(x) end\n", null)
+        val o = client.call(T, mapOf("action" to "outline", "path" to "Deco.Big"))
+        assertFalse(o.raw, o.isError)
+        assertEquals("Run", items(o).single()["name"])
+        assertTrue(o.raw, "按文本" in (o["note"] as String))
     }
 
     @Test
