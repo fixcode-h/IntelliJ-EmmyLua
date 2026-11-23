@@ -45,7 +45,10 @@ private class LuaIdeMcpTool(private val tool: LuaTool, override val descriptor: 
     override suspend fun call(args: JsonObject): McpToolCallResult {
         val client = IdeMcpCompat.clientOf(currentCoroutineContext())
         @Suppress("UNCHECKED_CAST")
-        val raw = Json.parse(args.toString()) as? Map<String, Any?> ?: emptyMap()
+        val parsed = Json.parse(args.toString()) as? Map<String, Any?> ?: emptyMap()
+        // Agent 没传 projectPath 时补上 IDE 这次定下的项目（来自配置里的请求头或客户端的 roots），lua_code 按它选项目
+        val raw = if (parsed[LuaTool.PROJECT_PATH] != null) parsed
+            else IdeMcpCompat.resolvedProjectPath(currentCoroutineContext())?.let { parsed + (LuaTool.PROJECT_PATH to it) } ?: parsed
         // 工具会阻塞（wait 最长 2 分钟、等用户在 IDE 里确认），放到 IO 线程；客户端取消时中断等待
         val result = runInterruptible(Dispatchers.IO) {
             val dispatcher = LuaDebugMcpTools.getInstance().mcp.dispatcher

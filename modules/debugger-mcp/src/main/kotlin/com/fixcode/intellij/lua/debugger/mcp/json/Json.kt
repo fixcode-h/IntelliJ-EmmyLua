@@ -239,12 +239,7 @@ class JsonArgs(val raw: Map<String, Any?>, allowed: Collection<String>? = null) 
         if (allowed != null) {
             val unknown = raw.keys.filter { it !in allowed }
             if (unknown.isNotEmpty()) {
-                // projectPath 是 IDE 自带工具的参数，Agent 常顺手传给插件工具：直接说改用哪个，别让它换个值再试
-                val hint = if ("projectPath" in unknown && "project" in allowed)
-                    "。projectPath 是 IDE 自带工具的参数，这个工具用 project（IDE 里打开的项目名，只开了一个项目时不用传）" else ""
-                throw ToolArgumentException(
-                    "未知参数：${unknown.joinToString()}。可用：${allowed.sorted().joinToString()}$hint"
-                )
+                throw ToolArgumentException("未知参数：${unknown.joinToString()}。可用：${allowed.sorted().joinToString()}")
             }
         }
     }

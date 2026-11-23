@@ -23,6 +23,7 @@ import com.intellij.ui.dsl.builder.selected
 import com.intellij.ui.layout.and
 import java.io.IOException
 import java.nio.file.Files
+import java.nio.file.Path
 import javax.swing.JCheckBox
 import javax.swing.JLabel
 
@@ -64,7 +65,15 @@ class LuaSettingsConfigurable(private val project: Project) :
             row {
                 button(if (EmmyLuaWorkspaceConfig.findUserConfig(project) != null) "打开 .emmyrc.json" else "新建 .emmyrc.json") {
                     openOrCreateEmmyrc()
-                }.comment("诊断规则、require 路径、全局变量、格式化等都在这个文件里配，emmylua_ls 改完自动重载")
+                }.comment("诊断规则、require 路径、全局变量等都在这个文件里配，emmylua_ls 改完自动重载")
+            }
+            row {
+                button(if (LuaFormatterConfig.find(project) != null) "打开 .luafmt.toml" else "新建 .luafmt.toml") {
+                    openFile(LuaFormatterConfig.findOrCreate(project))
+                }.comment(
+                    "代码格式化（Ctrl+Alt+L）的空格、对齐、换行规则在这个文件里配，新建时写一份接近旧版默认的配置。" +
+                        "缩进宽度和 Tab 在「代码样式 → 常规」或 .editorconfig 里设"
+                )
             }
         }
         group("库目录") {
@@ -186,6 +195,11 @@ class LuaSettingsConfigurable(private val project: Project) :
         val file = EmmyLuaWorkspaceConfig.findUserConfig(project) ?: root.resolve(".emmyrc.json").also {
             Files.writeString(it, defaultEmmyrc(level.emmyrcName))
         }
+        openFile(file)
+    }
+
+    private fun openFile(file: Path?) {
+        file ?: return
         val vf = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(file) ?: return
         FileEditorManager.getInstance(project).openFile(vf, true)
     }

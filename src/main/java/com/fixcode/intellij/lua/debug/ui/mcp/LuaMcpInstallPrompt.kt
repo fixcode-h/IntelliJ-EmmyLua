@@ -65,8 +65,9 @@ object LuaMcpInstallPrompt {
                 if (!state.available) return@executeOnPooledThread
                 val root = service.installRoots(project).firstOrNull() ?: return@executeOnPooledThread
                 val statuses = service.installStatus(project, root)
-                val upToDate = statuses.any { it.installed && !it.outdated }
                 val outdated = statuses.filter { it.outdated }.map { it.client }
+                // 有一项过期就提示更新：例如 Codex（用户级）是新的，项目里的 .mcp.json 还缺项目路径请求头
+                val upToDate = statuses.any { it.installed && !it.outdated } && outdated.isEmpty()
                 if (upToDate && state.running) return@executeOnPooledThread
                 ApplicationManager.getApplication().invokeLater({
                     if (project.isDisposed) return@invokeLater

@@ -57,10 +57,12 @@ class LuaDebugToolsTest {
     }
 
     @Test
-    fun `传了 IDE 工具的 projectPath 时报错里直接说改用 project`() {
+    fun `接受 IDE 工具通用的 projectPath（IDE 靠它定项目），不进 schema`() {
         val r = client.call(S, mapOf("action" to "configs", "projectPath" to "/work/Game"))
-        assertEquals("invalid_argument", r.code)
-        assertTrue(r["message"] as String, (r["message"] as String).contains("这个工具用 project"))
+        assertNull(r.code)
+        client.tools().forEach { t ->
+            assertFalse(((t["inputSchema"] as Map<*, *>)["properties"] as Map<*, *>).containsKey("projectPath"))
+        }
     }
 
     @Test

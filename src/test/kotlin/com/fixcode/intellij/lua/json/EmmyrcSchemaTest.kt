@@ -30,4 +30,12 @@ class EmmyrcSchemaTest : BasePlatformTestCase() {
         val schema = JsonSchemaService.Impl.get(project).getSchemaFilesForFile(file.virtualFile)
         assertFalse(schema.any { it.name == "emmyrc.schema.json" })
     }
+
+    fun `test luafmt toml 映射到格式化 schema`() {
+        for (name in listOf(".luafmt.toml", "luafmt.toml")) {
+            val file = myFixture.configureByText(name, "")
+            val schema = JsonSchemaService.Impl.get(project).getSchemaFilesForFile(file.virtualFile)
+            assertTrue(name, schema.any { it.name == "luafmt.schema.json" })
+        }
+    }
 }

@@ -9,6 +9,7 @@
 - 语义（跳转、补全、引用、诊断、格式化、语义高亮……）全部由 emmylua_ls 提供，经 LSP4IJ 接入。**不要再往 IDE 里加 PSI 级的语义代码**；缺什么先看 emmylua_ls 是否支持、`.emmyrc.json` 怎么配。
 - IDE 侧只有 `lexer/LuaLexer.kt`（手写词法器）+ 扁平 PSI，用于高亮、括号、注释、调试器取名字，以及「结构」窗口的大纲（`structure/LuaOutline`，只认顶层声明，不做语义；不用 emmylua_ls 的 documentSymbol，原因见设计文档）。
 - 插件给 emmylua_ls 的配置只通过 `lsp/EmmyLuaWorkspaceConfig`（`workspace/configuration` 的 `emmylua` 段）下发；数组与用户 `.emmyrc.json` 取并集，标量会覆盖，所以用户有配置文件时不下发标量。
+- 格式化：emmylua_ls 内置的 `emmylua_formatter` 只读项目里的 `.luafmt.toml` / `luafmt.toml`（不读 `.editorconfig`、`.emmyrc.json`），缩进由 IDE 随请求发送。不要恢复 IDE 侧的 FormattingModel；插件只给「新建 .luafmt.toml」模板（`project/LuaFormatterConfig`）和 `schemas/luafmt.schema.json`，升级 emmylua_ls 时对着上游 `emmylua_formatter/src/config/mod.rs` 核对字段。
 - 版本：`gradle.properties` 的 `lsp4ijVersion`、`emmyLuaLsVersion`。出包用 `.github/scripts/fetch-emmylua-ls.sh` 下载各平台二进制到 `build/emmylua-ls/`，Gradle 放进插件的 `server/<平台>/`。
 - 包名 `com.fixcode.intellij.lua`。新文件不加文件头；从上游 EmmyLua 派生、仍保留上游代码的文件保留原 Apache 版权头。持久化名字（`@State` 名、存储文件、插件 ID、语言 ID `Lua`、文件类型名 `lua`、运行配置和断点类型 ID）不改。
 
@@ -31,7 +32,7 @@
 
 - 参数名 snake_case（`session_id`、`wait_ms`、`timeout_ms`、`hit_count`、`auto_continue`、`max_chars`）。
 - 每个工具的 inputSchema 写 `additionalProperties: false`（IDE 的 MCP 服务器生成 schema 时只取 properties 和 required，所以未知参数靠下一条拒绝），`action` 必填并给出 `enum`；每个参数的 description 用英文写清楚哪些 action 用它、默认值是多少（例：`"step: over (default) / into / out / toLine"`）。
-- **未知参数直接报错**并列出合法的名字（`JsonArgs(raw, allowed)`）：拼错的过滤条件被悄悄忽略比报错更糟。例外：IDE 自带工具通用的 `projectPath`，Agent 会顺手传给我们的工具，`lua_code` 经 `McpTool.hiddenArgs` 接受它（不进 schema，按路径选项目）；其他带 `project` 的工具报错时直接说改用 `project`。类型宽松：`"20"` 当整数、`"a, b"` 当字符串数组；超范围报错并写出范围。
+- **未知参数直接报错**并列出合法的名字（`JsonArgs(raw, allowed)`）：拼错的过滤条件被悄悄忽略比报错更糟。例外：IDE 自带工具通用的 `projectPath`，所有工具经 `McpTool.hiddenArgs` 接受（模块里的 schema 不写它，保持 snake_case）；新版 IDE 的 MCP 服务器在调用工具**之前**就按它（或请求头 `IJ_MCP_SERVER_PROJECT_PATH`、客户端 roots）定项目，定不了直接报「Unable to determine the target project」，工具跑不到，所以 `IdeMcpCompat.withProjectPath` 把它补进给 IDE 的 schema。Agent 没传而 IDE 定了项目时，`LuaMcpToolsProvider` 用 IDE 定的项目目录补上，`lua_code` 按它选项目。类型宽松：`"20"` 当整数、`"a, b"` 当字符串数组；超范围报错并写出范围。
 - 行号从 1 开始；帧号 `frame` 从 0（栈顶）开始。
 - 列表分页用 `limit` / `offset`（默认 30–50，最大 200）；日志类增量读取用 `cursor`，值是上次返回的 `next`。
 - 会阻塞等待的动作给上限：`wait` 的 `timeout_ms` ≤ 120000（默认 30000），`step` 的 `wait_ms` 默认 10000、`pause` 默认 5000、`continue` 默认 0。
@@ -78,6 +79,7 @@
   - 地址经 `ide/IdeMcpServerInfo` 反射读（它不碰 MCP Server 插件的类型，插件被禁用时也能调）：2025.2–2025.3 只有 SSE `http://127.0.0.1:<端口>/sse`；2026.1 起用 Streamable HTTP `/stream`（IDE 自己的自动配置也优先它）。服务在跑时取 IDE 给的地址和端口，没跑时读设置里的端口，再读不到用默认 64342，弹窗里说明是按默认值写的。主干（2026.3 之后）要求请求头 `IJ_MCP_AUTH_TOKEN`：配置里写成从同名环境变量展开（Claude Code / Gemini `${IJ_MCP_AUTH_TOKEN}`，Cursor / VS Code `${env:IJ_MCP_AUTH_TOKEN}`，Codex `env_http_headers`），令牌本身不进文件。
   - 条目名照 IDE「自动配置」写的：2025.x `jetbrains`，2026.1 起按产品名（`McpClient.Companion.productSpecificServerKey()`，如 `idea`、`rider`），这样用户再点 IDE 的自动配置也只是更新同一项，客户端里不会出现两份工具。安装时删掉旧版插件服务（127.0.0.1:9330/mcp）的 `emmylua-debug` 项，以及指向同一端口的 `jetbrains` 旧项。
   - 安装位置：项目目录往上找版本管理根（`.git` 目录或文件、`.hg`、`.svn` 取连续最外层、`.plastic`、P4CONFIG 文件；都没有时问 `p4 info` 的 client root，包含项目才用）；找不到就往上找含 `.uproject` 的 UE 项目根，再没有用项目目录。版本管理根在 UE 项目里面（脚本目录单独成库）时以 UE 项目为准（`VcsRoot.installRoot`）。
+  - 项目级配置（Claude Code、Cursor、VS Code、Gemini）在 `headers` 里写 `IJ_MCP_SERVER_PROJECT_PATH` = 本项目目录（和 IDE 自动配置一样），IDE 靠它定项目、Agent 不用传 `projectPath`；状态检查时这个头只要指向本机存在的目录就算装好（全组共用一份配置，别人的检出路径不同也不来回改），没有或目录不存在算过期。Codex 是用户级配置，不写。
   - 写入规则：只合并我们这一项（用户在这一项里加的其他字段保留），其余原样保留；不是严格 JSON（注释、尾逗号）不写，给手动片段；跟随原文件的缩进和换行；临时文件原子替换。每个客户端一个 `McpClientConfigWriter`：Claude Code `.mcp.json`（`type` http/sse + `url`）、Cursor `.cursor/mcp.json`（`url`）、VS Code / Copilot `.vscode/mcp.json`（`servers`，`type` + `url`）、Gemini CLI `.gemini/settings.json`（Streamable HTTP 用 `httpUrl`，SSE 用 `url`）、Codex 用户级 `~/.codex/config.toml`（`[mcp_servers.<名>]` 的 `url`；Codex 不支持 SSE，IDE 只有 SSE 时不写、让用户用 IDE 的自动配置）。
   - 提示：项目打开后（项目里有 .lua 文件）和第一次启动 Lua 调试会话时检查；UE 项目打开时不单独弹，合进「EmmyLua 上手检查」的气泡（`onboarding/LuaOnboardingPrompt`，弹过后本次会话的 MCP 提示也不再弹），一个 IDE 会话每个项目最多弹一次，「不再提示」按项目记住（`LuaDebugProjectState.mcpPromptDismissed`）。IDE 的 MCP 服务器没开时合在同一个气泡里：按钮先打开「设置 → 工具 → MCP 服务器」，回来后开了就接着安装，没开不写；已经装好只差服务器时只提示去打开。MCP Server 插件被禁用时不提示，只是没有这些工具，调试照常。入口还有「工具 → EmmyLua 调试 → 安装 MCP 到项目」和设置页「EmmyLua 调试」（显示本项目安装状态）。
 - **仅路由器模式**（2026.2 起）：IDE 默认把插件工具设成 Router-only（只能经 `execute_tool` 调，没有 schema 校验）。我们的类别 `alwaysIncluded = true`（`IdeMcpCompat.category`），2026.2 在路由器模式下仍直接列出，2026.3 默认不勾 Router-only；用户仍可改。文档和安装弹窗提示别给常用工具勾 Router-only。

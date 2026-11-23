@@ -1,0 +1,369 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "emmylua_formatter（luafmt）配置",
+  "description": "emmylua_ls 内置格式化器的配置，按 emmylua-analyzer-rust 0.25.1 的 crates/emmylua_formatter/src/config/mod.rs 整理。emmylua_ls 从被格式化的文件往上找 .luafmt.toml / luafmt.toml。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "syntax": {
+      "type": "object",
+      "description": "解析用的 Lua 语法",
+      "additionalProperties": false,
+      "properties": {
+        "level": {
+          "type": "string",
+          "enum": [
+            "Lua51",
+            "Lua52",
+            "Lua53",
+            "Lua54",
+            "Lua55",
+            "LuaJIT",
+            "LuaJIT3"
+          ],
+          "default": "Lua55",
+          "description": "格式化前按哪种 Lua 语法解析。经 emmylua_ls 格式化时以 .emmyrc.json 的 runtime.version 为准"
+        }
+      }
+    },
+    "indent": {
+      "type": "object",
+      "description": "缩进。经 IDE 格式化时缩进宽度和 Tab / 空格由 IDE 的代码样式（或 .editorconfig）决定，这里的值会被覆盖",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "Space",
+            "Tab"
+          ],
+          "default": "Space",
+          "description": "用 Tab 还是空格"
+        },
+        "width": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 4,
+          "description": "每级缩进的空格数"
+        }
+      }
+    },
+    "layout": {
+      "type": "object",
+      "description": "行宽和展开策略",
+      "additionalProperties": false,
+      "properties": {
+        "max_line_width": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 120,
+          "description": "目标最大行宽，超出时把表达式、表、参数列表拆成多行"
+        },
+        "max_blank_lines": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 1,
+          "description": "语句之间最多保留几行连续空行（只压缩，不补空行）"
+        },
+        "table_expand": {
+          "type": "string",
+          "enum": [
+            "Never",
+            "Always",
+            "Auto"
+          ],
+          "default": "Auto",
+          "description": "表构造器：Auto 放得下就一行；Always 每个字段一行；Never 尽量不拆"
+        },
+        "call_args_expand": {
+          "type": "string",
+          "enum": [
+            "Never",
+            "Always",
+            "Auto"
+          ],
+          "default": "Auto",
+          "description": "调用参数列表的展开策略"
+        },
+        "func_params_expand": {
+          "type": "string",
+          "enum": [
+            "Never",
+            "Always",
+            "Auto"
+          ],
+          "default": "Auto",
+          "description": "函数参数列表的展开策略"
+        },
+        "prefer_call_args_layout_from_source": {
+          "type": "boolean",
+          "default": false,
+          "description": "源码里本来多行的调用参数列表保持多行（只在 call_args_expand = Auto 时起作用）"
+        },
+        "prefer_table_layout_from_source": {
+          "type": "boolean",
+          "default": false,
+          "description": "源码里本来多行的表（数组、带键、混合）保持多行（只在 table_expand = Auto 时起作用）"
+        },
+        "prefer_chain_break_on_statement_tail": {
+          "type": "boolean",
+          "default": false,
+          "description": "语句末尾 3 段以上的链式调用优先拆成每段一行"
+        },
+        "prefer_binary_chain_operand_per_line": {
+          "type": "boolean",
+          "default": false,
+          "description": "同一运算符连起来的 3 个以上操作数（一串 and / or）放不下时每个操作数一行"
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "description": "输出形状",
+      "additionalProperties": false,
+      "properties": {
+        "insert_final_newline": {
+          "type": "boolean",
+          "default": true,
+          "description": "文件末尾保证有换行。经 IDE 格式化时由 IDE 的设置决定"
+        },
+        "preserve_statement_semicolon": {
+          "type": "boolean",
+          "default": false,
+          "description": "保留语句末尾可省略的分号（默认删掉）"
+        },
+        "trailing_comma": {
+          "type": "string",
+          "enum": [
+            "Never",
+            "Multiline",
+            "Always"
+          ],
+          "default": "Never",
+          "description": "多行结构的尾逗号"
+        },
+        "trailing_table_separator": {
+          "type": "string",
+          "enum": [
+            "Inherit",
+            "Never",
+            "Multiline",
+            "Always"
+          ],
+          "default": "Inherit",
+          "description": "表的尾分隔符；Inherit 跟 trailing_comma 一样"
+        },
+        "quote_style": {
+          "type": "string",
+          "enum": [
+            "Preserve",
+            "Double",
+            "Single"
+          ],
+          "default": "Preserve",
+          "description": "短字符串的引号（只在安全时改写）"
+        },
+        "single_arg_call_parens": {
+          "type": "string",
+          "enum": [
+            "Preserve",
+            "Always",
+            "Omit"
+          ],
+          "default": "Preserve",
+          "description": "单个字符串 / 表参数的调用是否带括号"
+        },
+        "simple_lambda_single_line": {
+          "type": "string",
+          "enum": [
+            "Preserve",
+            "Always",
+            "Never"
+          ],
+          "default": "Preserve",
+          "description": "简单的 function(...) return expr end 是否收成一行"
+        },
+        "end_of_line": {
+          "type": "string",
+          "enum": [
+            "Preserve",
+            "LF",
+            "CRLF"
+          ],
+          "default": "Preserve",
+          "description": "换行符"
+        }
+      }
+    },
+    "spacing": {
+      "type": "object",
+      "description": "空格",
+      "additionalProperties": false,
+      "properties": {
+        "space_before_call_paren": {
+          "type": "boolean",
+          "default": false,
+          "description": "调用的括号前加空格：f (x)"
+        },
+        "space_before_func_paren": {
+          "type": "boolean",
+          "default": false,
+          "description": "函数定义和匿名函数的括号前加空格：function f (x)"
+        },
+        "space_before_lambda_func_paren": {
+          "type": "boolean",
+          "default": true,
+          "description": "匿名函数的括号前加空格（space_before_func_paren 开着时才起作用）"
+        },
+        "space_inside_braces": {
+          "type": "boolean",
+          "default": true,
+          "description": "单行表的花括号内侧加空格：{ a = 1 }"
+        },
+        "space_inside_parens": {
+          "type": "boolean",
+          "default": false,
+          "description": "圆括号内侧加空格：f( x )"
+        },
+        "space_inside_brackets": {
+          "type": "boolean",
+          "default": false,
+          "description": "方括号内侧加空格：t[ k ]"
+        },
+        "space_around_math_operator": {
+          "type": "boolean",
+          "default": true,
+          "description": "算术和比较运算符两边加空格"
+        },
+        "space_around_concat_operator": {
+          "type": "boolean",
+          "default": true,
+          "description": "连接运算符 .. 两边加空格"
+        },
+        "space_around_assign_operator": {
+          "type": "boolean",
+          "default": true,
+          "description": "= 两边加空格（赋值和表字段共用）"
+        }
+      }
+    },
+    "comments": {
+      "type": "object",
+      "description": "普通注释和行尾注释对齐",
+      "additionalProperties": false,
+      "properties": {
+        "align_line_comments": {
+          "type": "boolean",
+          "default": true,
+          "description": "行尾注释对齐的总开关"
+        },
+        "align_in_statements": {
+          "type": "boolean",
+          "default": false,
+          "description": "连续语句的行尾注释对齐"
+        },
+        "align_in_table_fields": {
+          "type": "boolean",
+          "default": true,
+          "description": "表字段的行尾注释对齐（源码里已有对齐意图时才对齐）"
+        },
+        "align_in_call_args": {
+          "type": "boolean",
+          "default": true,
+          "description": "调用参数的行尾注释对齐（源码里已有对齐意图时才对齐）"
+        },
+        "align_in_params": {
+          "type": "boolean",
+          "default": true,
+          "description": "函数参数的行尾注释对齐（源码里已有对齐意图时才对齐）"
+        },
+        "align_across_standalone_comments": {
+          "type": "boolean",
+          "default": false,
+          "description": "单独成行的注释也参与对齐分组（默认会打断分组）"
+        },
+        "align_same_kind_only": {
+          "type": "boolean",
+          "default": false,
+          "description": "只在同一类语句之间对齐注释"
+        },
+        "space_after_comment_dash": {
+          "type": "boolean",
+          "default": true,
+          "description": "普通注释 --comment 补成 -- comment（不影响 --- 注解）"
+        },
+        "line_comment_min_spaces_before": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 1,
+          "description": "行尾注释前至少几个空格"
+        },
+        "line_comment_min_column": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "对齐的行尾注释至少从第几列开始（0 不限，只按 line_comment_min_spaces_before）"
+        }
+      }
+    },
+    "emmy_doc": {
+      "type": "object",
+      "description": "EmmyLua 注解（---@param 等）",
+      "additionalProperties": false,
+      "properties": {
+        "align_tag_columns": {
+          "type": "boolean",
+          "default": true,
+          "description": "注解列对齐的总开关，关掉时下面两项不起作用"
+        },
+        "align_declaration_tags": {
+          "type": "boolean",
+          "default": true,
+          "description": "@class、@alias、@type、@generic、@overload 等声明类注解对齐"
+        },
+        "align_reference_tags": {
+          "type": "boolean",
+          "default": true,
+          "description": "@param、@field、@return 等注解对齐"
+        },
+        "align_multiline_alias_descriptions": {
+          "type": "boolean",
+          "default": true,
+          "description": "多行 @alias 的 # 说明列对齐"
+        },
+        "space_between_tag_columns": {
+          "type": "boolean",
+          "default": false,
+          "description": "写成 --- @tag（默认 ---@tag）"
+        },
+        "space_after_description_dash": {
+          "type": "boolean",
+          "default": true,
+          "description": "普通文档行写成 --- text"
+        },
+        "compact_type_or": {
+          "type": "boolean",
+          "default": false,
+          "description": "联合类型写成 string|integer（默认 string | integer）"
+        }
+      }
+    },
+    "align": {
+      "type": "object",
+      "description": "跨行对齐",
+      "additionalProperties": false,
+      "properties": {
+        "continuous_assign_statement": {
+          "type": "boolean",
+          "default": false,
+          "description": "连续赋值语句的 = 对齐"
+        },
+        "table_field": {
+          "type": "boolean",
+          "default": true,
+          "description": "表字段的 = 对齐（检测到对齐分组时才对齐，一般要源码里 = 后已有多余空格）"
+        }
+      }
+    }
+  }
+}
