@@ -123,8 +123,9 @@ class LuaCodeTools(
         val container = a.string("container")?.trim()?.takeIf { it.isNotEmpty() } ?: qualifier
 
         val b = pickBackend(a, null)
-        requireServer(b)
-        val index = projectIndex(b)
+        // emmylua_ls 用不了（没装、被停用）时整份按文本查，不让 Agent 只拿到一句错误
+        val down = try { requireServer(b); null } catch (e: ToolException) { if (e.code == "engine_unavailable") e.message else throw e }
+        val index = if (down == null) projectIndex(b) else textIndex(b)
         val hits = ArrayList<Hit>()
         val seen = HashSet<String>()
         val matcher = FuzzyMatcher(name)
@@ -145,7 +146,8 @@ class LuaCodeTools(
         }
         for ((ctx, decls) in index.files) for (d in decls) consider(ctx, d)
         // workspace/symbol 补上 documentSymbol 不列的类型和全局（含库目录里的，项目范围时滤掉）
-        val ws = runCatching { await(b.workspaceSymbols(name), timeouts.requestMillis, "workspace/symbol") }.getOrNull().orEmpty()
+        val ws = if (down != null) emptyList()
+            else runCatching { await(b.workspaceSymbols(name), timeouts.requestMillis, "workspace/symbol") }.getOrNull().orEmpty()
         val known = index.byPath
         for (h in ws) {
             val ctx = known[norm(h.path)] ?: FileCtx(LuaFile(h.path, library = true), LuaSymbols.moduleName(h.path, index.bases))
@@ -160,6 +162,7 @@ class LuaCodeTools(
         val m = page(slice, offset, hits.size > offset + slice.size, hits.size, ResultJson.BUDGET) { declJson(it.decl, it.ctx, withFile = true) }
         projectNote(b, m)
         index.note(hits.isEmpty())?.let { m["note"] = it }
+        if (down != null) m["note"] = "emmylua_ls 用不了，这次只按文本认了行首的 function / 赋值：$down"
         if (hits.isEmpty() && m["note"] == null) {
             m["note"] = "没有找到名字匹配 '$query' 的 Lua 声明" + (if (!all) "（只查了项目脚本，库里的用 scope=all）" else "") +
                 "。emmylua_ls 不列出 `M.x = 1` 这类在表外赋值的字段：找这种用 grep。"
@@ -201,11 +204,15 @@ class LuaCodeTools(
         requireServer(b)
         val module = LuaSymbols.moduleName(file.path, bases)
         val symbols = untilIndexed(System.nanoTime(), fileWaitMillis(b, file)) { await(b.documentSymbols(file), timeouts.requestMillis, "textDocument/documentSymbol") }
-            ?: throw indexing("emmylua_ls 还没索引到 ${file.path}（刚启动或文件在工作区和库目录之外）。几秒后重试；一直这样就检查 .emmyrc.json 的 workspace 设置。")
-        val decls = LuaSymbols.declarations(symbols, b.readText(file)).filter { kinds == null || it.kind in kinds }
+        val text = b.readText(file)
+        // 服务器不给结果（没索引到、被排除、太大）时按文本列出，不让 Agent 空手而回
+        val all = if (symbols != null) LuaSymbols.merge(LuaSymbols.declarations(symbols, text), LuaSymbols.textDeclarations(text))
+            else LuaSymbols.textDeclarations(text)
+        val decls = all.filter { kinds == null || it.kind in kinds }
         val slice = decls.drop(offset).take(limit)
         val m = obj("file" to file.path, "module" to module, "lib" to file.library)
         m.putAll(page(slice, offset, decls.size > offset + slice.size, decls.size, ResultJson.MAX_BUDGET) { declJson(it, null, withFile = false) })
+        if (symbols == null) m["note"] = "emmylua_ls 没给这个文件的结果（还没索引到、被 .emmyrc.json 排除或太大），这里只按文本列了行首的 function / 赋值。"
         projectNote(b, m)
         return m
     }
@@ -331,10 +338,10 @@ class LuaCodeTools(
     ) {
         /** [empty]：这次没有命中。不收的文件只在没命中时提一句，免得每次搜索都带同一句话。 */
         fun note(empty: Boolean): String? = when {
-            skipped > 0 -> "扫描超时或请求出错，还有 $skipped 个文件没查到，结果不全：稍后重试（查到的会缓存，第二次快得多）。"
-            pending > 0 -> "emmylua_ls 等了 ${timeouts.indexWaitMillis / 1000} 秒还有 $pending 个文件没索引完，结果可能不全：稍后再查一次。"
-            empty && excluded.isNotEmpty() -> "有 ${excluded.size} 个项目里的 .lua 文件 emmylua_ls 不给结果（多半被 .emmyrc.json 排除或不在它的工作区里，" +
-                "例如 ${LuaSymbols.sampleDirs(excluded, 3).joinToString("、")}），没查这些；要找它们里面的代码用 rg。"
+            skipped > 0 -> "扫描超时或请求出错，有 $skipped 个文件只按文本查了，结果可能不全：稍后重试（查到的会缓存，第二次快得多）。"
+            pending > 0 -> "emmylua_ls 等了 ${timeouts.indexWaitMillis / 1000} 秒还有 $pending 个文件没索引完，这些先按文本查的：稍后再查一次结果更全。"
+            empty && excluded.isNotEmpty() -> "有 ${excluded.size} 个项目里的 .lua 文件 emmylua_ls 不给结果（被 .emmyrc.json 排除、太大没加载或不在它的工作区里，" +
+                "例如 ${LuaSymbols.sampleDirs(excluded, 3).joinToString("、")}），这些只按文本认了行首的 function / 赋值；写在别处的用 rg。"
             else -> null
         }
     }
@@ -364,7 +371,7 @@ class LuaCodeTools(
             when {
                 hit == null || hit.stamp != f.stamp -> todo += ctx
                 hit.excludedAt == 0L -> result += ctx to hit.decls
-                nowMs - hit.excludedAt < timeouts.excludedRecheckMillis -> excluded += f.path
+                nowMs - hit.excludedAt < timeouts.excludedRecheckMillis -> { excluded += f.path; result += ctx to hit.decls }
                 else -> todo += ctx
             }
         }
@@ -386,41 +393,59 @@ class LuaCodeTools(
         if (waiting.isNotEmpty() && stalls >= timeouts.stallPolls) {
             val at = System.currentTimeMillis()
             for (ctx in waiting) {
-                cache[norm(ctx.file.path)] = CachedFile(ctx.file.stamp, emptyList(), at)
+                // 服务器不收的文件按文本认声明，照样能搜到
+                val decls = LuaSymbols.textDeclarations(b.readText(ctx.file))
+                cache[norm(ctx.file.path)] = CachedFile(ctx.file.stamp, decls, at)
                 excluded += ctx.file.path
+                result += ctx to decls
             }
             waiting = emptyList()
         }
         val pending = waiting.size
-        if (project.isNotEmpty() && pending + skipped + excluded.size >= project.size && pending + skipped > 0) {
-            throw indexing("emmylua_ls 还在建立索引（等了 ${timeouts.indexWaitMillis / 1000} 秒，${project.size} 个项目脚本都还没有结果），稍后重试。")
-        }
+        // 等到上限还没索引到的：这次先按文本查，不缓存，下次再问服务器
+        for (ctx in waiting) result += ctx to LuaSymbols.textDeclarations(b.readText(ctx.file))
         return ProjectIndex(result, byPath, bases, pending, skipped, excluded)
     }
 
-    /** 问一批文件的符号，结果放进 [result]；返回服务器还没索引到的文件。超时的记进 [onSkip]。 */
+    /** 只按文本认声明的符号表（emmylua_ls 用不了时）。 */
+    private fun textIndex(b: LuaCodeBackend): ProjectIndex {
+        val bases = b.baseDirs()
+        val all = b.luaFiles()
+        val byPath = HashMap<String, FileCtx>()
+        for (f in all) byPath[norm(f.path)] = FileCtx(f, LuaSymbols.moduleName(f.path, bases))
+        val result = all.filter { !it.library }.map { f -> byPath.getValue(norm(f.path)).let { it to LuaSymbols.textDeclarations(b.readText(f)) } }
+        return ProjectIndex(result, byPath, bases, 0, 0, emptyList())
+    }
+
+    /** 问一批文件的符号，结果放进 [result]；返回服务器还没索引到的文件。超时、出错的记进 [onSkip]，这次按文本认声明。 */
     private fun scan(b: LuaCodeBackend, todo: List<FileCtx>, deadline: Long, cache: ConcurrentHashMap<String, CachedFile>, result: MutableList<Pair<FileCtx, List<LuaDecl>>>, onSkip: () -> Unit): List<FileCtx> {
         val notYet = ArrayList<FileCtx>()
         for (chunk in todo.chunked(timeouts.parallel.coerceAtLeast(1))) {
-            if (System.nanoTime() > deadline) { chunk.forEach { _ -> onSkip() }; continue }
+            if (System.nanoTime() > deadline) {
+                chunk.forEach { ctx -> onSkip(); result += ctx to LuaSymbols.textDeclarations(b.readText(ctx.file)) }
+                continue
+            }
             val futures = chunk.map { it to b.documentSymbols(it.file) }
             for ((ctx, future) in futures) {
                 val left = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()).coerceAtLeast(1)
                 val symbols = try {
                     future.get(minOf(left, timeouts.requestMillis), TimeUnit.MILLISECONDS)
                 } catch (e: TimeoutException) {
-                    future.cancel(true); onSkip(); continue
+                    future.cancel(true); onSkip(); result += ctx to LuaSymbols.textDeclarations(b.readText(ctx.file)); continue
                 } catch (e: ExecutionException) {
-                    // 请求本身失败不是「没索引到」：不进等待、也不会被记成不收，算进跳过的，note 里会说结果不全
-                    onSkip(); continue
+                    // 请求本身失败不是「没索引到」：不进等待、也不会被记成不收，算进跳过的，note 里会说结果不全；这次按文本认
+                    onSkip(); result += ctx to LuaSymbols.textDeclarations(b.readText(ctx.file)); continue
                 } catch (e: InterruptedException) {
                     Thread.currentThread().interrupt()
                     throw ToolException("cancelled", "调用被客户端取消。")
                 }
                 if (symbols == null) { notYet += ctx; continue }
-                val decls = LuaSymbols.declarations(symbols, b.readText(ctx.file))
+                val text = b.readText(ctx.file)
+                val lsp = LuaSymbols.declarations(symbols, text)
+                // emmylua_ls 不列表外赋值（M.Foo = function、M.x = 1），按文本补上
+                val decls = LuaSymbols.merge(lsp, LuaSymbols.textDeclarations(text))
                 // 服务器给了空表、文件却不空：多半是还没索引到，别缓存
-                if (symbols.isNotEmpty() || decls.isNotEmpty()) cache[norm(ctx.file.path)] = CachedFile(ctx.file.stamp, decls)
+                if (symbols.isNotEmpty() || lsp.isNotEmpty()) cache[norm(ctx.file.path)] = CachedFile(ctx.file.stamp, decls)
                 result += ctx to decls
             }
         }

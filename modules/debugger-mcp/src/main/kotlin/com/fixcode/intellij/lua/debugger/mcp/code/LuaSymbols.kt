@@ -144,6 +144,76 @@ object LuaSymbols {
         return out
     }
 
+    // ------------------------------------------------------------------ 按文本补的声明
+
+    private val FUNC_STMT = Regex("^\\s*(local\\s+)?function\\s+([A-Za-z_][\\w]*(?:[.:][A-Za-z_][\\w]*)*)\\s*\\(([^)]*)\\)?")
+    private val FUNC_ASSIGN = Regex("^\\s*(local\\s+)?([A-Za-z_][\\w]*(?:\\.[A-Za-z_][\\w]*)*)\\s*=\\s*function\\s*\\(([^)]*)\\)?")
+    private val FIELD_ASSIGN = Regex("^([A-Za-z_][\\w]*(?:\\.[A-Za-z_][\\w]*)+)\\s*=(?!=)\\s*(.*)$")
+    private val LOCAL_ASSIGN = Regex("^local\\s+([A-Za-z_][\\w]*)\\s*=(?!=)\\s*(.*)$")
+
+    /** 一行超过这么长多半是数据表（导表生成的 .lua），不当声明看，也省时间。 */
+    private const val MAX_TEXT_LINE = 2000
+
+    /**
+     * 按文本认出来的声明，补 emmylua_ls 的 documentSymbol：它不列出 `M.Foo = function` / `M.x = 1` 这类表外赋值，
+     * 被 `.emmyrc.json` 排除、太大没加载、还没索引到的文件它也不给结果（用户 2026-11-23 报 Agent 查不到函数）。
+     * 只认行首的几种写法（`function a.b:c(`、`a.b = function(`、行首的 `a.b = ...`、行首的 `local x = ...`），
+     * 不做语义分析：跨行的、写在表构造里的字段不认。
+     */
+    fun textDeclarations(text: String?): List<LuaDecl> {
+        if (text.isNullOrEmpty()) return emptyList()
+        val out = ArrayList<LuaDecl>()
+        var inComment = false
+        for ((i, raw) in text.lineSequence().withIndex()) {
+            if (raw.length > MAX_TEXT_LINE) continue
+            if (inComment) {
+                if (raw.contains("]]")) inComment = false
+                continue
+            }
+            val t = raw.trimStart()
+            if (t.startsWith("--")) {
+                if (t.startsWith("--[[") || t.startsWith("--[==[") || t.startsWith("--[=[")) inComment = !t.contains("]]")
+                continue
+            }
+            if (!t.contains('=') && !t.contains("function")) continue
+            val f = FUNC_STMT.find(raw) ?: FUNC_ASSIGN.find(raw)
+            if (f != null) {
+                val full = f.groupValues[2]
+                val sep = full.lastIndexOfAny(charArrayOf('.', ':'))
+                val name = full.substring(sep + 1)
+                val container = if (sep > 0) full.substring(0, sep).replace(':', '.') else null
+                val kind = if (sep > 0 && full[sep] == ':') LuaDeclKind.METHOD else LuaDeclKind.FUNCTION
+                val params = f.groups[3]?.value?.trim()
+                out += LuaDecl(name, kind, container, i, nameColumn(raw, name, raw.indexOf(full)) ?: 0,
+                    sig = params?.let { clip("($it)") }, isLocal = f.groupValues[1].isNotEmpty())
+                continue
+            }
+            val a = FIELD_ASSIGN.find(raw)
+            if (a != null) {
+                val full = a.groupValues[1]
+                val sep = full.lastIndexOf('.')
+                val name = full.substring(sep + 1)
+                out += LuaDecl(name, LuaDeclKind.FIELD, full.substring(0, sep), i, nameColumn(raw, name, sep) ?: 0,
+                    value = a.groupValues[2].trim().takeIf { it.isNotEmpty() }?.let(::clip))
+                continue
+            }
+            val l = LOCAL_ASSIGN.find(raw) ?: continue
+            val name = l.groupValues[1]
+            out += LuaDecl(name, LuaDeclKind.VARIABLE, null, i, nameColumn(raw, name, 5) ?: 0,
+                value = l.groupValues[2].trim().takeIf { it.isNotEmpty() }?.let(::clip), isLocal = true)
+        }
+        return out
+    }
+
+    /** emmylua_ls 给的声明为主，按文本认出的只补它没有的（同一行同名算同一个）。 */
+    fun merge(lsp: List<LuaDecl>, text: List<LuaDecl>): List<LuaDecl> {
+        if (text.isEmpty()) return lsp
+        val seen = lsp.mapTo(HashSet()) { "${it.line}:${it.name}" }
+        val extra = text.filter { seen.add("${it.line}:${it.name}") }
+        if (extra.isEmpty()) return lsp
+        return (lsp + extra).sortedWith(compareBy<LuaDecl> { it.line }.thenBy { it.col })
+    }
+
     private fun clip(s: String): String = if (s.length <= MAX_DETAIL) s else s.take(MAX_DETAIL - 1) + "…"
 
     /** workspace/symbol 的一项换成声明（只有全局和类型，没有 local）。 */
