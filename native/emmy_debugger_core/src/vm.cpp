@@ -4,6 +4,7 @@
 #include "lua_internal.h"
 #include "session.h"
 
+#include <chrono>
 #include <algorithm>
 #include <cstring>
 
@@ -288,6 +289,8 @@ int Vm::OnHook(lua_State* L, lua_Debug* ar) {
 			return 0;
 		}
 	}
+	// 暂停循环里执行的 Lua 走到别的协程上的钩子：标志留给恢复之后处理（见 EnterPause）
+	if (inPauseLoop_) return BaseMask();
 	bool refreshed = false;
 	if (pending_.load(std::memory_order_acquire) != 0) {
 		ProcessPending(L);
@@ -772,18 +775,28 @@ void Vm::EnterPause(lua_State* L, const char* reason, std::vector<std::string> b
 	core.Emit("paused", std::move(body));
 
 	resumeKind_ = ResumeKind::None;
+	// 断开（或换了会话）以会话代数和连接状态为准，不只看 pending_ 标志：暂停循环里跑的命令会执行 Lua
+	// （求值、类型显示脚本、pcall 出错进错误收集），途中的钩子 / 错误回调可能先把标志取走，只看标志就会一直等下去，
+	// 用户点了停止调试游戏还卡在断点上。
+	const uint64_t pauseGen = core.sessionGeneration();
+	auto sessionGone = [&] {
+		return (pending_.load() & (kFlagDetach | kFlagSession)) != 0 || !core.connected() || core.sessionGeneration() != pauseGen;
+	};
 	while (resumeKind_ == ResumeKind::None) {
 		std::deque<Command> cmds;
 		{
 			std::unique_lock<std::mutex> lock(cmdMutex_);
-			cmdCv_.wait(lock, [&] {
-				return !commands_.empty() || (pending_.load() & (kFlagDetach | kFlagSession)) != 0;
-			});
+			// 带超时兜底：万一唤醒丢了，最迟一会儿也会重新检查会话是否还在
+			cmdCv_.wait_for(lock, std::chrono::milliseconds(200), [&] { return !commands_.empty() || sessionGone(); });
 			cmds.swap(commands_);
 		}
-		for (Command& c : cmds) c(L);
-		uint32_t p = pending_.load();
-		if ((p & (kFlagDetach | kFlagSession)) && resumeKind_ == ResumeKind::None) {
+		for (Command& c : cmds) {
+			// 已经断开：剩下的请求（变量、求值）没人收结果了，不再跑，马上放游戏继续
+			if (sessionGone()) break;
+			c(L);
+			if (resumeKind_ != ResumeKind::None) break;
+		}
+		if (resumeKind_ == ResumeKind::None && sessionGone()) {
 			// IDE 断开（或换了会话）：不能让游戏卡在这里
 			resumeKind_ = ResumeKind::Detach;
 		}
@@ -822,6 +835,7 @@ void Vm::EnterPause(lua_State* L, const char* reason, std::vector<std::string> b
 }
 
 void Vm::BreakHere(lua_State* L) {
+	if (inPauseLoop_) return;
 	if (pending_.load() != 0) ProcessPending(L);
 	if (!active_.load()) return;
 	EnterPause(L, "hostBreak", {}, "宿主调用了 breakHere");
@@ -949,8 +963,10 @@ void Vm::OnLuaError(lua_State* L, int msgIdx, bool uncaught) {
 	const bool wantPause = mode == 2 || (mode == 1 && uncaught);
 	const bool wantCollect = collect == 2 || (collect == 1 && uncaught);
 	if (!wantPause && !wantCollect) return;
+	// 暂停循环里（求值、显示脚本里的 pcall 出错）不能处理待处理标志：会把「断开」标志取走，暂停循环就醒不过来
+	if (inPauseLoop_ || inspector_.evaluating()) return;
 	if (pending_.load() != 0) ProcessPending(L);
-	if (!active_.load() || inPauseLoop_ || inspector_.evaluating()) return;
+	if (!active_.load()) return;
 	msgIdx = lua::AbsIndex(L, msgIdx);
 	std::string message;
 	const int mt = lua_type(L, msgIdx);

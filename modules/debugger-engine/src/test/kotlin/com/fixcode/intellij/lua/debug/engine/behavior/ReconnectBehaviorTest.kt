@@ -6,6 +6,7 @@ import com.fixcode.intellij.lua.debug.engine.ReconnectPolicy
 import com.fixcode.intellij.lua.debug.engine.SessionState
 import com.fixcode.intellij.lua.debug.engine.StaleReferenceException
 import com.fixcode.intellij.lua.debug.protocol.Commands
+import com.fixcode.intellij.lua.debug.protocol.HelloArgs
 import com.fixcode.intellij.lua.debug.protocol.ResumedBy
 import com.fixcode.intellij.lua.debug.protocol.SetBreakpointsArgs
 import org.junit.Assert.assertEquals
@@ -67,6 +68,20 @@ class ReconnectBehaviorTest : BehaviorTestBase() {
         runtime.ignorePings = true
         events.await<DebugEvent.Terminated>(timeoutMillis = 3_000)
         assertEquals(SessionState.TERMINATED, session.state)
+    }
+
+    @Test
+    fun `hello 报心跳间隔 runtime 据此判断半开连接`() {
+        connect(config = testConfig().copy(heartbeatIntervalMillis = 5_000))
+        val hello = runtime.requests.first { it.command == Commands.HELLO }
+        assertEquals(5_000L, HelloArgs.fromJson(hello.args).heartbeatMs)
+    }
+
+    @Test
+    fun `关了心跳时 hello 不报间隔 runtime 不做空闲检测`() {
+        connect()
+        val hello = runtime.requests.first { it.command == Commands.HELLO }
+        assertEquals(null, HelloArgs.fromJson(hello.args).heartbeatMs)
     }
 
     /** 模拟本机附加：进程是否存活可控，进程不在时建连报 TargetGoneException。 */

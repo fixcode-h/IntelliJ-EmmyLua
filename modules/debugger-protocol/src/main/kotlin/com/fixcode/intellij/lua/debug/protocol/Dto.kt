@@ -23,17 +23,20 @@ data class HelloArgs(
     val token: String? = null,
     val protocol: Int = Protocol.VERSION,
     val revision: Int = Protocol.REVISION,
-    val maxFrameBytes: Int? = null
+    val maxFrameBytes: Int? = null,
+    /** IDE 的心跳间隔（毫秒）。runtime 据此开空闲检测：久不收到任何数据就按断线处理、恢复游戏（半开连接）。 */
+    val heartbeatMs: Long? = null
 ) : JsonDto {
     override fun toJson() = jsonObject {
         put("protocol", protocol); put("revision", revision); put("client", client); put("token", token)
-        putStrings("caps", caps); put("maxFrameBytes", maxFrameBytes)
+        putStrings("caps", caps); put("maxFrameBytes", maxFrameBytes); put("heartbeatMs", heartbeatMs)
     }
 
     companion object {
         fun fromJson(json: JsonObject) = HelloArgs(
             json.optObject("client")?.let(ClientInfo::fromJson) ?: ClientInfo(""), json.strings("caps"),
-            json.optString("token"), json.reqInt("protocol"), json.optInt("revision") ?: 0, json.optInt("maxFrameBytes")
+            json.optString("token"), json.reqInt("protocol"), json.optInt("revision") ?: 0, json.optInt("maxFrameBytes"),
+            json.optLong("heartbeatMs")
         )
     }
 }

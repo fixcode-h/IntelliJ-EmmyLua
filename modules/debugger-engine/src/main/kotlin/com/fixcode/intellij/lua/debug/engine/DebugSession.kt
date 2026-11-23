@@ -256,7 +256,10 @@ class DebugSession(
     }
 
     private fun handshake(epoch: Long) {
-        val hello = HelloArgs(ClientInfo(Protocol.CLIENT_NAME, config.clientVersion), token = connection?.token ?: config.token)
+        val hello = HelloArgs(
+            ClientInfo(Protocol.CLIENT_NAME, config.clientVersion), token = connection?.token ?: config.token,
+            heartbeatMs = config.heartbeatIntervalMillis.takeIf { it > 0 }
+        )
         request(Commands.HELLO, hello.toJson(), config.handshakeTimeoutMillis)
             .thenCompose { body ->
                 val welcome = Welcome.fromJson(body)

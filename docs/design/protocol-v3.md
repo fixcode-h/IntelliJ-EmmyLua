@@ -132,8 +132,8 @@
 - 握手完成前，除 `hello` 外的任何 request 回 `NOT_READY`；握手 5 秒内未完成，runtime 断开。
 - **TCP 方向和协议角色无关**：「IDE 连 runtime」和「runtime 连 IDE」两种方式建连后都由 IDE 先发 `hello`。
 - 同一时刻一个 runtime 只接受**一个**已握手的 IDE 连接；第二个连接握手时回 `BUSY` 并断开（附加场景下不会出现两个 IDE 抢同一进程）。
-- **心跳**：IDE 每 5 秒发一次 `ping`；runtime 15 秒没收到任何帧视为断线。IDE 连续 3 次 `ping` 无回应（各 5 秒超时）视为断线。
-- **断线时 runtime 的行为**（不管是主动 `disconnect` 还是异常断开）：清空全部断点和 runToLine、关闭单步、恢复所有暂停的 VM、卸掉行钩子（只保留 HookMux 里宿主自己注册的钩子），回到「未连接」状态等下一次连接。游戏不能因为 IDE 掉线而卡住。
+- **心跳**：IDE 每 5 秒发一次 `ping`，并在 `hello` 的 `heartbeatMs` 里报这个间隔；报了的话 runtime 超过 `max(3 × heartbeatMs, 15 秒)` 没收到任何字节就视为断线（半开连接：Wi-Fi 断开、电脑休眠，收不到 FIN），断开并恢复游戏。没报的客户端不做空闲检测。runtime 进程自己被整体挂起过（VS 里中断）时重新计时，不误断。IDE 连续 3 次 `ping` 无回应（各 5 秒超时）视为断线。
+- **断线时 runtime 的行为**（不管是主动 `disconnect` 还是异常断开）：暂停中的 VM 以「会话代数变了 / 已断开」为准恢复，不依赖某个唤醒标志（暂停循环里正在执行的求值、显示脚本可能把标志先取走）；断开时还没执行的请求直接丢弃，不再执行；清空全部断点和 runToLine、关闭单步、恢复所有暂停的 VM、卸掉行钩子（只保留 HookMux 里宿主自己注册的钩子），回到「未连接」状态等下一次连接。游戏不能因为 IDE 掉线而卡住。
 - **重连**：新连接是全新会话（新的 `sessionId`、`seq` 从 1 开始），IDE 重新下发断点和选项。VM 的 `vmId` 在 runtime 进程内稳定，重连后不变，IDE 可以据此保留 UI 状态。
 
 ---
@@ -164,6 +164,7 @@
 | `token` | 视情况 | runtime 配置了 token（局域网监听必须有、附加时由 IDE 生成并注入）时必填；比较用常量时间；不匹配回 `AUTH_FAILED` 并断开。同一来源连续 3 次失败后 runtime 拒绝该来源 60 秒 |
 | `caps` | 否 | IDE 希望使用的能力。最终生效的是双方交集 |
 | `maxFrameBytes` | 否 | IDE 能接收的最大帧，默认 16 MiB |
+| `heartbeatMs` | 否 | IDE 发 `ping` 的间隔（毫秒）。给了 runtime 才开空闲检测（见第 4 节「心跳」） |
 
 ### 5.2 `hello` 的 response（即 welcome）
 

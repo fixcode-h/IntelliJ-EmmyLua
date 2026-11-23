@@ -58,6 +58,9 @@ private:
 	std::atomic<bool> handshaken_{false};
 	std::atomic<bool> closed_{false};
 	std::atomic<uint64_t> bpDiagGen_{0};
+	// 最后一次收到 IDE 字节的时间（steady 毫秒）：IDE 在 hello 里报了心跳间隔时，久不来数据就按断线处理
+	std::atomic<int64_t> lastRecvMs_{0};
+	void StartIdleWatchdog(int64_t timeoutMs);
 	std::string sessionId_;
 };
 

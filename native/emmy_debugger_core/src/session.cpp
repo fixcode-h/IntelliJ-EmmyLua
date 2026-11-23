@@ -5,6 +5,7 @@
 #include "view_rules.h"
 #include "vm.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -134,6 +135,12 @@ private:
 
 } // namespace
 
+namespace {
+int64_t SteadyMs() {
+	return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+} // namespace
+
 Session::Session(std::shared_ptr<Connection> conn) : conn_(std::move(conn)), sessionId_(RandomId()) {}
 
 void Session::Start() {
@@ -160,12 +167,37 @@ void Session::Close() {
 	conn_->Close();
 }
 
+void Session::StartIdleWatchdog(int64_t timeoutMs) {
+	// 半开连接（Wi-Fi 断了、电脑休眠、adb 被拔）收不到 FIN：不靠它的话，停在断点上的游戏会一直卡着。
+	// IDE 每隔心跳间隔发 ping，这么久一个字节都没来就当 IDE 已经没了，断开并恢复游戏（协议第 4 节）。
+	lastRecvMs_.store(SteadyMs(), std::memory_order_relaxed);
+	std::weak_ptr<Session> weak = shared_from_this();
+	std::thread([weak, timeoutMs] {
+		int64_t prevTick = SteadyMs();
+		while (true) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(500));
+			auto s = weak.lock();
+			if (!s || s->closed_) return;
+			const int64_t now = SteadyMs();
+			// 整个进程被挂起过（VS 里中断、断点在 C++ 侧）：缓冲区里的 ping 还没来得及读，重新计时，不误断
+			if (now - prevTick > 2000) s->lastRecvMs_.store(now, std::memory_order_relaxed);
+			prevTick = now;
+			if (SteadyMs() - s->lastRecvMs_.load(std::memory_order_relaxed) > timeoutMs) {
+				Core::Get().Log("runtime", "warn", "超过 " + std::to_string(timeoutMs / 1000) + " 秒没有收到 IDE 的任何数据，按断线处理，游戏继续运行");
+				s->Close();
+				return;
+			}
+		}
+	}).detach();
+}
+
 void Session::OnClosed() {
 	if (closed_.exchange(true)) return;
 	Core::Get().Deactivate(this);
 }
 
 void Session::OnBytes(const char* data, size_t len) {
+	lastRecvMs_.store(SteadyMs(), std::memory_order_relaxed);
 	auto status = decoder_.Feed(data, len, [this](Frame&& f) { OnFrame(std::move(f)); });
 	if (status == FrameDecoder::Status::NotV3) {
 		// 旧 IDE（v1 文本协议）：回一行原因再断开
@@ -322,6 +354,9 @@ void Session::CmdHello(uint64_t id, const json& args) {
 		return;
 	}
 	handshaken_ = true;
+	// IDE 报了心跳间隔才开空闲检测：没报的（旧 IDE、关了心跳的测试）不会被误断
+	const int64_t heartbeatMs = GetInt(args, "heartbeatMs", 0);
+	if (heartbeatMs > 0) StartIdleWatchdog(std::max<int64_t>(heartbeatMs * 3, 15000));
 	// Activate 会重置选项，所以协商结果放在它之后
 	for (auto& c : caps) {
 		if (c.get<std::string>() == "richVariables") core.options().richVariables = true;

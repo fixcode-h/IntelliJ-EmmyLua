@@ -1453,6 +1453,144 @@ TEST_CASE("session.internal_fault_disables_vm_only") {
 	lua_close(L);
 }
 
+// 用户反馈：停在断点上点停止调试，游戏还卡着。IDE 停止时通常还有没回完的请求（变量、行尾值、悬停求值），
+// 这些请求在暂停循环里跑 Lua（含 pcall 出错，错误收集会进 OnLuaError）；断开信号恰好在这时到达也必须恢复游戏。
+TEST_CASE("session.disconnect_while_paused_with_inflight_requests") {
+	for (int round = 0; round < 30; ++round) {
+		TestClient c;
+		CHECK(c.Connect("127.0.0.1", g_port));
+		CHECK(Ok(Hello(c)));
+		g_rev = 0;
+		CHECK(Ok(c.Request("setOptions", {{"collectErrors", "all"}, {"exceptions", "none"}})));
+		CHECK(Ok(c.Request("configurationDone")));
+		CHECK(Ok(SetBps(c, json::array({Bp("b", 9)}))));
+		json p = c.WaitEvent("paused");
+		CHECK(p.is_object());
+		if (!p.is_object()) return;
+		json stack = c.Request("stackTrace", {{"vmId", p["body"]["vmId"]}, {"pauseId", p["body"]["pauseId"]}});
+		CHECK(Ok(stack));
+		if (!Ok(stack)) return;
+		uint64_t frameId = stack["body"]["frames"][0]["frameId"];
+		// 不等回复连发一批求值，紧接着断开
+		std::string burst;
+		for (int k = 0; k < 20; ++k) {
+			json req = {{"id", 100000 + k}, {"command", "evaluate"},
+				{"args", {{"frameId", frameId}, {"mode", "lua"},
+					{"expression", "(function() local n = 0 for j = 1, 3000 do if not pcall(error, 'x') then n = n + 1 end end return n end)()"}}}};
+			burst += EncodeFrame(MessageKind::Request, false, req.dump());
+		}
+		if (round % 2 == 0) {
+			json bye = {{"id", 200000}, {"command", "disconnect"}, {"args", json::object()}};
+			burst += EncodeFrame(MessageKind::Request, false, bye.dump());
+		}
+		c.SendRaw(burst);
+		std::this_thread::sleep_for(std::chrono::milliseconds(round % 5));
+		int64_t ticks = g_game->ticks;
+		c.Close();
+		bool progressed = false;
+		for (int i = 0; i < 300; ++i) {
+			if (g_game->ticks > ticks + 5) { progressed = true; break; }
+			std::this_thread::sleep_for(std::chrono::milliseconds(10));
+		}
+		if (!progressed) std::printf("  round %d: game stuck after disconnect\n", round);
+		CHECK(progressed);
+		if (!progressed) return;
+	}
+}
+
+namespace {
+// 断开后游戏要继续跑、钩子要摘掉；再连上的 IDE 不下断点就不该停（上一个会话的断点 / 单步 / 函数断点 / 出错即停都不能留下）
+bool GameResumesAndClean(const char* what) {
+	int64_t ticks = g_game->ticks;
+	bool progressed = false;
+	for (int i = 0; i < 300; ++i) {
+		if (g_game->ticks > ticks + 5 && g_game->hookCleared) { progressed = true; break; }
+		std::this_thread::sleep_for(std::chrono::milliseconds(10));
+	}
+	if (!progressed) std::printf("  %s: game stuck or hook left after disconnect\n", what);
+	TestClient c2;
+	if (!c2.Connect("127.0.0.1", g_port) || !Ok(Hello(c2))) return false;
+	c2.Request("configurationDone");
+	json again = c2.WaitEvent("paused", 400);
+	if (again.is_object()) std::printf("  %s: paused again on a fresh session\n", what);
+	c2.Request("disconnect");
+	return progressed && !again.is_object();
+}
+} // namespace
+
+TEST_CASE("session.disconnect_matrix") {
+	// 每种暂停原因各来一次：停着时断开（发 disconnect / 直接关 TCP 轮流）
+	struct Case { const char* name; int kind; };
+	const Case cases[] = {{"line", 0}, {"function", 1}, {"exception", 2}, {"pause", 3}, {"step", 4}, {"stepThenClose", 6}};
+	int n = 0;
+	for (const Case& k : cases) {
+		TestClient c;
+		CHECK(c.Connect("127.0.0.1", g_port));
+		CHECK(Ok(Hello(c, json::array({"valuePath", "luaEval", "exceptions", "functionBreakpoints"}))));
+		g_rev = 0;
+		json p;
+		if (k.kind == 1) {
+			CHECK(Ok(SetBps(c, json::array({json{{"id", "fn"}, {"function", "GameMod.add"}}}))));
+		} else if (k.kind == 2) {
+			CHECK(Ok(c.Request("setOptions", {{"exceptions", "all"}})));
+			CHECK(Ok(SetBps(c, json::array({Bp("arm", 9)}))));
+		} else if (k.kind != 3) {
+			CHECK(Ok(SetBps(c, json::array({Bp("b", 9)}))));
+		}
+		CHECK(Ok(c.Request("configurationDone")));
+		if (k.kind == 3) CHECK(Ok(c.Request("pause", {{"vmId", 0}})));
+		p = c.WaitEvent("paused", 3000);
+		CHECK(p.is_object());
+		if (!p.is_object()) return;
+		if (k.kind == 2) {
+			// 武装：让下一 tick 抛 pcall 接住的错误，在 all 模式下停住
+			json st = c.Request("stackTrace", {{"vmId", p["body"]["vmId"]}, {"pauseId", p["body"]["pauseId"]}});
+			uint64_t frameId = st["body"]["frames"][0]["frameId"];
+			CHECK(Ok(c.Request("evaluate", {{"frameId", frameId}, {"mode", "lua"}, {"expression", "rawset(_G, 'FAIL2', true)"}})));
+			CHECK(Ok(SetBps(c, json::array())));
+			CHECK(Ok(Continue(c, p)));
+			p = c.WaitEvent("paused", 3000);
+			CHECK(p.is_object());
+			if (!p.is_object()) return;
+			CHECK_EQ(p["body"]["reason"].get<std::string>(), std::string("exception"));
+		}
+		if (k.kind == 4 || k.kind == 6) {
+			CHECK(Ok(c.Request("stepOver", {{"vmId", p["body"]["vmId"]}, {"pauseId", p["body"]["pauseId"]}})));
+			if (k.kind == 4) {
+				json p2 = c.WaitEvent("paused", 3000);
+				CHECK(p2.is_object());
+			}
+		}
+		if (++n % 2) c.Request("disconnect", json::object(), 2000);
+		c.Close();
+		CHECK(GameResumesAndClean(k.name));
+	}
+}
+
+TEST_CASE("session.idle_watchdog_releases_paused_game") {
+	// IDE 报了心跳间隔却再也不发数据（半开连接）：runtime 15 秒后按断线处理，恢复游戏
+	TestClient c;
+	CHECK(c.Connect("127.0.0.1", g_port));
+	json args = {{"protocol", 3}, {"client", {{"name", "test"}, {"version", "0"}}}, {"heartbeatMs", 1000}};
+	CHECK(Ok(c.Request("hello", args)));
+	g_rev = 0;
+	CHECK(Ok(SetBps(c, json::array({Bp("b", 9)}))));
+	CHECK(Ok(c.Request("configurationDone")));
+	json p = c.WaitEvent("paused");
+	CHECK(p.is_object());
+	if (!p.is_object()) return;
+	int64_t ticks = g_game->ticks;
+	std::this_thread::sleep_for(std::chrono::seconds(10));
+	CHECK_EQ(g_game->ticks.load(), ticks); // 15 秒内还停着
+	bool progressed = false;
+	for (int i = 0; i < 100; ++i) {
+		if (g_game->ticks > ticks + 5) { progressed = true; break; }
+		std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	}
+	CHECK(progressed);
+	CHECK(c.closed());
+}
+
 int main() {
 	g_port = 39000 + static_cast<int>(std::chrono::steady_clock::now().time_since_epoch().count() % 2000);
 	char err[256] = {0};
