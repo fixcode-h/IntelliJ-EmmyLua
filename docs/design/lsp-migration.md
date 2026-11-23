@@ -63,7 +63,7 @@ IDE 里只保留不需要语义的东西，全部基于一个**手写的 Kotlin 
 | 悬停文档 | DocumentationProvider | LSP `hover` |
 | 诊断（未定义变量、类型不匹配……） | 17 个 Inspection | LSP 诊断（pull + publish），规则在 `.emmyrc.json` 的 `diagnostics` 里开关 |
 | 快速修复 | 部分 Inspection 自带 | LSP `codeAction` |
-| 格式化 | 自写 FormattingModel | LSP `formatting` / `rangeFormatting`（emmylua_ls 内置 EmmyLuaCodeStyle，读 `.editorconfig`） |
+| 格式化 | 自写 FormattingModel + 「代码样式 → Lua」设置页 | LSP `formatting` / `rangeFormatting`。emmylua_ls 0.25.1 内置的是 Rust 写的 `emmylua_formatter`（不是 EmmyLuaCodeStyle），规则从被格式化的文件往上找 `.luafmt.toml` / `luafmt.toml`，**不读 `.editorconfig` 和 `.emmyrc.json`**；缩进宽度、Tab / 空格、文末换行由 IDE 随请求发送（IDE 侧来自「代码样式 → 常规」或 `.editorconfig`），会盖掉文件里的 `indent`；有语法错误的文件原样返回。插件不下发格式化配置，只在设置页给「打开 / 新建 .luafmt.toml」（模板接近旧版默认，`project/LuaFormatterConfig`）和 schema 补全（`schemas/luafmt.schema.json`，照 `emmylua_formatter/src/config/mod.rs` 手写，升级 emmylua_ls 时核对）。旧版的「函数前后 / require 块后补空行」「循环条件对齐」没有对应 |
 | 语义高亮、彩虹变量 | Annotator + RainbowVisitor | LSP `semanticTokens`（彩虹变量不再提供） |
 | 代码折叠 | FoldingBuilder | LSP `foldingRange` |
 | 结构视图 | StructureViewFactory | IDE 侧词法大纲 `structure/LuaOutline`（只列顶层的类/模块表、函数、方法、表字段，函数显示为「名字(参数)」，参数和函数体里的东西不作为子项）。不用 `documentSymbol`：emmylua_ls 会把函数里的局部变量、`if` 块、`...` 都列出来，LSP4IJ 也只在打开时取一次，服务器没准备好就一直空着 |
@@ -94,7 +94,7 @@ emmylua_ls 自己读工作区根目录的 `.emmyrc.json`（也认 `.luarc.json`�
 - 同一份部分配置还写进 `<IDE system>/emmylua/emmyrc/<项目>.json`，用环境变量 `EMMYLUALS_CONFIG` 交给 emmylua_ls：它只等配置请求 5 秒，IDE 刚启动忙时会超时，库目录整个丢掉（UE 声明全都找不到）。这个文件在 `.emmyrc.json` 之前合并，标量以用户文件为准。
 - 插件下发的内容：自动探测到的 UE 库目录（§3）、设置页里填的额外库目录、默认 Lua 版本（只在 `.emmyrc.json` 没写时生效）、默认关掉的诊断（`diagnostics.disable`）。
 - 默认关掉的诊断现在只有 `unnecessary-if`：emmylua_ls 0.25.1 把字段第一次赋的字面量当成字段类型（`self.bFlag = false` 推成 `false`，`self.Timer = nil` 推成 `nil`），后面再赋别的值也不放宽，`if self.bFlag then` 就报「永远为假」；面向对象的 Lua 里字段几乎都这样初始化，误报太多（2026-11-18 用户报）。`disable` 优先于 `enables`、数组又和用户配置取并集，所以用户在配置文件的 `diagnostics.enables` 里写了 `unnecessary-if` 时插件不下发，想要这条诊断就这样打开。升级 emmylua_ls 时用 `emmylua_check` 跑一下「字段先赋 false、别处赋 true、再 if」的例子，上游修好了就去掉（`EmmyLuaWorkspaceConfig.DEFAULT_DISABLED_DIAGNOSTICS`）；2026-11-18 看上游主干：`false` 初始化的已修，`nil` 初始化的（`self.Timer = nil` 后 `if self.Timer`）还报。
-- 设置页（设置 → 语言和框架 → EmmyLua）只放：emmylua_ls 路径（留空用插件自带的）、额外库目录、是否自动探测 UE 项目、默认 Lua 版本，和「打开 / 新建 .emmyrc.json」按钮。
+- 设置页（设置 → 语言和框架 → EmmyLua）只放：emmylua_ls 路径（留空用插件自带的）、额外库目录、是否自动探测 UE 项目、默认 Lua 版本，和「打开 / 新建 .emmyrc.json」「打开 / 新建 .luafmt.toml」按钮。
 
 ### 2.5 服务器进程
 
