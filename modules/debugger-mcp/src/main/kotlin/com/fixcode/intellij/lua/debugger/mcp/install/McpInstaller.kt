@@ -26,12 +26,16 @@ enum class McpTransport { STREAMABLE_HTTP, SSE }
  * 这样用户再点 IDE 的自动配置也只是更新同一项，客户端里不会出现两份同样的工具。
  * [authHeader] 不为空时（IDE 要求全局服务器带令牌的版本），配置里写这个请求头，值是让客户端从同名环境变量展开的占位符，
  * 不把令牌本身写进文件（项目级配置会提交到仓库）。
+ * [projectPath] 是安装时 IDE 项目的目录，项目级配置里写成请求头 `IJ_MCP_SERVER_PROJECT_PATH`（和 IDE 自己的自动配置一样）：
+ * 新版 IDE 的 MCP 服务器在调用任何工具之前先定项目，调用里没有 `projectPath`、没有这个请求头、客户端也不报 roots 时
+ * 直接报「Unable to determine the target project」，连只开一个项目时也这样（用户 2026-11-23 报 lua_code 因此用不了）。
  */
 data class McpServerEndpoint(
     val url: String,
     val transport: McpTransport,
     val serverName: String = McpInstaller.DEFAULT_SERVER_NAME,
     val authHeader: String? = null,
+    val projectPath: String? = null,
 )
 
 data class McpClientConfigStatus(
@@ -110,8 +114,25 @@ open class JsonMcpConfigWriter(
 
     private fun fullEntry(endpoint: McpServerEndpoint): Map<String, Any?> {
         val e = LinkedHashMap(entry(endpoint))
-        endpoint.authHeader?.let { h -> e["headers"] = linkedMapOf(h to tokenPlaceholder(h)) }
+        val headers = linkedMapOf<String, Any?>()
+        endpoint.authHeader?.let { h -> headers[h] = tokenPlaceholder(h) }
+        endpoint.projectPath?.let { headers[McpInstaller.PROJECT_PATH_HEADER] = it }
+        if (headers.isNotEmpty()) e["headers"] = headers
         return e
+    }
+
+    /**
+     * 请求头一致：令牌头逐字比；项目路径头只要有、且指向本机存在的目录就算装好（同一份配置提交给全组，别人的检出路径不同，
+     * 不为这个每个人都改一遍文件）；没有或目录不存在算过期，安装时写成本项目的目录。
+     */
+    private fun sameHeaders(current: Any?, wanted: Any?): Boolean {
+        val cur = current as? Map<*, *> ?: return wanted == null
+        val want = wanted as? Map<*, *> ?: return cur.keys.all { it == McpInstaller.PROJECT_PATH_HEADER }
+        val key = McpInstaller.PROJECT_PATH_HEADER
+        if (cur.filterKeys { it != key } != want.filterKeys { it != key }) return false
+        if (!want.containsKey(key)) return true
+        val path = (cur[key] as? String)?.takeIf { it.isNotBlank() } ?: return false
+        return runCatching { Files.isDirectory(Path.of(path)) }.getOrDefault(false)
     }
 
     override fun snippet(endpoint: McpServerEndpoint): String =
@@ -131,7 +152,11 @@ open class JsonMcpConfigWriter(
             val current = urlOf(server)
             val wanted = fullEntry(endpoint)
             val sameShape = server != null && wanted.all { (k, v) ->
-                if (k in urlKeys || k == "url" || k == "httpUrl") McpInstaller.sameUrl(server[k] as? String, v as? String) else server[k] == v
+                when {
+                    k in urlKeys || k == "url" || k == "httpUrl" -> McpInstaller.sameUrl(server[k] as? String, v as? String)
+                    k == "headers" -> sameHeaders(server[k], v)
+                    else -> server[k] == v
+                }
             }
             McpClientConfigStatus(
                 client, file, detected = true,
@@ -385,6 +410,9 @@ class McpInstaller(
 
         /** IDE MCP 服务器的默认端口（McpServerSettings.DEFAULT_MCP_PORT，2025.2–2026.3 一致）。 */
         const val DEFAULT_IDE_PORT = 64342
+
+        /** IDE 的 MCP 服务器按它定这次会话的项目（IDE 自己的自动配置也写它），见 [McpServerEndpoint.projectPath]。 */
+        const val PROJECT_PATH_HEADER = "IJ_MCP_SERVER_PROJECT_PATH"
 
         fun url(port: Int, transport: McpTransport): String =
             "http://127.0.0.1:$port" + if (transport == McpTransport.STREAMABLE_HTTP) "/stream" else "/sse"

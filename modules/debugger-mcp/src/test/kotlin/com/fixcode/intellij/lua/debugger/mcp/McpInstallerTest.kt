@@ -176,6 +176,30 @@ class McpInstallerTest {
     }
 
     @Test
+    fun `项目级配置写项目路径请求头，IDE 靠它定项目；Codex 是用户级，不写`() {
+        val project = Files.createDirectories(root.resolve("Game/Content/Script")).toString()
+        val ep = stream.copy(authHeader = "IJ_MCP_AUTH_TOKEN", projectPath = project)
+        installer.install(root, ep, McpClientKind.entries)
+        assertEquals(mapOf("IJ_MCP_AUTH_TOKEN" to "\${IJ_MCP_AUTH_TOKEN}", "IJ_MCP_SERVER_PROJECT_PATH" to project),
+            entry(".mcp.json", "mcpServers", "idea")["headers"])
+        assertEquals(project, (entry(".cursor/mcp.json", "mcpServers", "idea")["headers"] as Map<*, *>)["IJ_MCP_SERVER_PROJECT_PATH"])
+        assertEquals(project, (entry(".gemini/settings.json", "mcpServers", "idea")["headers"] as Map<*, *>)["IJ_MCP_SERVER_PROJECT_PATH"])
+        assertFalse(Files.readString(home.resolve(".codex/config.toml")).contains("IJ_MCP_SERVER_PROJECT_PATH"))
+        assertTrue(installer.status(root, ep).none { it.outdated })
+
+        // 同一份配置提交给全组：别人机器上的路径不同但存在，不算过期，不为这个改文件
+        val other = Files.createDirectories(root.resolve("Other")).toString()
+        assertFalse(installer.status(root, ep.copy(projectPath = other)).first { it.client == McpClientKind.CLAUDE_CODE }.outdated)
+        // 配置里的路径在本机不存在，或旧版没写这个头：算过期，安装时写成本项目的目录
+        installer.install(root, ep.copy(projectPath = root.resolve("gone").toString()), listOf(McpClientKind.CLAUDE_CODE))
+        assertTrue(installer.status(root, ep).first { it.client == McpClientKind.CLAUDE_CODE }.outdated)
+        installer.install(root, stream, listOf(McpClientKind.CLAUDE_CODE))
+        assertTrue(installer.status(root, stream.copy(projectPath = project)).first { it.client == McpClientKind.CLAUDE_CODE }.outdated)
+        installer.install(root, stream.copy(projectPath = project), listOf(McpClientKind.CLAUDE_CODE))
+        assertFalse(installer.status(root, stream.copy(projectPath = project)).first { it.client == McpClientKind.CLAUDE_CODE }.outdated)
+    }
+
+    @Test
     fun `卸载只删自己那一项，删空了删文件`() {
         installer.install(root, stream, listOf(McpClientKind.CLAUDE_CODE))
         assertTrue(installer.uninstall(root, stream, listOf(McpClientKind.CLAUDE_CODE)).single().success)

@@ -98,7 +98,6 @@ class LuaCodeTools(
             integer("offset", "Items to skip (use nextOffset from the previous call).", minimum = 0)
         },
         level = PermissionLevel.READ,
-        hiddenArgs = setOf(PROJECT_PATH),
     ) { call ->
         val a = call.args
         when (a.choice("action", null, *actions)) {
@@ -592,6 +591,6 @@ class LuaCodeTools(
         const val NAME = "lua_code"
 
         /** IDE 自带工具通用的项目参数，我们不写进 schema 但接受（见 [McpTool.hiddenArgs]） */
-        const val PROJECT_PATH = "projectPath"
+        const val PROJECT_PATH = McpTool.PROJECT_PATH
     }
 }

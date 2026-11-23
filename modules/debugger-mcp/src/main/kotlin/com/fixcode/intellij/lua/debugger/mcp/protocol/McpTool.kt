@@ -30,10 +30,12 @@ class McpTool(
     /** 可能结束目标进程或丢数据（例如 stop 时游戏随调试器一起退出）。 */
     val destructive: Boolean = false,
     /**
-     * 不写进 schema、但也接受的参数名。目前只有 IDE 自带工具通用的 `projectPath`：Agent 看惯了 IDE 工具都带它，
-     * 给我们的工具也会顺手传（用户 2026-11-21 报 lua_code 因此整次失败）；它是 camelCase，不进 schema，免得破坏参数命名规范。
+     * 不写进 schema、但也接受的参数名。目前只有 IDE 自带工具通用的 `projectPath`，所有工具都接受：
+     * Agent 看惯了 IDE 工具都带它，给我们的工具也会顺手传（用户 2026-11-21 报 lua_code 因此整次失败）；
+     * 新版 IDE 的 MCP 服务器在调用前还要靠它定项目，IDE 适配层把它补进给 IDE 的 schema（`IdeMcpCompat`）。
+     * 它是 camelCase，不进这里的 schema，免得破坏参数命名规范。
      */
-    val hiddenArgs: Set<String> = emptySet(),
+    val hiddenArgs: Set<String> = setOf(PROJECT_PATH),
     val handler: (ToolCall) -> Map<String, Any?>,
 ) {
     /** 参数名（校验未知参数用）。 */
@@ -54,6 +56,11 @@ class McpTool(
         ),
         "_meta" to linkedMapOf("titles" to linkedMapOf("zh" to titleZh, "en" to title)),
     )
+
+    companion object {
+        /** IDE 自带工具通用的项目参数（见 [hiddenArgs]）。 */
+        const val PROJECT_PATH = "projectPath"
+    }
 }
 
 /**

@@ -80,8 +80,11 @@ class LuaMcpServiceImpl : LuaMcpService {
         return roots.toList()
     }
 
+    /** 写进配置的地址，带上本项目目录（请求头 IJ_MCP_SERVER_PROJECT_PATH），IDE 的 MCP 服务器靠它定项目。 */
+    private fun endpoint(project: Project) = IdeMcpServerInfo.read().endpoint.copy(projectPath = project.basePath)
+
     override fun installStatus(project: Project, root: Path): List<LuaMcpClientStatus> =
-        installer.status(root, IdeMcpServerInfo.read().endpoint).map { s ->
+        installer.status(root, endpoint(project)).map { s ->
             LuaMcpClientStatus(
                 client = s.client.toApi(),
                 configFile = s.configFile,
@@ -94,7 +97,7 @@ class LuaMcpServiceImpl : LuaMcpService {
         }
 
     override fun install(project: Project, root: Path, clients: Collection<LuaMcpClient>): List<LuaMcpInstallResult> {
-        val endpoint = IdeMcpServerInfo.read().endpoint
+        val endpoint = endpoint(project)
         val results = installer.install(root, endpoint, clients.map { it.toKind() }).map { it.toApi() }
         results.forEach {
             log.info("mcp.install client=${it.client} file=${it.configFile} url=${endpoint.url} name=${endpoint.serverName} success=${it.success} ${it.message.orEmpty()}")
@@ -104,7 +107,7 @@ class LuaMcpServiceImpl : LuaMcpService {
     }
 
     override fun uninstall(project: Project, root: Path, clients: Collection<LuaMcpClient>): List<LuaMcpInstallResult> {
-        val results = installer.uninstall(root, IdeMcpServerInfo.read().endpoint, clients.map { it.toKind() }).map { it.toApi() }
+        val results = installer.uninstall(root, endpoint(project), clients.map { it.toKind() }).map { it.toApi() }
         tools.fireChanged()
         return results
     }

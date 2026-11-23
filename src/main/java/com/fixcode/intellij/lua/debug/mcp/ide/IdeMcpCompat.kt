@@ -83,7 +83,7 @@ internal object IdeMcpCompat {
     /** properties 每项转成 kotlinx 的 JsonElement；required 单独给。additionalProperties 由 IDE 自己生成 schema 时丢掉，靠 JsonArgs 拒绝未知参数。 */
     @Suppress("UNCHECKED_CAST")
     private fun inputSchema(schema: Map<String, Any?>, loader: ClassLoader): Any {
-        val properties = (schema["properties"] as? Map<String, Any?>).orEmpty()
+        val properties = withProjectPath(schema)
             .mapValues { (_, v) -> kotlinx.serialization.json.Json.parseToJsonElement(Json.write(v)) }
         val required = (schema["required"] as? List<String>).orEmpty().toSet()
         val newer = runCatching { loader.loadClass("$PKG.McpToolSchema") }.getOrNull()
@@ -98,6 +98,39 @@ internal object IdeMcpCompat {
         val path = older.getField("DEFAULT_DEFINITIONS_PATH").get(null) as String
         return older.getConstructor(Map::class.java, Set::class.java, Map::class.java, String::class.java)
             .newInstance(properties, required, emptyMap<String, Any>(), path)
+    }
+
+    /**
+     * 给 IDE 的 schema 补上 `projectPath`。IDE 用反射生成 schema 的工具会自动带这个隐式参数，我们自己给 schema 的工具不会；
+     * 而新版 IDE 的 MCP 服务器在调用任何工具前先定项目，调用里没有 projectPath、配置里没有请求头 IJ_MCP_SERVER_PROJECT_PATH、
+     * 客户端也不报 roots 时直接报「Unable to determine the target project」，工具根本跑不到（用户 2026-11-23 报）。
+     * schema 里有了它，Agent 会顺手传工作目录；会话一开始就定了项目时 IDE 自己会把它从 schema 里去掉。
+     */
+    @Suppress("UNCHECKED_CAST")
+    fun withProjectPath(schema: Map<String, Any?>): Map<String, Any?> {
+        val properties = (schema["properties"] as? Map<String, Any?>).orEmpty()
+        if (LuaTool.PROJECT_PATH in properties) return properties
+        return properties + (LuaTool.PROJECT_PATH to linkedMapOf(
+            "type" to "string",
+            "description" to PROJECT_PATH_DESCRIPTION,
+        ))
+    }
+
+    private const val PROJECT_PATH_DESCRIPTION =
+        "Absolute path of the IDE project (or your current working directory inside it). The IDE uses it to pick the " +
+            "project; pass it ALWAYS when you know your working directory, especially when several projects are open."
+
+    /**
+     * 这次调用 IDE 定下的项目目录（`McpCallInfo.project.basePath`，2025.3 起有）。Agent 没传 projectPath、IDE 靠请求头或 roots
+     * 定了项目时，用它补上，让 lua_code 查的项目和 IDE 定的一致。读不到返回 null。
+     */
+    fun resolvedProjectPath(context: CoroutineContext): String? = try {
+        val kt = Class.forName("$PKG.McpCallInfoKt", false, McpToolDescriptor::class.java.classLoader)
+        val info = kt.getMethod("getMcpCallInfoOrNull", CoroutineContext::class.java).invoke(null, context)
+        val project = info?.let { runCatching { it.javaClass.getMethod("getProject").invoke(it) }.getOrNull() }
+        project?.let { runCatching { it.javaClass.getMethod("getBasePath").invoke(it) as? String }.getOrNull() }
+    } catch (e: Throwable) {
+        null
     }
 
     private fun category(loader: ClassLoader): Any {
