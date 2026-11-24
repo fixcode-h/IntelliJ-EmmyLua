@@ -20,6 +20,9 @@
         <li>EmmyLua / LuaLS annotations: generics, <code>---@enum</code>, <code>---@overload</code> and more,
             behaving the same as EmmyLua in VS Code and Neovim. Configure with <code>.emmyrc.json</code> or <code>.luarc.json</code>.</li>
         <li>emmylua_ls binaries for Windows, macOS and Linux (x64 / arm64) are bundled; nothing else to install.</li>
+        <li>Comment translation: English comments in hover docs are translated in the background (bilingual or translation only),
+            and "Translate Selection" translates the selected text or the comment at the caret, using free services
+            (Google / Microsoft / MyMemory, no key needed) with a local cache.</li>
         <li>Editor helpers: auto-inserted <code>end</code> / <code>until</code>, Surround With, postfix templates,
             "Generate function annotation", live templates, Lua-aware spell checking.</li>
         <li>Unreal Engine / UnLua: finds the <code>.uproject</code> and adds UnLua IntelliSense or UELink-generated
@@ -46,6 +49,7 @@
     <p>基于 EmmyLua 的 Lua 插件，面向 UE（UnLua）项目：</p>
     <ul>
         <li>语言支持基于 EmmyLua 官方语言服务器 emmylua_ls（经 LSP4IJ）：补全、跳转、查找引用、重命名、悬停、诊断、格式化、语义高亮</li>
+        <li>注释翻译：悬停文档里的注释后台翻译（双语对照），右键「翻译选中内容」</li>
         <li>UE / UnLua：自动加入 UnLua IntelliSense 或 UELink 后台生成的声明</li>
         <li>Lua 调试：附加本机进程（Windows）、Android 真机附加（包体零改动）、条件 / 日志断点、Probe、采样性能分析、经 UELink 热重载</li>
         <li>给 AI Agent 用的 MCP 调试和代码查找工具（注册到 IDE 自带的 MCP 服务器）</li>

@@ -1,16 +1,23 @@
 package com.fixcode.intellij.lua.lsp
 
 import com.fixcode.intellij.lua.project.LuaLibraryRoots
+import com.fixcode.intellij.lua.translation.EmmyLuaHoverFeature
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import com.redhat.devtools.lsp4ij.LanguageServerFactory
 import com.redhat.devtools.lsp4ij.LanguageServerManager
 import com.redhat.devtools.lsp4ij.client.LanguageClientImpl
+import com.redhat.devtools.lsp4ij.client.features.LSPClientFeatures
 import com.redhat.devtools.lsp4ij.server.StreamConnectionProvider
 
 class EmmyLuaServerFactory : LanguageServerFactory {
     override fun createConnectionProvider(project: Project): StreamConnectionProvider = EmmyLuaServerConnection(project)
     override fun createLanguageClient(project: Project): LanguageClientImpl = EmmyLuaLanguageClient(project)
+
+    /** 悬停换成带注释翻译的（translation/TranslatedHover.kt）；翻译关着时和 LSP4IJ 的一样。 */
+    override fun createClientFeatures(): LSPClientFeatures = LSPClientFeatures()
+        .setHoverFeature(EmmyLuaHoverFeature())
+        .setSelectionRangeFeature(EmmyLuaSelectionRangeFeature())
 }
 
 object EmmyLuaServer {

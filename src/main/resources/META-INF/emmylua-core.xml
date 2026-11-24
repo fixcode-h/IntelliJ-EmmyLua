@@ -31,6 +31,9 @@
         </intentionAction>
         <lang.surroundDescriptor language="Lua" implementationClass="com.fixcode.intellij.lua.editor.LuaSurroundDescriptor"/>
 
+        <!-- 双击选词 / Ctrl+W：LSP4IJ 自带的不限时等服务器，会卡死在模态框里，换成限时的（见 LuaSelectionRange.kt） -->
+        <extendWordSelectionHandler implementation="com.fixcode.intellij.lua.lsp.LuaSelectionRangeHandler"/>
+
         <!-- LSP4IJ 对自定义语言要显式绑定的几项（其余功能对任意语言自动生效） -->
         <lang.foldingBuilder language="Lua" order="first"
                              implementationClass="com.redhat.devtools.lsp4ij.features.foldingRange.LSPFoldingRangeBuilder"/>
@@ -59,6 +62,14 @@
         <liveTemplateContext contextId="LUA_CODE" implementation="com.fixcode.intellij.lua.editor.LuaTemplateContextType"/>
 
         <xdebugger.breakpointType implementation="com.fixcode.intellij.lua.debugger.LuaLineBreakpointType"/>
+
+        <!-- 注释翻译（照 UEToVS）：悬停文档里的注释后台翻译、「翻译选中内容」。开着翻译时 LSP4IJ 对 Lua 的悬停让给这里，
+             见 translation/TranslatedHover.kt -->
+        <platform.backend.documentation.targetProvider id="EmmyLuaTranslatedHover" order="first"
+                                                       implementation="com.fixcode.intellij.lua.translation.TranslatedHoverTargetProvider"/>
+        <applicationService serviceImplementation="com.fixcode.intellij.lua.translation.LuaTranslationSettings"/>
+        <projectConfigurable parentId="preferences.Lua" id="preferences.Lua.translation" displayName="注释翻译"
+                             instance="com.fixcode.intellij.lua.translation.LuaTranslationConfigurable" nonDefaultProject="false"/>
     </extensions>
 
     <extensions defaultExtensionNs="com.redhat.devtools.lsp4ij">
@@ -74,6 +85,13 @@
     </extensions>
 
     <actions>
+        <action class="com.fixcode.intellij.lua.translation.TranslateSelectionAction" id="lua.translate.selection"
+                text="翻译选中内容" description="翻译选中的文字；没有选中时翻译光标所在的整段注释">
+            <keyboard-shortcut keymap="$default" first-keystroke="control alt shift Y"/>
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+        </action>
+        <action class="com.fixcode.intellij.lua.translation.ClearTranslationCacheAction" id="lua.translate.clearCache"
+                text="清空翻译缓存" description="删除本机缓存的注释译文（换了翻译服务或觉得译文不对时用）"/>
         <action class="com.fixcode.intellij.lua.actions.CreateLuaFileAction" text="Lua File" id="lua.newFile">
             <add-to-group group-id="NewGroup" anchor="before" relative-to-action="NewFromTemplate"/>
         </action>
