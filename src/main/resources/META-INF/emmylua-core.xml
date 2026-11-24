@@ -31,6 +31,9 @@
         </intentionAction>
         <lang.surroundDescriptor language="Lua" implementationClass="com.fixcode.intellij.lua.editor.LuaSurroundDescriptor"/>
 
+        <!-- 双击选词 / Ctrl+W：LSP4IJ 自带的不限时等服务器，会卡死在模态框里，换成限时的（见 LuaSelectionRange.kt） -->
+        <extendWordSelectionHandler implementation="com.fixcode.intellij.lua.lsp.LuaSelectionRangeHandler"/>
+
         <!-- LSP4IJ 对自定义语言要显式绑定的几项（其余功能对任意语言自动生效） -->
         <lang.foldingBuilder language="Lua" order="first"
                              implementationClass="com.redhat.devtools.lsp4ij.features.foldingRange.LSPFoldingRangeBuilder"/>

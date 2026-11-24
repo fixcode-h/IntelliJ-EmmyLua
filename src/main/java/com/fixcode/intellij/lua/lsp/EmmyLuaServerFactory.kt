@@ -15,7 +15,9 @@ class EmmyLuaServerFactory : LanguageServerFactory {
     override fun createLanguageClient(project: Project): LanguageClientImpl = EmmyLuaLanguageClient(project)
 
     /** 悬停换成带注释翻译的（translation/TranslatedHover.kt）；翻译关着时和 LSP4IJ 的一样。 */
-    override fun createClientFeatures(): LSPClientFeatures = LSPClientFeatures().setHoverFeature(EmmyLuaHoverFeature())
+    override fun createClientFeatures(): LSPClientFeatures = LSPClientFeatures()
+        .setHoverFeature(EmmyLuaHoverFeature())
+        .setSelectionRangeFeature(EmmyLuaSelectionRangeFeature())
 }
 
 object EmmyLuaServer {
