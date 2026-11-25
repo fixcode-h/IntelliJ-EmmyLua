@@ -6,6 +6,7 @@ import com.fixcode.intellij.lua.debugger.mcp.install.McpServerEndpoint
 import com.fixcode.intellij.lua.debugger.mcp.install.McpTransport
 import com.fixcode.intellij.lua.debugger.mcp.install.VcsRoot
 import com.fixcode.intellij.lua.debugger.mcp.json.Json
+import com.fixcode.intellij.lua.debugger.mcp.json.Jsonc
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -134,15 +135,37 @@ class McpInstallerTest {
     }
 
     @Test
-    fun `带注释的 JSONC 不写，给出手动片段`() {
+    fun `带注释的 JSONC 按结构合并：注释、尾逗号和别的服务器原样保留`() {
         Files.createDirectories(root.resolve(".vscode"))
-        val original = "{\n  // 我的配置\n  \"servers\": {}\n}\n"
+        val original = "{\n  // 我的配置\n  \"servers\": {\n    \"other\": { \"command\": \"x\" }, // 别动\n  },\n}\n"
+        Files.writeString(root.resolve(".vscode/mcp.json"), original)
+        val r = installer.install(root, stream, listOf(McpClientKind.VSCODE)).single()
+        assertTrue(r.message, r.success)
+        val text = read(".vscode/mcp.json")
+        assertTrue(text, text.startsWith("{\n  // 我的配置\n  \"servers\": {\n    \"other\": { \"command\": \"x\" }, // 别动\n    \"idea\": {"))
+        assertTrue(text, text.endsWith("},\n  },\n}\n"))
+        val servers = Jsonc.parseObject(text)["servers"] as Map<*, *>
+        assertEquals(listOf("other", "idea"), servers.keys.toList())
+        assertEquals(stream.url, (servers["idea"] as Map<*, *>)["url"])
+        val status = installer.status(root, stream).first { it.client == McpClientKind.VSCODE }
+        assertTrue(status.installed)
+        assertFalse(status.outdated)
+        // 再装一次不改文件
+        assertTrue(installer.install(root, stream, listOf(McpClientKind.VSCODE)).single().unchanged)
+        // 卸载只删我们那一项，注释留着
+        assertTrue(installer.uninstall(root, stream, listOf(McpClientKind.VSCODE)).single().success)
+        assertEquals(original, read(".vscode/mcp.json"))
+    }
+
+    @Test
+    fun `坏掉的 JSON 不写，给出手动片段`() {
+        Files.createDirectories(root.resolve(".vscode"))
+        val original = "{\n  \"servers\": {\n"
         Files.writeString(root.resolve(".vscode/mcp.json"), original)
         val r = installer.install(root, stream, listOf(McpClientKind.VSCODE)).single()
         assertFalse(r.success)
         assertNotNull(r.manualSnippet)
         assertTrue(r.manualSnippet!!.contains("\"servers\""))
-        assertTrue(r.manualSnippet!!.contains(stream.url))
         assertEquals(original, read(".vscode/mcp.json"))
     }
 

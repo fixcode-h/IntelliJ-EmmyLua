@@ -1,6 +1,7 @@
 package com.fixcode.intellij.lua.debugger.mcp.install
 
 import com.fixcode.intellij.lua.debugger.mcp.json.Json
+import com.fixcode.intellij.lua.debugger.mcp.json.Jsonc
 import java.io.IOException
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
@@ -67,7 +68,8 @@ data class McpInstallOutcome(
  * 每个客户端一个写入器，格式变了只改对应的那个（各客户端的配置格式以官方文档为准）。
  *
  * 规则：合并不覆盖，只增改 [McpServerEndpoint.serverName] 这一项，顺手删掉旧版的 `emmylua-debug`、
- * 和指向同一个服务器的 IDE 旧条目名；其余原样保留。解析失败不写，给出手动粘贴的片段；
+ * 和指向同一个服务器的 IDE 旧条目名；其余原样保留。带注释、尾逗号的 JSONC 按结构只改这几项的原文，注释和排版不动；
+ * 解析失败不写，给出手动粘贴的片段；
  * 配置里只有本机回环地址，没有密钥，可以安全提交到仓库。
  */
 interface McpClientConfigWriter {
@@ -145,7 +147,7 @@ open class JsonMcpConfigWriter(
         val detected = detect(root, home)
         if (!Files.isRegularFile(file)) return McpClientConfigStatus(client, file, detected, installed = false)
         return try {
-            val obj = Json.parseObject(readText(file))
+            val obj = Jsonc.parseObject(readText(file))
             val container = obj[containerKey] as? Map<*, *>
             val server = container?.get(endpoint.serverName) as? Map<*, *>
             val legacy = container?.containsKey(McpInstaller.LEGACY_SERVER_NAME) == true
@@ -174,10 +176,12 @@ open class JsonMcpConfigWriter(
         val file = configFile(root, home)
         val existed = Files.isRegularFile(file)
         val original = if (existed) readTextOrNull(file) ?: return fail(file, "读不了 $file", endpoint) else null
+        // 带注释或尾逗号（JSONC）：不整份重写，只改原文里我们那几项，免得把用户的注释吃掉
+        val jsonc = !original.isNullOrBlank() && Jsonc.hasExtensions(original)
         val obj: MutableMap<String, Any?> = if (original.isNullOrBlank()) linkedMapOf() else try {
-            Json.parseObject(original)
+            Jsonc.parseObject(original)
         } catch (e: Exception) {
-            return fail(file, "${file.fileName} 不是严格 JSON（可能有注释或尾逗号），为避免改坏没有写入：${e.message}", endpoint)
+            return fail(file, "${file.fileName} 不是合法的 JSON，为避免改坏没有写入：${e.message}", endpoint)
         }
         val container = when (val c = obj[containerKey]) {
             null -> linkedMapOf<String, Any?>().also { obj[containerKey] = it }
@@ -189,8 +193,16 @@ open class JsonMcpConfigWriter(
         (container[endpoint.serverName] as? Map<*, *>)?.forEach { (k, v) -> if (k.toString() !in managedKeys) merged[k.toString()] = v }
         merged.putAll(fullEntry(endpoint))
         container[endpoint.serverName] = merged
+        val before = container.keys.toList()
         removeStale(container, endpoint)
-        val text = McpInstaller.formatLike(original, Json.pretty(obj, if (original != null) Json.detectIndent(original) else "  "))
+        val text = if (jsonc) try {
+            val indent = Json.detectIndent(original!!)
+            before.filter { it !in container }.fold(Jsonc.setMember(original, listOf(containerKey), endpoint.serverName, merged, indent)) { t, name ->
+                Jsonc.removeMember(t, listOf(containerKey), name)
+            }
+        } catch (e: Exception) {
+            return fail(file, "${file.fileName} 的结构没认出来，为避免改坏没有写入：${e.message}", endpoint)
+        } else McpInstaller.formatLike(original, Json.pretty(obj, if (original != null) Json.detectIndent(original) else "  "))
         if (text == original) return McpInstallOutcome(client, file, true, "已是最新", unchanged = true)
         return try {
             McpInstaller.writeAtomically(file, text)
@@ -211,8 +223,9 @@ open class JsonMcpConfigWriter(
         val file = configFile(root, home)
         if (!Files.isRegularFile(file)) return McpInstallOutcome(client, file, true, "未安装", unchanged = true)
         val original = readTextOrNull(file) ?: return McpInstallOutcome(client, file, false, "读不了 $file")
+        val jsonc = Jsonc.hasExtensions(original)
         val obj = try {
-            Json.parseObject(original)
+            Jsonc.parseObject(original)
         } catch (e: Exception) {
             return McpInstallOutcome(client, file, false, "${file.fileName} 解析失败，请手动删掉 \"${endpoint.serverName}\" 一项：${e.message}")
         }
@@ -224,7 +237,13 @@ open class JsonMcpConfigWriter(
         container.remove(McpInstaller.LEGACY_SERVER_NAME)
         if (container.size == before) return McpInstallOutcome(client, file, true, "未安装", unchanged = true)
         return try {
-            if (container.isEmpty() && obj.size == 1) {
+            if (jsonc) {
+                // 有注释：只删这两项的原文，文件留着（注释是用户的）
+                val text = listOf(endpoint.serverName, McpInstaller.LEGACY_SERVER_NAME)
+                    .fold(original) { t, name -> Jsonc.removeMember(t, listOf(containerKey), name) }
+                McpInstaller.writeAtomically(file, text)
+                McpInstallOutcome(client, file, true, "已移除")
+            } else if (container.isEmpty() && obj.size == 1) {
                 // 文件里只剩我们写的空壳，删掉，免得留下没用的文件
                 Files.delete(file)
                 McpInstallOutcome(client, file, true, "已删除配置文件")
