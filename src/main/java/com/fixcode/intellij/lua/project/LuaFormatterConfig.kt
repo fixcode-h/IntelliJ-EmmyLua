@@ -9,7 +9,8 @@ import java.nio.file.Path
  * 代码格式化（Ctrl+Alt+L）的配置文件。格式化由 emmylua_ls 内置的 emmylua_formatter 做，
  * 它从被格式化的文件往上找 `.luafmt.toml` / `luafmt.toml`，不读 `.emmyrc.json` 和 `.editorconfig`；
  * 缩进宽度、Tab / 空格、文末换行由 IDE 随请求发过去，会盖掉文件里的 `indent`。
- * 插件不下发格式化配置，只帮用户在项目根建这个文件。
+ * 插件不下发格式化配置，只帮用户在项目根建这个文件；项目里没有时，整个文件的格式化用 [TEMPLATE]
+ * （format/LuaFormattingService）。
  */
 object LuaFormatterConfig {
     val FILE_NAMES = listOf(".luafmt.toml", "luafmt.toml")
@@ -17,6 +18,16 @@ object LuaFormatterConfig {
     fun find(project: Project): Path? {
         val root = EmmyLuaWorkspaceConfig.projectRoot(project) ?: return null
         return FILE_NAMES.map { root.resolve(it) }.firstOrNull { Files.isRegularFile(it) }
+    }
+
+    /** 和格式化器一样从 [file] 所在目录往上找配置文件，找到最近的一个。 */
+    fun findFor(file: Path): Path? {
+        var dir: Path? = file.toAbsolutePath().parent
+        while (dir != null) {
+            FILE_NAMES.map { dir!!.resolve(it) }.firstOrNull { Files.isRegularFile(it) }?.let { return it }
+            dir = dir.parent
+        }
+        return null
     }
 
     /** 有就返回现有的，没有就在项目根按 [TEMPLATE] 新建。 */

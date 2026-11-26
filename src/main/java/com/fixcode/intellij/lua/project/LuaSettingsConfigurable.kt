@@ -75,6 +75,14 @@ class LuaSettingsConfigurable(private val project: Project) :
                         "缩进宽度和 Tab 在「代码样式 → 常规」或 .editorconfig 里设"
                 )
             }
+            row {
+                checkBox("格式化整个文件时主动对齐表字段的 =（旧版效果）")
+                    .bindSelected(app::alignTableFields)
+                    .comment(
+                        "emmylua_ls 只对齐源码里已经对齐过的表；开着时由插件自带的 luafmt 格式化，" +
+                            "项目里没有 .luafmt.toml 时按上面模板的默认值（含连续赋值对齐）。选中一段格式化仍走 emmylua_ls"
+                    )
+            }
         }
         group("库目录") {
             row {

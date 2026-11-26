@@ -54,6 +54,10 @@
         <!-- 项目树「外部库」里显示 UE 声明和额外库目录（只为浏览，语义仍由 emmylua_ls 做） -->
         <additionalLibraryRootsProvider implementation="com.fixcode.intellij.lua.project.LuaLibraryRootsProvider"/>
         <notificationGroup id="EmmyLua UE Declarations" displayType="BALLOON"/>
+        <!-- Ctrl+Alt+L 整个文件：补表字段对齐提示后交给插件自带的 luafmt（见 format/LuaFormattingService.kt）；
+             选中一段、关掉开关、没有 luafmt 时交回 LSP4IJ 的格式化 -->
+        <formattingService id="EmmyLuaFormatting" order="first" implementation="com.fixcode.intellij.lua.format.LuaFormattingService"/>
+        <notificationGroup id="EmmyLua Formatting" displayType="BALLOON"/>
         <projectConfigurable groupId="language" id="preferences.Lua" displayName="EmmyLua"
                              instance="com.fixcode.intellij.lua.project.LuaSettingsConfigurable"/>
 
