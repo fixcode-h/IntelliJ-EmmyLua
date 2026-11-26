@@ -13,6 +13,8 @@ concurrency:
 
 jobs:
   host-tests:
+    # dev→main 的 PR 和推 dev 是同一个提交，dev 上已经跑过，这里跳过（跳过算通过）
+    if: ${{ !(github.event_name == 'pull_request' && github.head_ref == 'dev' && github.event.pull_request.head.repo.full_name == github.repository) }}
     name: Agent host tests
     runs-on: ubuntu-latest
     steps:
@@ -24,6 +26,8 @@ jobs:
           ctest --test-dir "${{ runner.temp }}/agent-host" --output-on-failure
 
   ndk-build:
+    # dev→main 的 PR 和推 dev 是同一个提交，dev 上已经跑过，这里跳过（跳过算通过）
+    if: ${{ !(github.event_name == 'pull_request' && github.head_ref == 'dev' && github.event.pull_request.head.repo.full_name == github.repository) }}
     name: Agent NDK build (arm64-v8a, armeabi-v7a)
     runs-on: ubuntu-latest
     steps:
