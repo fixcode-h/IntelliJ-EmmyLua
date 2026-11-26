@@ -35,8 +35,9 @@
         <extendWordSelectionHandler implementation="com.fixcode.intellij.lua.lsp.LuaSelectionRangeHandler"/>
 
         <!-- LSP4IJ 对自定义语言要显式绑定的几项（其余功能对任意语言自动生效） -->
+        <!-- 折叠用 LSP4IJ 的，但去掉 emmylua_ls 给 require 行的 imports 折叠区（见 LuaFoldingBuilder.kt） -->
         <lang.foldingBuilder language="Lua" order="first"
-                             implementationClass="com.redhat.devtools.lsp4ij.features.foldingRange.LSPFoldingRangeBuilder"/>
+                             implementationClass="com.fixcode.intellij.lua.editor.LuaFoldingBuilder"/>
         <codeInsight.parameterInfo language="Lua" order="first"
                                    implementationClass="com.redhat.devtools.lsp4ij.features.signatureHelp.LSPParameterInfoHandler"/>
         <!-- 结构窗口不用 LSP4IJ 的 documentSymbol 版：它只在打开时取一次，服务器没准备好就一直是空的 -->
