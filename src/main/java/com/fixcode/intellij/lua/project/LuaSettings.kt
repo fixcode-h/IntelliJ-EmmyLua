@@ -26,6 +26,12 @@ class LuaSettings : PersistentStateComponent<LuaSettings> {
      */
     var alignTableFields: Boolean = true
 
+    /**
+     * Lua 编辑器里显示右边距参考线（IDE 默认第 120 列那条竖线）。默认不显示；打开后仍受 IDE 全局
+     * 「显示硬换行和视觉参考线」控制。见 editor/LuaRightMargin。
+     */
+    var showRightMargin: Boolean = false
+
     var enableCustomFileTemplate: Boolean = true
     var customFileTemplate: String = DEFAULT_FILE_TEMPLATE
     var enableFileNameReplacement: Boolean = true

@@ -99,7 +99,9 @@ class LuaAttachConfiguration(project: Project, factory: ConfigurationFactory) :
      */
     private fun findCandidates(): List<LuaLocalProcess> {
         val indicator = ProgressManager.getInstance().progressIndicator
-        val deadline = System.currentTimeMillis() + options.waitSeconds.coerceIn(1, 3600) * 1000L
+        val waitMs = options.waitSeconds.coerceIn(1, 3600) * 1000L
+        val started = System.currentTimeMillis()
+        val deadline = started + waitMs
         val recent = LuaDebugProjectState.getInstance(project).recentAttachTargets
         val self = ProcessHandle.current().pid().toInt()
         while (true) {
@@ -117,7 +119,14 @@ class LuaAttachConfiguration(project: Project, factory: ConfigurationFactory) :
                         .thenByDescending { it.pid }
                 )
             }
-            if (!options.waitForProcess || System.currentTimeMillis() > deadline) return emptyList()
+            val now = System.currentTimeMillis()
+            if (!options.waitForProcess || now > deadline) return emptyList()
+            // 等待有明确的上限，进度条按已等的时间走，并写出还剩几秒
+            indicator?.let {
+                it.isIndeterminate = false
+                it.fraction = ((now - started).toDouble() / waitMs).coerceIn(0.0, 1.0)
+                it.text = LuaDebugBundle.message("attach.config.progress.waiting", ((deadline - now + 999) / 1000).toInt())
+            }
             Thread.sleep(500)
         }
     }

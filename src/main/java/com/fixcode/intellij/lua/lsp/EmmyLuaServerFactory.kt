@@ -14,10 +14,14 @@ class EmmyLuaServerFactory : LanguageServerFactory {
     override fun createConnectionProvider(project: Project): StreamConnectionProvider = EmmyLuaServerConnection(project)
     override fun createLanguageClient(project: Project): LanguageClientImpl = EmmyLuaLanguageClient(project)
 
-    /** 悬停换成带注释翻译的（translation/TranslatedHover.kt）；翻译关着时和 LSP4IJ 的一样。 */
+    /**
+     * 悬停换成带注释翻译的（translation/TranslatedHover.kt）；翻译关着时和 LSP4IJ 的一样。
+     * 后台进度换成本地化、带阶段和估计百分比的（[EmmyLuaProgressFeature]）。
+     */
     override fun createClientFeatures(): LSPClientFeatures = LSPClientFeatures()
         .setHoverFeature(EmmyLuaHoverFeature())
         .setSelectionRangeFeature(EmmyLuaSelectionRangeFeature())
+        .setProgressFeature(EmmyLuaProgressFeature())
 }
 
 object EmmyLuaServer {
