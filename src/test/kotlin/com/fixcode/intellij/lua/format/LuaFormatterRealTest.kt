@@ -29,6 +29,14 @@ class LuaFormatterRealTest : TestCase() {
         assertEquals(want, format(src))
     }
 
+    fun `test 长调用和长拼接不折行，多行的表保持多行`() {
+        if (exe == null) return
+        val long = "_SP.Logger.LogWarn(\"[ClinkGlasses] s_BW_CG_ClinkGlassesSystem=>EnterIntro  已有进行中的玩法，拒绝进入 NPCInstanceID=\" .. tostring(NPCInstanceID))\n"
+        assertEquals(long, format(long))
+        val table = "local t = {\n    a = 1,\n    b = 2\n}\n"
+        assertEquals(table, format(table))
+    }
+
     fun `test 单行表和只有一个字段的不留多余空格`() {
         if (exe == null) return
         val src = "local a = { x = 1, y = 2 }\nlocal b = {\n    only = 1\n}\n"
