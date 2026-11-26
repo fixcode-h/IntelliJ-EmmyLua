@@ -48,6 +48,8 @@
                                implementationClass="com.redhat.devtools.lsp4ij.features.typeHierarchy.LSPTypeHierarchyProvider"/>
 
         <applicationService serviceImplementation="com.fixcode.intellij.lua.project.LuaSettings"/>
+        <!-- Lua 编辑器默认不画第 120 列的右边距参考线，设置 → EmmyLua 可打开（见 editor/LuaRightMargin.kt） -->
+        <editorFactoryListener implementation="com.fixcode.intellij.lua.editor.LuaRightMargin"/>
         <projectService serviceImplementation="com.fixcode.intellij.lua.project.LuaProjectSettings"/>
         <!-- UE 声明目录（UELink 后台生成 / UnLua）出现或换了时重启 emmylua_ls -->
         <postStartupActivity implementation="com.fixcode.intellij.lua.project.UnrealDeclWatcherActivity"/>

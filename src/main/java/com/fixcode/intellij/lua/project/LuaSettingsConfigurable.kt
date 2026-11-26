@@ -1,5 +1,6 @@
 package com.fixcode.intellij.lua.project
 
+import com.fixcode.intellij.lua.editor.LuaRightMargin
 import com.fixcode.intellij.lua.lsp.EmmyLuaServer
 import com.fixcode.intellij.lua.lsp.EmmyLuaServerLocator
 import com.fixcode.intellij.lua.lsp.EmmyLuaWorkspaceConfig
@@ -84,6 +85,13 @@ class LuaSettingsConfigurable(private val project: Project) :
                     )
             }
         }
+        group("编辑器") {
+            row {
+                checkBox("显示右边距参考线（第 120 列的竖线）")
+                    .bindSelected(app::showRightMargin)
+                    .comment("默认只在 Lua 文件里隐藏。打开后按 IDE「编辑器 → 常规 → 外观 → 显示硬换行和视觉参考线」显示，列数在「代码样式 → 常规 → 硬换行位置」改")
+            }
+        }
         group("库目录") {
             row {
                 checkBox("自动探测 UE 项目，加入 UE 反射声明（UELink 生成的或 UnLua 的 IntelliSense）")
@@ -141,7 +149,9 @@ class LuaSettingsConfigurable(private val project: Project) :
     }
 
     override fun apply() {
+        val marginBefore = app.showRightMargin
         super.apply()
+        if (app.showRightMargin != marginBefore) LuaRightMargin.refreshAll()
         val newLibraries = libraries.lines().map { it.trim() }.filter { it.isNotEmpty() }.toTypedArray()
         val changed = serverPath != app.languageServerPath || level != app.languageLevel ||
             detectUnreal != proj.detectUnrealProject || !newLibraries.contentEquals(proj.additionalSourcesRoot)
