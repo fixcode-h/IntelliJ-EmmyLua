@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 下载 emmylua_ls 各平台可执行文件到 <输出目录>/<平台>/emmylua_ls[.exe]，Gradle 打包时放进插件的 server/ 目录。
+# 下载 emmylua_ls 和 luafmt 各平台可执行文件到 <输出目录>/<平台>/emmylua_ls[.exe]、luafmt[.exe]，Gradle 打包时放进插件的 server/ 目录。
 # 用法：fetch-emmylua-ls.sh <版本> <输出目录> [平台...]
 #   版本留空读 gradle.properties 的 emmyLuaLsVersion；平台默认全部。
 # 资产名按 Release 的实际列表匹配（不写死文件名），必需平台缺了直接失败，不出没有语言服务器的包。
@@ -42,36 +42,39 @@ for platform in $PLATFORMS; do
     *) echo "未知系统 $os"; exit 1 ;;
   esac
   # 同一平台有多个（如 glibc 版、musl 版）时取名字最短的那个：一般是默认构建
-  line=$(echo "$assets" | grep -E "^emmylua_ls-${os_re}-${arch_re}(-glibc[.0-9]*)?\.(zip|tar\.gz) " \
-    | awk '{print length($1) " " $0}' | sort -n | head -1 | cut -d' ' -f2- || true)
-  if [ -z "$line" ]; then
-    if echo " $REQUIRED " | grep -q " $platform "; then
-      echo "::error::emmylua_ls $VERSION 没有 $platform 的构建"
-      missing_required=1
-    else
-      echo "::warning::emmylua_ls $VERSION 没有 $platform 的构建，跳过"
+  # luafmt（emmylua_formatter 的命令行）给 Ctrl+Alt+L 用（format/LuaFormattingService），缺了插件退回 emmylua_ls 的格式化，所以不是必需
+  for bin in emmylua_ls luafmt; do
+    line=$(echo "$assets" | grep -E "^${bin}-${os_re}-${arch_re}(-glibc[.0-9]*)?\.(zip|tar\.gz) " \
+      | awk '{print length($1) " " $0}' | sort -n | head -1 | cut -d' ' -f2- || true)
+    if [ -z "$line" ]; then
+      if [ "$bin" = emmylua_ls ] && echo " $REQUIRED " | grep -q " $platform "; then
+        echo "::error::$bin $VERSION 没有 $platform 的构建"
+        missing_required=1
+      else
+        echo "::warning::$bin $VERSION 没有 $platform 的构建，跳过"
+      fi
+      continue
     fi
-    continue
-  fi
-  name=${line%% *}
-  url=${line#* }
-  echo "$platform ← $name"
-  curl -fsSL "$@" -o "$tmp/$name" "$url"
-  rm -rf "$tmp/x" && mkdir -p "$tmp/x"
-  case "$name" in
-    *.zip) unzip -q "$tmp/$name" -d "$tmp/x" ;;
-    *.tar.gz) tar -xzf "$tmp/$name" -C "$tmp/x" ;;
-  esac
-  exe=emmylua_ls
-  [ "$os" = win32 ] && exe=emmylua_ls.exe
-  found=$(find "$tmp/x" -type f -name "$exe" | head -1)
-  if [ -z "$found" ]; then
-    echo "::error::$name 里没有 $exe"
-    exit 1
-  fi
-  mkdir -p "$OUT/$platform"
-  cp "$found" "$OUT/$platform/$exe"
-  chmod +x "$OUT/$platform/$exe"
+    name=${line%% *}
+    url=${line#* }
+    echo "$platform ← $name"
+    curl -fsSL "$@" -o "$tmp/$name" "$url"
+    rm -rf "$tmp/x" && mkdir -p "$tmp/x"
+    case "$name" in
+      *.zip) unzip -q "$tmp/$name" -d "$tmp/x" ;;
+      *.tar.gz) tar -xzf "$tmp/$name" -C "$tmp/x" ;;
+    esac
+    exe=$bin
+    [ "$os" = win32 ] && exe=$bin.exe
+    found=$(find "$tmp/x" -type f -name "$exe" | head -1)
+    if [ -z "$found" ]; then
+      echo "::error::$name 里没有 $exe"
+      exit 1
+    fi
+    mkdir -p "$OUT/$platform"
+    cp "$found" "$OUT/$platform/$exe"
+    chmod +x "$OUT/$platform/$exe"
+  done
 done
 
 [ "$missing_required" = 0 ] || exit 1

@@ -20,6 +20,12 @@ class LuaSettings : PersistentStateComponent<LuaSettings> {
     /** emmylua_ls 可执行文件；留空用插件自带的。 */
     var languageServerPath: String = ""
 
+    /**
+     * Ctrl+Alt+L 时主动对齐表字段的 `=`（旧版的效果），项目里没有 `.luafmt.toml` 时按旧版默认格式化。
+     * 关掉就完全交给 emmylua_ls（只在源码里已经对齐过的表才对齐）。见 format/LuaFormattingService。
+     */
+    var alignTableFields: Boolean = true
+
     var enableCustomFileTemplate: Boolean = true
     var customFileTemplate: String = DEFAULT_FILE_TEMPLATE
     var enableFileNameReplacement: Boolean = true
