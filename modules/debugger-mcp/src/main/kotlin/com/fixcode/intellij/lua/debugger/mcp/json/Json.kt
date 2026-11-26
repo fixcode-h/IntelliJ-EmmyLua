@@ -6,7 +6,7 @@ package com.fixcode.intellij.lua.debugger.mcp.json
  *
  * 不引第三方库：这个模块要能脱离 IntelliJ 单测，安装器还要"跟随原文件缩进"写回，
  * 自己控制输出格式比配 Gson 的 pretty printer 简单。
- * 严格模式：不接受注释和尾逗号。带注释的配置文件（JSONC）解析失败，安装器会改为提示手动粘贴，
+ * 严格模式：不接受注释和尾逗号。带注释的配置文件（JSONC）由 [Jsonc] 读，安装器按结构只改自己那一项的原文，
  * 不会把用户的注释吃掉。
  */
 object Json {
