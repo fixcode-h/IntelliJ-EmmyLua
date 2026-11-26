@@ -38,7 +38,7 @@ object LuaFormatterConfig {
     }
 
     /**
-     * 新建时写的内容：尽量接近旧版「代码样式 → Lua」的默认效果（连续 local 对齐 =、多行表保持多行、
+     * 新建时写的内容：尽量接近旧版「代码样式 → Lua」的默认效果（不按行宽折行，用户 2026-11-26 定；连续 local 对齐 =、多行表保持多行、
      * 行尾注释对齐、删多余的分号）。只写和格式化器默认值不同或旧版用户关心的项，其余看 schema 补全。
      * 用 emmylua_ls 0.25.1 实测过；升级 emmylua_ls 时用 LuaFormatterConfigTest 核对键名。
      */
@@ -49,11 +49,13 @@ object LuaFormatterConfig {
         # 全部选项：https://github.com/EmmyLuaLs/emmylua-analyzer-rust/blob/main/docs/emmylua_formatter/options_CN.md
 
         [layout]
-        max_line_width = 120
+        # 不按行宽自动折行（长调用、长字符串拼接、长条件都保持一行）；想超过某个宽度就折行，改成 120 之类
+        max_line_width = 10000
         max_blank_lines = 1
-        # 源码里本来是多行的表、调用参数保持多行（不开时一行放得下就合成一行）
+        # 源码里本来是多行的表保持多行
         prefer_table_layout_from_source = true
-        prefer_call_args_layout_from_source = true
+        # 调用参数不保留源码里的换行（合成一行）；想保持多行改成 true
+        prefer_call_args_layout_from_source = false
         # 表每个字段一行：改成 "Always"
         table_expand = "Auto"
 
