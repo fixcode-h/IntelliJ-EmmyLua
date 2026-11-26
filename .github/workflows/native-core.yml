@@ -30,6 +30,8 @@ concurrency:
 
 jobs:
   test:
+    # dev→main 的 PR 和推 dev 是同一个提交，dev 上已经跑过，这里跳过（跳过算通过）
+    if: ${{ !(github.event_name == 'pull_request' && github.head_ref == 'dev' && github.event.pull_request.head.repo.full_name == github.repository) }}
     name: test (${{ matrix.os }}, Lua ${{ matrix.lua }}, ${{ matrix.mode }})
     runs-on: ${{ matrix.os }}
     strategy:
@@ -52,6 +54,8 @@ jobs:
         run: ctest --test-dir build/core -C Release --output-on-failure --timeout 300
 
   android:
+    # dev→main 的 PR 和推 dev 是同一个提交，dev 上已经跑过，这里跳过（跳过算通过）
+    if: ${{ !(github.event_name == 'pull_request' && github.head_ref == 'dev' && github.event.pull_request.head.repo.full_name == github.repository) }}
     name: android (${{ matrix.abi }})
     runs-on: ubuntu-latest
     strategy:
@@ -69,6 +73,8 @@ jobs:
           cmake --build build/core-android --parallel 4
 
   windows-attach:
+    # dev→main 的 PR 和推 dev 是同一个提交，dev 上已经跑过，这里跳过（跳过算通过）
+    if: ${{ !(github.event_name == 'pull_request' && github.head_ref == 'dev' && github.event.pull_request.head.repo.full_name == github.repository) }}
     # Windows 本机附加（协议 v3）的全部文件：emmy_tool.exe、emmy_attach.dll、EasyHook.dll、lua5X/emmy_debugger_core.dll
     name: windows-attach (${{ matrix.arch }})
     runs-on: windows-latest
@@ -129,6 +135,8 @@ jobs:
           exit $LASTEXITCODE
 
   bench:
+    # dev→main 的 PR 和推 dev 是同一个提交，dev 上已经跑过，这里跳过（跳过算通过）
+    if: ${{ !(github.event_name == 'pull_request' && github.head_ref == 'dev' && github.event.pull_request.head.repo.full_name == github.repository) }}
     # 共享 CI 机器抖动大，不卡绝对目标（本地用 bench_hook --check 对照目标）；
     # 卡相对基线的回退：同一次运行里相对「不挂调试器」的倍数比 bench/baseline.json 高出 25% 就失败
     runs-on: ubuntu-latest

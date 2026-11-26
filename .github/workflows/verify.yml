@@ -11,6 +11,8 @@ concurrency:
 
 jobs:
   verify:
+    # dev→main 的 PR 和推 dev 是同一个提交，dev 上已经跑过，这里跳过（跳过算通过）
+    if: ${{ !(github.event_name == 'pull_request' && github.head_ref == 'dev' && github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
