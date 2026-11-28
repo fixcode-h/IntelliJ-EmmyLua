@@ -75,7 +75,7 @@ class LuaFormattingService : AsyncDocumentFormattingService() {
             if (cancelled) return
             result.onSuccess { out ->
                 // 有语法错误时 luafmt 原样输出、退出码非 0：和 emmylua_ls 一样不改文件（补的提示也不能留下）
-                request.onTextReady(out ?: original)
+                request.onTextReady(out?.let(LuaFormatFixups::apply) ?: original)
             }.onFailure { e ->
                 LOG.warn("luafmt failed: $args", e)
                 request.onError("EmmyLua 格式化失败", e.message ?: e.javaClass.name)

@@ -19,7 +19,7 @@ class LuaFormatterRealTest : TestCase() {
         p.outputStream.use { it.write(LuaAlignHints.apply(src).toByteArray(StandardCharsets.UTF_8)) }
         val out = p.inputStream.readAllBytes().toString(StandardCharsets.UTF_8)
         assertEquals(0, p.waitFor())
-        return out
+        return LuaFormatFixups.apply(out)
     }
 
     fun `test 表字段的等号对齐`() {
@@ -35,6 +35,12 @@ class LuaFormatterRealTest : TestCase() {
         assertEquals(long, format(long))
         val table = "local t = {\n    a = 1,\n    b = 2\n}\n"
         assertEquals(table, format(table))
+    }
+
+    fun `test 匿名函数后的尾参数和右括号在同一行`() {
+        if (exe == null) return
+        val src = "foo(a, function()\n    x()\nend, b)\n"
+        assertEquals("foo(a, function ()\n    x()\nend, b)\n", format(src))
     }
 
     fun `test 单行表和只有一个字段的不留多余空格`() {
