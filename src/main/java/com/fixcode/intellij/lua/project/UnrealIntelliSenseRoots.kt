@@ -59,7 +59,7 @@ object UnrealIntelliSenseRoots {
     }
 
     /** Plugins 下的插件目录：直接含 `.uplugin` 的算一个；不含的当分类目录，再往下看一层。 */
-    private fun pluginDirs(pluginsRoot: Path): List<Path> = childDirs(pluginsRoot).flatMap { dir ->
+    internal fun pluginDirs(pluginsRoot: Path): List<Path> = childDirs(pluginsRoot).flatMap { dir ->
         if (hasFile(dir) { it.endsWith(".uplugin", ignoreCase = true) } || Files.isDirectory(dir.resolve("Intermediate"))) listOf(dir)
         else childDirs(dir)
     }
