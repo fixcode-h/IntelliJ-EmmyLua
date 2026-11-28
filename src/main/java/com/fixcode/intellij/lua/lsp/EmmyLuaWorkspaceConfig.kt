@@ -3,6 +3,7 @@ package com.fixcode.intellij.lua.lsp
 import com.fixcode.intellij.lua.project.LuaProjectSettings
 import com.fixcode.intellij.lua.project.LuaSettings
 import com.fixcode.intellij.lua.project.UnrealIntelliSenseRoots
+import com.fixcode.intellij.lua.project.WorkspaceIgnoreDirs
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
@@ -21,10 +22,15 @@ object EmmyLuaWorkspaceConfig {
 
     fun build(project: Project): JsonObject {
         val root = JsonObject()
-        val libraries = libraries(project)
-        if (libraries.isNotEmpty()) {
+        val all = allLibraries(project)
+        val base = projectRoot(project)
+        val libraries = all.filterNot { base != null && it.startsWith(base) }
+        // 数组和用户配置取并集，用户写了配置文件也照样下发
+        val ignoreDirs = base?.let { WorkspaceIgnoreDirs.find(it, all, LuaProjectSettings.getInstance(project).detectUnrealProject) }.orEmpty()
+        if (libraries.isNotEmpty() || ignoreDirs.isNotEmpty()) {
             root.add("workspace", JsonObject().apply {
-                add("library", JsonArray().apply { libraries.forEach { add(it.toString()) } })
+                if (libraries.isNotEmpty()) add("library", JsonArray().apply { libraries.forEach { add(it.toString()) } })
+                if (ignoreDirs.isNotEmpty()) add("ignoreDir", JsonArray().apply { ignoreDirs.forEach { add(it) } })
             })
         }
         val disabled = defaultDisabledDiagnostics(findUserConfig(project))
@@ -81,6 +87,12 @@ object EmmyLuaWorkspaceConfig {
     /** 设置里的额外库目录 + 自动探测到的 UE IntelliSense 目录；工作区里面的不重复加。 */
     fun libraries(project: Project): List<Path> {
         val root = projectRoot(project)
+        return allLibraries(project).filterNot { root != null && it.startsWith(root) }
+    }
+
+    /** 同上，含工作区里面的（剪目录时它们和上级都要留着）。 */
+    private fun allLibraries(project: Project): List<Path> {
+        val root = projectRoot(project)
         val settings = LuaProjectSettings.getInstance(project)
         val result = LinkedHashSet<Path>()
         for (raw in settings.additionalSourcesRoot) {
@@ -91,7 +103,7 @@ object EmmyLuaWorkspaceConfig {
             if (Files.isDirectory(abs)) result.add(abs)
         }
         if (settings.detectUnrealProject) result.addAll(unrealLibraries(project))
-        return result.filterNot { root != null && it.startsWith(root) }
+        return result.toList()
     }
 
     fun unrealLibraries(project: Project): List<Path> {
